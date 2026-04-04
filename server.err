@@ -1,0 +1,52 @@
+   Compiling wem-kernel v0.1.0 (L:\CCSpace\wem-kernel)
+warning: unused imports: `BlockResponse`, `BlockStatus`, and `ContentType`
+  --> src\model\mod.rs:10:31
+   |
+10 |     generate_block_id, Block, BlockResponse, BlockStatus, BlockType, ContentType, CreateBlockReq,
+   |                               ^^^^^^^^^^^^^  ^^^^^^^^^^^             ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `is_container`, `is_leaf`, and `type_name` are never used
+   --> src\model\block.rs:151:12
+    |
+149 | impl BlockType {
+    | -------------- methods in this implementation
+150 |     /// 判断是否为容器块（可以包含子 Block）
+151 |     pub fn is_container(&self) -> bool {
+    |            ^^^^^^^^^^^^
+...
+164 |     pub fn is_leaf(&self) -> bool {
+    |            ^^^^^^^
+...
+196 |     pub fn type_name(&self) -> &'static str {
+    |            ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `as_str` is never used
+   --> src\model\block.rs:274:12
+    |
+272 | impl BlockStatus {
+    | ---------------- method in this implementation
+273 |     /// 转为数据库存储字符串
+274 |     pub fn as_str(&self) -> &'static str {
+    |            ^^^^^^
+
+warning: type alias `BlockResponse` is never used
+   --> src\model\block.rs:355:10
+    |
+355 | pub type BlockResponse = Block;
+    |          ^^^^^^^^^^^^^
+
+warning: function `find_descendant_ids` is never used
+   --> src\db\repository.rs:426:8
+    |
+426 | pub fn find_descendant_ids(
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: `wem-kernel` (bin "wem-kernel") generated 5 warnings (run `cargo fix --bin "wem-kernel" -p wem-kernel` to apply 1 suggestion)
+error: failed to remove file `l:\CCSpace\wem-kernel\target\debug\wem-kernel.exe`
+
+Caused by:
+  拒绝访问。 (os error 5)
