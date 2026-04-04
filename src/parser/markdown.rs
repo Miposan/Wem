@@ -168,24 +168,20 @@ impl HeadingStack {
     }
 
     /// 推入新 Heading，返回其父 Block ID
-    fn push(&mut self, level: u8, heading_id: String) {
+    ///
+    /// 合并了原来的 `parent_for_level`（计算 parent）+ `push`（修改栈），\n    /// 避免对栈做两次遍历。
+    fn push(&mut self, level: u8, heading_id: String) -> String {
+        // 弹出 >= level 的项，找到父级
         while self.stack.last().map_or(false, |(l, _)| *l >= level) {
             self.stack.pop();
         }
+        let parent_id = self
+            .stack
+            .last()
+            .map(|(_, id)| id.clone())
+            .unwrap_or_else(|| self.doc_id.clone());
         self.stack.push((level, heading_id));
-    }
-
-    /// 计算指定 level 的 Heading 应挂到哪个父块
-    ///
-    /// 模拟 push 的弹栈逻辑，但**不修改**栈。
-    /// 用于在创建 Block 之前确定正确的 parent_id。
-    fn parent_for_level(&self, level: u8) -> String {
-        for (l, id) in self.stack.iter().rev() {
-            if *l < level {
-                return id.clone();
-            }
-        }
-        self.doc_id.clone()
+        parent_id
     }
 
     /// 当前父块 ID（栈顶或文档根）
@@ -212,23 +208,32 @@ fn indent_of(line: &str) -> usize {
     indent
 }
 
-fn is_heading(line: &str) -> bool {
+/// 一次性解析 Heading 行，返回 (level, text)，失败返回 None
+///
+/// 合并了原来的 `is_heading` + `heading_level` + `heading_text`，
+/// 只做一次 `trim_start` + 字符计数。
+fn parse_heading_line(line: &str) -> Option<(u8, String)> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with('#') {
-        return false;
+        return None;
     }
     let n = trimmed.chars().take_while(|c| *c == '#').count();
-    n >= 1 && n <= 6 && trimmed.chars().nth(n) == Some(' ')
+    if !(1..=6).contains(&n) {
+        return None;
+    }
+    // `#` 后必须跟空格（或行尾仅 `#`）
+    let rest = trimmed.get(n..).unwrap_or("");
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    let text = rest.trim().to_string();
+    Some((n as u8, text))
 }
 
-fn heading_level(line: &str) -> u8 {
-    line.trim_start().chars().take_while(|c| *c == '#').count() as u8
-}
-
-fn heading_text(line: &str) -> String {
-    let trimmed = line.trim_start();
-    let n = trimmed.chars().take_while(|c| *c == '#').count();
-    trimmed[n..].trim().to_string()
+/// Heading 行快速检测（用于 dispatch 和 break 判断）
+#[inline]
+fn is_heading(line: &str) -> bool {
+    parse_heading_line(line).is_some()
 }
 
 fn is_code_fence(line: &str) -> bool {
@@ -295,12 +300,16 @@ fn is_unordered_list_item(line: &str) -> bool {
 
 fn is_ordered_list_item(line: &str) -> bool {
     let trimmed = line.trim_start();
-    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
+    // 用字节数计数避免 String 分配（ASCII 数字都是单字节）
+    let digit_len = trimmed
+        .bytes()
+        .take_while(|b| b.is_ascii_digit())
+        .count();
+    if digit_len == 0 {
         return false;
     }
     trimmed
-        .get(digits.len()..)
+        .get(digit_len..)
         .map_or(false, |r| r.starts_with(". "))
 }
 
@@ -308,11 +317,16 @@ fn is_list_item(line: &str) -> bool {
     is_unordered_list_item(line) || is_ordered_list_item(line)
 }
 
-fn strip_list_marker(line: &str) -> String {
+/// 剥离列表标记，返回纯文本内容
+///
+/// `ordered` 参数由调用方已经判断，避免重复检测。
+fn strip_list_marker(line: &str, ordered: bool) -> String {
     let trimmed = line.trim_start();
-    if is_unordered_list_item(line) {
-        trimmed[2..].to_string()
+    if !ordered {
+        // 无序列表："- " / "* " / "+ " → 跳过 2 字符
+        trimmed.get(2..).unwrap_or(trimmed).to_string()
     } else {
+        // 有序列表："1. " → 找到 ". " 跳过
         let dot_pos = trimmed.find(". ").unwrap_or(trimmed.len());
         if dot_pos < trimmed.len() {
             trimmed[dot_pos + 2..].to_string()
@@ -331,6 +345,10 @@ struct ParserState {
     warnings: Vec<ParseWarning>,
     first_heading_seen: bool,
     doc_title: String,
+    /// 每个 parent_id 下已有的子块计数，用于 O(1) position 生成
+    child_counts: HashMap<String, usize>,
+    /// 解析会话共享的时间戳，避免每个 Block 都调用 now_iso()
+    now: String,
 }
 
 impl ParserState {
@@ -341,6 +359,8 @@ impl ParserState {
             warnings: Vec::new(),
             first_heading_seen: false,
             doc_title: String::new(),
+            child_counts: HashMap::new(),
+            now: now_iso(),
         }
     }
 
@@ -358,13 +378,24 @@ impl ParserState {
         properties: HashMap<String, String>,
     ) -> String {
         let id = generate_block_id();
-        let now = now_iso();
+        self.add_block_with_id(id, block_type, parent_id, content, properties)
+    }
+
+    /// 使用预生成的 ID 创建 Block（用于 Heading 等需提前知道 ID 的场景）
+    fn add_block_with_id(
+        &mut self,
+        id: String,
+        block_type: BlockType,
+        parent_id: String,
+        content: Vec<u8>,
+        properties: HashMap<String, String>,
+    ) -> String {
         let content_type = block_type.default_content_type();
-        let position = generate_position(&self.blocks, &parent_id);
+        let position = self.next_position(&parent_id);
 
         let block = Block {
             id: id.clone(),
-            parent_id,
+            parent_id: parent_id.clone(),
             position,
             block_type,
             content_type,
@@ -374,13 +405,21 @@ impl ParserState {
             status: BlockStatus::Normal,
             schema_version: 1,
             encrypted: false,
-            created: now.clone(),
-            modified: now,
+            created: self.now.clone(),
+            modified: self.now.clone(),
             author: "system".to_string(),
             owner_id: None,
         };
         self.blocks.push(block);
         id
+    }
+
+    /// O(1) 生成 position（parent 下递增：a0, a1, a2, ...）
+    fn next_position(&mut self, parent_id: &str) -> String {
+        let count = self.child_counts.entry(parent_id.to_string()).or_insert(0);
+        let pos = format!("a{}", count);
+        *count += 1;
+        pos
     }
 }
 
@@ -388,17 +427,21 @@ impl ParserState {
 
 fn parse_heading(scanner: &mut LineScanner, state: &mut ParserState) {
     let line = scanner.advance().unwrap();
-    let level = heading_level(line);
-    let text = heading_text(line);
+    let (level, text) = parse_heading_line(line).expect("is_heading guaranteed true in dispatch");
 
-    // 先计算正确的 parent_id（模拟 push 的弹栈逻辑），再创建 Block
-    let parent_id = state.heading_stack.parent_for_level(level);
+    let heading_id = generate_block_id();
+    let parent_id = state.heading_stack.push(level, heading_id.clone());
+
     let mut props = HashMap::new();
     props.insert("title".to_string(), text.clone());
 
-    let heading_id = state.add_block(BlockType::Heading { level }, parent_id, Vec::new(), props);
-
-    state.heading_stack.push(level, heading_id);
+    state.add_block_with_id(
+        heading_id,
+        BlockType::Heading { level },
+        parent_id,
+        Vec::new(),
+        props,
+    );
 
     if !state.first_heading_seen {
         state.doc_title = text;
@@ -497,11 +540,7 @@ fn parse_paragraph(scanner: &mut LineScanner, state: &mut ParserState) {
     );
 }
 
-fn parse_blockquote(
-    scanner: &mut LineScanner,
-    state: &mut ParserState,
-    options: &ParseOptions,
-) {
+fn parse_blockquote(scanner: &mut LineScanner, state: &mut ParserState) {
     // 收集连续的 blockquote 行，剥离 '> ' 前缀
     let mut bq_lines = Vec::new();
 
@@ -534,17 +573,13 @@ fn parse_blockquote(
         HeadingStack::new(bq_id.clone()),
     );
 
-    parse_content(&mut inner_scanner, state, options);
+    parse_content(&mut inner_scanner, state);
 
     // 恢复 heading stack
     state.heading_stack = saved_stack;
 }
 
-fn parse_list(
-    scanner: &mut LineScanner,
-    state: &mut ParserState,
-    options: &ParseOptions,
-) {
+fn parse_list(scanner: &mut LineScanner, state: &mut ParserState) {
     let first_line = scanner.peek().unwrap();
     let ordered = is_ordered_list_item(first_line);
     let base_indent = indent_of(first_line);
@@ -573,7 +608,7 @@ fn parse_list(
 
         // 消费列表项行
         let item_line = scanner.advance().unwrap();
-        let item_text = strip_list_marker(item_line);
+        let item_text = strip_list_marker(item_line, ordered);
 
         let item_id = state.add_block(
             BlockType::ListItem,
@@ -641,7 +676,7 @@ fn parse_list(
                 HeadingStack::new(item_id.clone()),
             );
 
-            parse_content(&mut inner_scanner, state, options);
+            parse_content(&mut inner_scanner, state);
 
             state.heading_stack = saved_stack;
         }
@@ -649,7 +684,7 @@ fn parse_list(
 }
 
 /// 顶层内容解析循环
-fn parse_content(scanner: &mut LineScanner, state: &mut ParserState, options: &ParseOptions) {
+fn parse_content(scanner: &mut LineScanner, state: &mut ParserState) {
     while scanner.has_more() {
         scanner.skip_blank_lines();
         if !scanner.has_more() {
@@ -667,9 +702,9 @@ fn parse_content(scanner: &mut LineScanner, state: &mut ParserState, options: &P
         } else if is_thematic_break(line) {
             parse_thematic_break(scanner, state);
         } else if is_blockquote(line) {
-            parse_blockquote(scanner, state, options);
+            parse_blockquote(scanner, state);
         } else if is_list_item(line) {
-            parse_list(scanner, state, options);
+            parse_list(scanner, state);
         } else {
             parse_paragraph(scanner, state);
         }
@@ -680,10 +715,10 @@ fn parse_content(scanner: &mut LineScanner, state: &mut ParserState, options: &P
 
 fn parse_markdown(
     text: &str,
-    options: &ParseOptions,
+    _options: &ParseOptions,
 ) -> Result<(Block, Vec<Block>, Vec<ParseWarning>), AppError> {
     let doc_id = generate_block_id();
-    let now = now_iso();
+    let mut state = ParserState::new(doc_id.clone());
 
     let mut doc = Block {
         id: doc_id.clone(),
@@ -697,16 +732,15 @@ fn parse_markdown(
         status: BlockStatus::Normal,
         schema_version: 1,
         encrypted: false,
-        created: now.clone(),
-        modified: now,
+        created: state.now.clone(),
+        modified: state.now.clone(),
         author: "system".to_string(),
         owner_id: None,
     };
 
-    let mut state = ParserState::new(doc_id.clone());
     let mut scanner = LineScanner::new(text);
 
-    parse_content(&mut scanner, &mut state, options);
+    parse_content(&mut scanner, &mut state);
 
     // 设置文档标题
     let doc_title = if state.doc_title.is_empty() {
@@ -727,20 +761,17 @@ fn parse_markdown(
 
 // ─── 解析器辅助函数 ──────────────────────────────────────────
 
-/// 为新 Block 生成 position（简易递增：a0, a1, a2, ...）
-fn generate_position(existing: &[Block], parent_id: &str) -> String {
-    let count = existing.iter().filter(|b| b.parent_id == parent_id).count();
-    format!("a{}", count)
-}
-
-/// 截断标题
+/// 截断标题（使用 char_indices 避免 Vec<char> 分配）
 fn truncate_title(s: &str, max_len: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_len {
-        s.to_string()
-    } else {
-        let truncated: String = chars[..max_len].iter().collect();
-        format!("{}…", truncated)
+    match s.char_indices().nth(max_len) {
+        // 如果第 max_len 个字符的起始位置存在，说明字符串超长
+        Some((byte_pos, _)) => {
+            let mut truncated = s[..byte_pos].to_string();
+            truncated.push('…');
+            truncated
+        }
+        // 字符数 ≤ max_len，直接返回
+        None => s.to_string(),
     }
 }
 
@@ -809,6 +840,21 @@ fn now_iso() -> String {
 // ═══════════════════════════════════════════════════════════════
 
 /// 递归序列化一个 Block 及其所有后代
+/// 获取指定父块的子块引用列表（按 position 排序），避免 clone 整个 Vec<Block>
+fn get_sorted_children<'a>(
+    children_map: &'a HashMap<String, Vec<Block>>,
+    parent_id: &str,
+) -> Vec<&'a Block> {
+    match children_map.get(parent_id) {
+        Some(children) => {
+            let mut refs: Vec<&Block> = children.iter().collect();
+            refs.sort_by(|a, b| a.position.cmp(&b.position));
+            refs
+        }
+        None => Vec::new(),
+    }
+}
+
 fn serialize_block_recursive(
     block: &Block,
     children_map: &HashMap<String, Vec<Block>>,
@@ -825,10 +871,8 @@ fn serialize_block_recursive(
 
     *counter += 1;
 
-    // 获取子块（按 position 排序）
-    let children = children_map.get(&block.id).cloned().unwrap_or_default();
-    let mut sorted_children = children;
-    sorted_children.sort_by(|a, b| a.position.cmp(&b.position));
+    // 获取子块引用（按 position 排序），无需 clone
+    let sorted_children = get_sorted_children(children_map, &block.id);
 
     match &block.block_type {
         BlockType::Document => {
@@ -839,7 +883,7 @@ fn serialize_block_recursive(
                     }
                 }
             }
-            for child in &sorted_children {
+            for &child in &sorted_children {
                 serialize_block_recursive(
                     child, children_map, list_depth, out, lossy, counter, false,
                 );
@@ -854,7 +898,7 @@ fn serialize_block_recursive(
                 .unwrap_or_default();
             let hashes = "#".repeat(*level as usize);
             out.push_str(&format!("{} {}\n\n", hashes, title));
-            for child in &sorted_children {
+            for &child in &sorted_children {
                 serialize_block_recursive(
                     child, children_map, list_depth, out, lossy, counter, false,
                 );
@@ -910,7 +954,7 @@ fn serialize_block_recursive(
 
         BlockType::Blockquote => {
             let mut inner = String::new();
-            for child in &sorted_children {
+            for &child in &sorted_children {
                 serialize_block_recursive(
                     child,
                     children_map,
@@ -929,7 +973,7 @@ fn serialize_block_recursive(
 
         BlockType::ListItem => {
             // fallback：直接序列化子块
-            for child in &sorted_children {
+            for &child in &sorted_children {
                 serialize_block_recursive(
                     child, children_map, list_depth, out, lossy, counter, false,
                 );
@@ -948,7 +992,7 @@ fn serialize_block_recursive(
                 .cloned()
                 .unwrap_or_else(|| "💡".to_string());
             let mut inner = String::new();
-            for child in &sorted_children {
+            for &child in &sorted_children {
                 serialize_block_recursive(
                     child,
                     children_map,
@@ -1019,7 +1063,7 @@ fn serialize_block_recursive(
 
 /// 序列化列表
 fn serialize_list(
-    items: &[Block],
+    items: &[&Block],
     children_map: &HashMap<String, Vec<Block>>,
     ordered: bool,
     depth: usize,
@@ -1029,7 +1073,7 @@ fn serialize_list(
 ) {
     let indent = "  ".repeat(depth);
 
-    for (i, item) in items.iter().enumerate() {
+    for (i, &item) in items.iter().enumerate() {
         if item.block_type != BlockType::ListItem {
             serialize_block_recursive(item, children_map, depth, out, lossy, counter, false);
             continue;
@@ -1043,13 +1087,11 @@ fn serialize_list(
             "- ".to_string()
         };
 
-        let item_children = children_map.get(&item.id).cloned().unwrap_or_default();
-        let mut sorted_item_children = item_children;
-        sorted_item_children.sort_by(|a, b| a.position.cmp(&b.position));
+        let sorted_item_children = get_sorted_children(children_map, &item.id);
 
         // 第一个 Paragraph 在同一行输出
         let mut first = true;
-        for child in &sorted_item_children {
+        for &child in &sorted_item_children {
             if first && child.block_type == BlockType::Paragraph {
                 let text = String::from_utf8_lossy(&child.content);
                 out.push_str(&format!("{}{}{}\n", indent, prefix, text));

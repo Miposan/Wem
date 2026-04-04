@@ -7,30 +7,11 @@ use crate::model::Block;
 
 // ─── 解析选项 ─────────────────────────────────────────────────
 
-/// 解析器通用选项
-#[derive(Debug, Clone, Deserialize)]
-pub struct ParseOptions {
-    /// 是否创建为子文档（默认 true）
-    #[serde(default = "default_true")]
-    pub as_subdocument: bool,
-
-    /// 自动修复嵌套违规（默认 true）
-    #[serde(default = "default_true")]
-    pub fix_nesting: bool,
-}
-
-impl Default for ParseOptions {
-    fn default() -> Self {
-        Self {
-            as_subdocument: true,
-            fix_nesting: true,
-        }
-    }
-}
-
-fn default_true() -> bool {
-    true
-}
+/// 解析器通用选项（预留扩展）
+///
+/// 目前无实际字段，保留结构体以便将来添加格式特定的选项。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ParseOptions {}
 
 // ─── 解析警告 ─────────────────────────────────────────────────
 
