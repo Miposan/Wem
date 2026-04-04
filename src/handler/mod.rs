@@ -8,4 +8,5 @@ pub mod block;
 pub use block::{
     health, get_root, create_document, list_documents, get_document, get_document_tree, delete_document,
     create_block, get_block, update_block, delete_block, move_block, restore_block, get_children,
+    import_text, export_text,
 };

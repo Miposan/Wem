@@ -80,3 +80,22 @@ pub struct CreateDocumentReq {
     /// 插在指定文档之后（可选）
     pub after_id: Option<String>,
 }
+
+// ─── 文本导入/导出请求 ────────────────────────────────────────
+
+/// 导入文本请求
+///
+/// `POST /api/v1/blocks/import`
+#[derive(Debug, Deserialize)]
+pub struct ImportTextReq {
+    /// 源格式（"markdown" 或 "md"）
+    pub format: String,
+    /// 文本内容
+    pub content: String,
+    /// 目标父块 ID（不传则挂到全局根块下，成为根文档）
+    pub parent_id: Option<String>,
+    /// 插在指定 Block 之后（可选，不传则追加到末尾）
+    pub after_id: Option<String>,
+    /// 自定义文档标题（可选，默认从内容中第一个标题推断）
+    pub title: Option<String>,
+}

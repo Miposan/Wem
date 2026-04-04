@@ -27,3 +27,5 @@ tower-http = { version = "0.6", features = ["cors"] }
 
 # 错误类型定义简写（AppError）
 thiserror = "2"
+
+# Markdown 解析：已替换为自研递归下降解析器

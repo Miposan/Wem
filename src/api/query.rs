@@ -38,3 +38,17 @@ pub struct ChildrenQuery {
 fn default_limit() -> u32 {
     50
 }
+
+/// 导出查询参数
+///
+/// `GET /api/v1/documents/{id}/export?format=markdown`
+#[derive(Debug, Deserialize)]
+pub struct ExportQuery {
+    /// 目标格式（默认 "markdown"）
+    #[serde(default = "default_export_format")]
+    pub format: String,
+}
+
+fn default_export_format() -> String {
+    "markdown".to_string()
+}

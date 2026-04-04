@@ -10,11 +10,12 @@ use axum::{
     Json,
 };
 
-use crate::api::request::{CreateBlockReq, CreateDocumentReq, MoveBlockReq, UpdateBlockReq};
+use crate::api::request::{CreateBlockReq, CreateDocumentReq, ImportTextReq, MoveBlockReq, UpdateBlockReq};
 use crate::api::response::{
-    ChildrenResult, DeleteResult, DocumentListResponse, DocumentTreeResult, RestoreResult,
+    ChildrenResult, DeleteResult, DocumentListResponse, DocumentTreeResult,
+    ExportResult, ImportResult, RestoreResult,
 };
-use crate::api::query::{ChildrenQuery, GetBlockQuery, VersionQuery};
+use crate::api::query::{ChildrenQuery, ExportQuery, GetBlockQuery, VersionQuery};
 use crate::db::Db;
 use crate::error::{AppError, ApiResponse};
 use crate::model::Block;
@@ -232,6 +233,42 @@ pub async fn get_children(
 ) -> Result<Json<ApiResponse<ChildrenResult>>, AppError> {
     let result = tokio::task::spawn_blocking(move || {
         block::get_children(&db, &id, params.limit, params.cursor.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    Ok(Json(ApiResponse::ok(Some(result))))
+}
+
+// ─── 文本导入/导出 API ──────────────────────────────────────────
+
+/// POST /api/v1/blocks/import
+///
+/// 导入 Markdown 等格式文本，解析为 Block 树并插入数据库
+pub async fn import_text(
+    State(db): State<Db>,
+    Json(req): Json<ImportTextReq>,
+) -> Result<Json<ApiResponse<ImportResult>>, AppError> {
+    let result = tokio::task::spawn_blocking(move || {
+        crate::service::import::import_text(&db, req)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    Ok(Json(ApiResponse::ok(Some(result))))
+}
+
+/// GET /api/v1/documents/{id}/export?format=markdown
+///
+/// 导出文档为 Markdown 等格式文本
+pub async fn export_text(
+    State(db): State<Db>,
+    Path(id): Path<String>,
+    Query(params): Query<ExportQuery>,
+) -> Result<Json<ApiResponse<ExportResult>>, AppError> {
+    let format = params.format;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::service::export::export_text(&db, &id, &format)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;

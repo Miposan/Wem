@@ -3,8 +3,6 @@
 //! Block 是系统中唯一的实体。Document、Paragraph、Heading 都是 Block。
 //! 这个文件定义了 Block 的完整结构、类型枚举和 ID 生成器。
 //!
-//! 请求/响应 DTO 已迁移到 `crate::api` 模块。
-//!
 //! 参考 01-block-model.md §1~§6
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -182,11 +180,12 @@ impl BlockType {
     pub fn default_content_type(&self) -> ContentType {
         match self {
             // 叶子块 + Document → Markdown
+            // ThematicBreak 虽属叶子块，但无实际内容 → Empty
             Self::Document
             | Self::Paragraph
             | Self::CodeBlock { .. }
-            | Self::MathBlock
-            | Self::ThematicBreak => ContentType::Markdown,
+            | Self::MathBlock => ContentType::Markdown,
+            Self::ThematicBreak => ContentType::Empty,
             // Embed → Query
             Self::Embed => ContentType::Query,
             // 其他（容器块除 Document、资源块）→ Empty

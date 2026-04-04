@@ -6,6 +6,7 @@
 use serde::Serialize;
 
 use crate::model::Block;
+use crate::parser::types::ParseWarning;
 
 // ─── Block 操作响应 ────────────────────────────────────────────
 
@@ -58,4 +59,34 @@ pub struct ChildrenResult {
     pub blocks: Vec<Block>,
     pub has_more: bool,
     pub next_cursor: Option<String>,
+}
+
+// ─── 导入/导出响应 ────────────────────────────────────────────
+
+/// 导入文本响应
+///
+/// `POST /api/v1/blocks/import`
+#[derive(Debug, Serialize)]
+pub struct ImportResult {
+    /// 导入后创建的文档根 Block
+    pub root: Block,
+    /// 创建的 Block 总数（含根文档）
+    pub blocks_imported: usize,
+    /// 解析过程中的警告
+    pub warnings: Vec<ParseWarning>,
+}
+
+/// 导出文本响应
+///
+/// `GET /api/v1/documents/{id}/export?format=markdown`
+#[derive(Debug, Serialize)]
+pub struct ExportResult {
+    /// 序列化后的文本内容
+    pub content: String,
+    /// 推荐文件名（如 `"Hello.md"`）
+    pub filename: Option<String>,
+    /// 导出的 Block 数量
+    pub blocks_exported: usize,
+    /// 降级处理的 BlockType 列表
+    pub lossy_types: Vec<String>,
 }

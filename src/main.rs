@@ -5,13 +5,14 @@
 //! 内核提供 REST API，人和 AI 通过同一套接口操作 Block 树。
 
 // 声明模块（每个 mod 对应 src/ 下的同名文件或目录下的 mod.rs）
-mod api;      // API 数据传输对象（请求/响应/查询参数）
-mod config;   // 全局配置（端口、数据库路径）
-mod error;    // 统一错误处理 + API 响应格式
-mod model;    // 数据模型（Block、BlockType 等）
-mod db;       // 数据库层（SQLite 连接、建表）
-mod service;  // 业务逻辑层（Block CRUD、树操作）
-mod handler;  // HTTP 处理层（Axum route handlers）
+mod api;        // API 数据传输对象（请求/响应/查询参数）
+mod config;     // 全局配置（端口、数据库路径）
+mod error;      // 统一错误处理 + API 响应格式
+mod model;      // 数据模型（Block、BlockType 等）
+mod db;         // 数据库层（SQLite 连接、建表）
+mod service;    // 业务逻辑层（Block CRUD、树操作）
+mod handler;    // HTTP 处理层（Axum route handlers）
+mod parser;     // 文本格式转换（Markdown ↔ Block 树，可扩展）
 
 use axum::{Router, routing::{get, post}};
 
@@ -60,6 +61,14 @@ async fn main() {
         .route("/api/v1/blocks/{id}/children",
             get(handler::get_children))
 
+        // ─── 文本导入/导出 API ────────────
+        // 导入文本（Markdown → Block 树）
+        .route("/api/v1/blocks/import",
+            post(handler::import_text))
+        // 导出文档（Block 树 → Markdown）
+        .route("/api/v1/documents/{id}/export",
+            get(handler::export_text))
+
         // 注入数据库 State
         .with_state(db);
 
@@ -84,6 +93,8 @@ async fn main() {
     println!("   POST   /api/v1/blocks/{{id}}/move");
     println!("   POST   /api/v1/blocks/{{id}}/restore");
     println!("   GET    /api/v1/blocks/{{id}}/children");
+    println!("   POST   /api/v1/blocks/import");
+    println!("   GET    /api/v1/documents/{{id}}/export");
 
     // 启动 HTTP 服务器
     axum::serve(listener, app)

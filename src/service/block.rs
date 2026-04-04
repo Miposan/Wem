@@ -571,7 +571,7 @@ pub fn create_document(
 ///
 /// - 有 after_id → 插在 after_id 之后（如有后继兄弟则插入两者之间）
 /// - 无 after_id → 追加到末尾
-fn calculate_insert_position(
+pub(crate) fn calculate_insert_position(
     conn: &rusqlite::Connection,
     parent_id: &str,
     after_id: Option<&str>,
