@@ -14,10 +14,13 @@
 use std::collections::HashMap;
 
 use crate::error::AppError;
-use crate::model::{generate_block_id, Block, BlockStatus, BlockType, ContentType};
+use crate::model::{generate_block_id, Block, BlockStatus, BlockType};
 
 use super::types::{LossyInfo, ParseOptions, ParseResult, ParseWarning, SerializeResult};
 use super::{BlockParser, BlockSerializer};
+
+/// 默认文档标题
+const DEFAULT_TITLE: &str = "无标题文档";
 
 // ─── MarkdownFormat ──────────────────────────────────────────
 
@@ -69,18 +72,18 @@ impl BlockSerializer for MarkdownFormat {
         children_map: &HashMap<String, Vec<Block>>,
     ) -> Result<SerializeResult, AppError> {
         let mut lossy = Vec::new();
-        let mut content = String::new();
         let mut blocks_exported = 0;
 
-        serialize_block_recursive(
-            root,
-            children_map,
-            0,
-            &mut content,
-            &mut lossy,
-            &mut blocks_exported,
-            true,
-        );
+        let content = {
+            let mut ctx = SerializeContext {
+                children_map,
+                out: String::new(),
+                lossy: &mut lossy,
+                counter: &mut blocks_exported,
+            };
+            serialize_block_recursive(root, &mut ctx, 0, true);
+            ctx.out
+        };
 
         let filename = root
             .properties
@@ -169,7 +172,8 @@ impl HeadingStack {
 
     /// 推入新 Heading，返回其父 Block ID
     ///
-    /// 合并了原来的 `parent_for_level`（计算 parent）+ `push`（修改栈），\n    /// 避免对栈做两次遍历。
+    /// 合并了原来的 `parent_for_level`（计算 parent）+ `push`（修改栈），
+    /// 避免对栈做两次遍历。
     fn push(&mut self, level: u8, heading_id: String) -> String {
         // 弹出 >= level 的项，找到父级
         while self.stack.last().map_or(false, |(l, _)| *l >= level) {
@@ -390,26 +394,8 @@ impl ParserState {
         content: Vec<u8>,
         properties: HashMap<String, String>,
     ) -> String {
-        let content_type = block_type.default_content_type();
         let position = self.next_position(&parent_id);
-
-        let block = Block {
-            id: id.clone(),
-            parent_id: parent_id.clone(),
-            position,
-            block_type,
-            content_type,
-            content,
-            properties,
-            version: 1,
-            status: BlockStatus::Normal,
-            schema_version: 1,
-            encrypted: false,
-            created: self.now.clone(),
-            modified: self.now.clone(),
-            author: "system".to_string(),
-            owner_id: None,
-        };
+        let block = build_block(id.clone(), parent_id, position, block_type, content, properties, &self.now);
         self.blocks.push(block);
         id
     }
@@ -420,6 +406,35 @@ impl ParserState {
         let pos = format!("a{}", count);
         *count += 1;
         pos
+    }
+}
+
+/// 构建 Block 的统一入口，消除 16 字段样板代码
+fn build_block(
+    id: String,
+    parent_id: String,
+    position: String,
+    block_type: BlockType,
+    content: Vec<u8>,
+    properties: HashMap<String, String>,
+    now: &str,
+) -> Block {
+    Block {
+        id,
+        parent_id,
+        position,
+        content_type: block_type.default_content_type(),
+        block_type,
+        content,
+        properties,
+        version: 1,
+        status: BlockStatus::Normal,
+        schema_version: 1,
+        encrypted: false,
+        created: now.to_string(),
+        modified: now.to_string(),
+        author: "system".to_string(),
+        owner_id: None,
     }
 }
 
@@ -720,23 +735,15 @@ fn parse_markdown(
     let doc_id = generate_block_id();
     let mut state = ParserState::new(doc_id.clone());
 
-    let mut doc = Block {
-        id: doc_id.clone(),
-        parent_id: doc_id.clone(),
-        position: "a0".to_string(),
-        block_type: BlockType::Document,
-        content_type: ContentType::Markdown,
-        content: Vec::new(),
-        properties: HashMap::new(),
-        version: 1,
-        status: BlockStatus::Normal,
-        schema_version: 1,
-        encrypted: false,
-        created: state.now.clone(),
-        modified: state.now.clone(),
-        author: "system".to_string(),
-        owner_id: None,
-    };
+    let mut doc = build_block(
+        doc_id.clone(),
+        doc_id.clone(),
+        "a0".to_string(),
+        BlockType::Document,
+        Vec::new(),
+        HashMap::new(),
+        &state.now,
+    );
 
     let mut scanner = LineScanner::new(text);
 
@@ -749,7 +756,7 @@ fn parse_markdown(
             let content = String::from_utf8_lossy(&first_para.content);
             truncate_title(&content, 50)
         } else {
-            "无标题文档".to_string()
+            DEFAULT_TITLE.to_string()
         }
     } else {
         state.doc_title
@@ -781,45 +788,25 @@ fn empty_result() -> ParseResult {
     let para_id = generate_block_id();
     let now = now_iso();
 
-    let doc = Block {
-        id: doc_id.clone(),
-        parent_id: doc_id.clone(),
-        position: "a0".to_string(),
-        block_type: BlockType::Document,
-        content_type: ContentType::Markdown,
-        content: Vec::new(),
-        properties: {
-            let mut m = HashMap::new();
-            m.insert("title".to_string(), "无标题文档".to_string());
-            m
-        },
-        version: 1,
-        status: BlockStatus::Normal,
-        schema_version: 1,
-        encrypted: false,
-        created: now.clone(),
-        modified: now.clone(),
-        author: "system".to_string(),
-        owner_id: None,
-    };
+    let doc = build_block(
+        doc_id.clone(),
+        doc_id.clone(),
+        "a0".to_string(),
+        BlockType::Document,
+        Vec::new(),
+        HashMap::from([("title".to_string(), DEFAULT_TITLE.to_string())]),
+        &now,
+    );
 
-    let para = Block {
-        id: para_id,
-        parent_id: doc_id,
-        position: "a0".to_string(),
-        block_type: BlockType::Paragraph,
-        content_type: ContentType::Markdown,
-        content: Vec::new(),
-        properties: HashMap::new(),
-        version: 1,
-        status: BlockStatus::Normal,
-        schema_version: 1,
-        encrypted: false,
-        created: now.clone(),
-        modified: now,
-        author: "system".to_string(),
-        owner_id: None,
-    };
+    let para = build_block(
+        para_id,
+        doc_id,
+        "a0".to_string(),
+        BlockType::Paragraph,
+        Vec::new(),
+        HashMap::new(),
+        &now,
+    );
 
     ParseResult {
         blocks_created: 2,
@@ -839,8 +826,58 @@ fn now_iso() -> String {
 //  序列化器内部
 // ═══════════════════════════════════════════════════════════════
 
-/// 递归序列化一个 Block 及其所有后代
-/// 获取指定父块的子块引用列表（按 position 排序），避免 clone 整个 Vec<Block>
+// ─── 序列化上下文 ──────────────────────────────────────────
+
+/// 序列化过程中的共享可变状态，消除 7 参数函数签名
+struct SerializeContext<'a> {
+    children_map: &'a HashMap<String, Vec<Block>>,
+    out: String,
+    lossy: &'a mut Vec<LossyInfo>,
+    counter: &'a mut usize,
+}
+
+impl<'a> SerializeContext<'a> {
+    /// 记录有损转换
+    fn push_lossy(&mut self, block_type: &str, reason: &str) {
+        self.lossy.push(LossyInfo {
+            block_type: block_type.to_string(),
+            reason: reason.to_string(),
+        });
+    }
+
+    /// 输出有损链接（Audio / Video / Iframe 共用模式）
+    fn emit_lossy_link(&mut self, type_name: &str, url: &str) {
+        self.push_lossy(
+            type_name,
+            &format!("Markdown 无原生{}，降级为链接", type_name),
+        );
+        self.out.push_str(&format!("[{}]({})\n\n", type_name, url));
+    }
+
+    /// 输出有损 HTML 注释（Embed / AttributeView / Widget 共用模式）
+    fn emit_lossy_comment(&mut self, type_name: &str, content: &str) {
+        self.push_lossy(
+            type_name,
+            &format!("{} 块降级为 HTML 注释", type_name),
+        );
+        self.out.push_str(&format!("<!-- {} -->\n\n", content));
+    }
+
+    /// 将子块序列化到临时缓冲区（用于 Blockquote / Callout 的 `>` 前缀包装）
+    fn serialize_into_buffer(&mut self, children: &[&'a Block], depth: usize) -> String {
+        let mut buf = String::new();
+        std::mem::swap(&mut self.out, &mut buf);
+        for &child in children {
+            serialize_block_recursive(child, self, depth, false);
+        }
+        std::mem::swap(&mut self.out, &mut buf);
+        buf
+    }
+}
+
+// ─── 辅助函数 ──────────────────────────────────────────────
+
+/// 获取指定父块的子块引用列表（按 position 排序）
 fn get_sorted_children<'a>(
     children_map: &'a HashMap<String, Vec<Block>>,
     parent_id: &str,
@@ -855,38 +892,32 @@ fn get_sorted_children<'a>(
     }
 }
 
+/// 递归序列化一个 Block 及其所有后代
 fn serialize_block_recursive(
     block: &Block,
-    children_map: &HashMap<String, Vec<Block>>,
-    list_depth: usize,
-    out: &mut String,
-    lossy: &mut Vec<LossyInfo>,
-    counter: &mut usize,
+    ctx: &mut SerializeContext,
+    depth: usize,
     is_root: bool,
 ) {
     // 跳过已删除/草稿块
     if block.status != BlockStatus::Normal {
         return;
     }
+    *ctx.counter += 1;
 
-    *counter += 1;
-
-    // 获取子块引用（按 position 排序），无需 clone
-    let sorted_children = get_sorted_children(children_map, &block.id);
+    let sorted_children = get_sorted_children(ctx.children_map, &block.id);
 
     match &block.block_type {
         BlockType::Document => {
             if is_root {
                 if let Some(title) = block.properties.get("title") {
                     if !title.is_empty() {
-                        out.push_str(&format!("# {}\n\n", title));
+                        ctx.out.push_str(&format!("# {}\n\n", title));
                     }
                 }
             }
             for &child in &sorted_children {
-                serialize_block_recursive(
-                    child, children_map, list_depth, out, lossy, counter, false,
-                );
+                serialize_block_recursive(child, ctx, depth, false);
             }
         }
 
@@ -897,38 +928,36 @@ fn serialize_block_recursive(
                 .cloned()
                 .unwrap_or_default();
             let hashes = "#".repeat(*level as usize);
-            out.push_str(&format!("{} {}\n\n", hashes, title));
+            ctx.out.push_str(&format!("{} {}\n\n", hashes, title));
             for &child in &sorted_children {
-                serialize_block_recursive(
-                    child, children_map, list_depth, out, lossy, counter, false,
-                );
+                serialize_block_recursive(child, ctx, depth, false);
             }
         }
 
         BlockType::Paragraph => {
             let text = String::from_utf8_lossy(&block.content);
             if !text.is_empty() {
-                out.push_str(&text);
-                out.push_str("\n\n");
+                ctx.out.push_str(&text);
+                ctx.out.push_str("\n\n");
             }
         }
 
         BlockType::CodeBlock { language } => {
-            out.push_str(&format!("```{}\n", language));
+            ctx.out.push_str(&format!("```{}\n", language));
             let code = String::from_utf8_lossy(&block.content);
-            out.push_str(&code);
-            out.push_str("\n```\n\n");
+            ctx.out.push_str(&code);
+            ctx.out.push_str("\n```\n\n");
         }
 
         BlockType::MathBlock => {
-            out.push_str("$$\n");
+            ctx.out.push_str("$$\n");
             let latex = String::from_utf8_lossy(&block.content);
-            out.push_str(&latex);
-            out.push_str("\n$$\n\n");
+            ctx.out.push_str(&latex);
+            ctx.out.push_str("\n$$\n\n");
         }
 
         BlockType::ThematicBreak => {
-            out.push_str("---\n\n");
+            ctx.out.push_str("---\n\n");
         }
 
         BlockType::Image { url } => {
@@ -937,126 +966,66 @@ fn serialize_block_recursive(
                 .get("alt")
                 .cloned()
                 .unwrap_or_default();
-            out.push_str(&format!("![{}]({})\n\n", alt, url));
+            ctx.out.push_str(&format!("![{}]({})\n\n", alt, url));
         }
 
         BlockType::List { ordered } => {
-            serialize_list(
-                &sorted_children,
-                children_map,
-                *ordered,
-                list_depth,
-                out,
-                lossy,
-                counter,
-            );
+            serialize_list(&sorted_children, ctx, *ordered, depth);
         }
 
         BlockType::Blockquote => {
-            let mut inner = String::new();
-            for &child in &sorted_children {
-                serialize_block_recursive(
-                    child,
-                    children_map,
-                    list_depth,
-                    &mut inner,
-                    lossy,
-                    counter,
-                    false,
-                );
-            }
+            let inner = ctx.serialize_into_buffer(&sorted_children, depth);
             for line in inner.lines() {
-                out.push_str(&format!("> {}\n", line));
+                ctx.out.push_str(&format!("> {}\n", line));
             }
-            out.push('\n');
+            ctx.out.push('\n');
         }
 
         BlockType::ListItem => {
-            // fallback：直接序列化子块
             for &child in &sorted_children {
-                serialize_block_recursive(
-                    child, children_map, list_depth, out, lossy, counter, false,
-                );
+                serialize_block_recursive(child, ctx, depth, false);
             }
         }
 
         // ─── 降级处理 ─────────────────────────────────
         BlockType::Callout => {
-            lossy.push(LossyInfo {
-                block_type: "callout".to_string(),
-                reason: "Markdown 无原生 callout，降级为 blockquote".to_string(),
-            });
+            ctx.push_lossy("callout", "Markdown 无原生 callout，降级为 blockquote");
             let icon = block
                 .properties
                 .get("icon")
                 .cloned()
                 .unwrap_or_else(|| "💡".to_string());
-            let mut inner = String::new();
-            for &child in &sorted_children {
-                serialize_block_recursive(
-                    child,
-                    children_map,
-                    list_depth,
-                    &mut inner,
-                    lossy,
-                    counter,
-                    false,
-                );
-            }
-            out.push_str(&format!("> {}\n", icon));
+            let inner = ctx.serialize_into_buffer(&sorted_children, depth);
+            ctx.out.push_str(&format!("> {}\n", icon));
             for line in inner.lines() {
-                out.push_str(&format!("> {}\n", line));
+                ctx.out.push_str(&format!("> {}\n", line));
             }
-            out.push('\n');
+            ctx.out.push('\n');
         }
 
         BlockType::Audio { url } => {
-            lossy.push(LossyInfo {
-                block_type: "audio".to_string(),
-                reason: "Markdown 无原生音频，降级为链接".to_string(),
-            });
-            out.push_str(&format!("[audio]({})\n\n", url));
+            ctx.emit_lossy_link("audio", url);
         }
 
         BlockType::Video { url } => {
-            lossy.push(LossyInfo {
-                block_type: "video".to_string(),
-                reason: "Markdown 无原生视频，降级为链接".to_string(),
-            });
-            out.push_str(&format!("[video]({})\n\n", url));
+            ctx.emit_lossy_link("video", url);
         }
 
         BlockType::Iframe { url } => {
-            lossy.push(LossyInfo {
-                block_type: "iframe".to_string(),
-                reason: "Markdown 无原生 iframe，降级为链接".to_string(),
-            });
-            out.push_str(&format!("[iframe]({})\n\n", url));
+            ctx.emit_lossy_link("iframe", url);
         }
 
         BlockType::Embed => {
-            lossy.push(LossyInfo {
-                block_type: "embed".to_string(),
-                reason: "Embed 块降级为 HTML 注释".to_string(),
-            });
             let content = String::from_utf8_lossy(&block.content);
-            out.push_str(&format!("<!-- embed: {} -->\n\n", content));
+            ctx.emit_lossy_comment("embed", &format!("embed: {}", content));
         }
 
         BlockType::AttributeView { av_id } => {
-            lossy.push(LossyInfo {
-                block_type: "attributeView".to_string(),
-                reason: "数据库视图降级为 HTML 注释".to_string(),
-            });
-            out.push_str(&format!("<!-- attributeView: {} -->\n\n", av_id));
+            ctx.emit_lossy_comment("attributeView", &format!("attributeView: {}", av_id));
         }
 
         BlockType::Widget => {
-            lossy.push(LossyInfo {
-                block_type: "widget".to_string(),
-                reason: "Widget 块降级为 HTML 注释".to_string(),
-            });
-            out.push_str("<!-- widget -->\n\n");
+            ctx.emit_lossy_comment("widget", "widget");
         }
     }
 }
@@ -1064,22 +1033,19 @@ fn serialize_block_recursive(
 /// 序列化列表
 fn serialize_list(
     items: &[&Block],
-    children_map: &HashMap<String, Vec<Block>>,
+    ctx: &mut SerializeContext,
     ordered: bool,
     depth: usize,
-    out: &mut String,
-    lossy: &mut Vec<LossyInfo>,
-    counter: &mut usize,
 ) {
     let indent = "  ".repeat(depth);
 
     for (i, &item) in items.iter().enumerate() {
         if item.block_type != BlockType::ListItem {
-            serialize_block_recursive(item, children_map, depth, out, lossy, counter, false);
+            serialize_block_recursive(item, ctx, depth, false);
             continue;
         }
 
-        *counter += 1;
+        *ctx.counter += 1;
 
         let prefix = if ordered {
             format!("{}. ", i + 1)
@@ -1087,36 +1053,28 @@ fn serialize_list(
             "- ".to_string()
         };
 
-        let sorted_item_children = get_sorted_children(children_map, &item.id);
+        let sorted_item_children = get_sorted_children(ctx.children_map, &item.id);
 
         // 第一个 Paragraph 在同一行输出
         let mut first = true;
         for &child in &sorted_item_children {
             if first && child.block_type == BlockType::Paragraph {
                 let text = String::from_utf8_lossy(&child.content);
-                out.push_str(&format!("{}{}{}\n", indent, prefix, text));
-                *counter += 1;
+                ctx.out.push_str(&format!("{}{}{}\n", indent, prefix, text));
+                *ctx.counter += 1;
                 first = false;
             } else {
                 if first {
-                    out.push_str(&format!("{}{}", indent, prefix));
-                    out.push('\n');
+                    ctx.out.push_str(&format!("{}{}", indent, prefix));
+                    ctx.out.push('\n');
                     first = false;
                 }
-                serialize_block_recursive(
-                    child,
-                    children_map,
-                    depth + 1,
-                    out,
-                    lossy,
-                    counter,
-                    false,
-                );
+                serialize_block_recursive(child, ctx, depth + 1, false);
             }
         }
     }
 
-    out.push('\n');
+    ctx.out.push('\n');
 }
 
 // ═══════════════════════════════════════════════════════════════
