@@ -60,41 +60,21 @@ pub struct DocumentContentResult {
     pub has_more: bool,
 }
 
-/// 文档树子节点响应（侧边栏导航用）
+/// 文档直系子文档响应（侧边栏导航用）
 ///
-/// `GET /api/v1/documents/{id}/tree`
+/// `GET /api/v1/documents/{id}/children`
 ///
 /// 只返回该文档的直系子文档列表（一层），用于侧边栏按需加载。
-/// 用户展开某个子文档时，再请求该子文档的 /tree 获取下一层。
+/// 用户展开某个子文档时，再请求该子文档的 /children 获取下一层。
 #[derive(Debug, Serialize)]
-pub struct DocumentTreeResult {
-    /// 文档块本身
-    pub document: Block,
+pub struct DocumentChildrenResult {
     /// 直系子文档列表（仅 document 类型，按 position ASC 排序）
     pub children: Vec<Block>,
 }
 
-/// 文档列表响应
-///
-/// `GET /api/v1/documents`
-#[derive(Debug, Serialize)]
-pub struct DocumentListResponse {
-    pub blocks: Vec<Block>,
-    pub has_more: bool,
-    pub next_cursor: Option<String>,
-}
-
 // ─── 子块查询响应 ─────────────────────────────────────────────
 
-/// 子块列表响应（分页）
-///
-/// `GET /api/v1/blocks/{id}/children`
-#[derive(Debug, Serialize)]
-pub struct ChildrenResult {
-    pub blocks: Vec<Block>,
-    pub has_more: bool,
-    pub next_cursor: Option<String>,
-}
+// ChildrenResult 已删除：MVP 阶段不需要单独的子块列表接口
 
 // ─── 导入/导出响应 ────────────────────────────────────────────
 

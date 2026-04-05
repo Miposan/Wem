@@ -31,10 +31,6 @@ async fn main() {
         // ─── 健康检查 ────────────────────────
         .route("/api/v1/health", get(handler::health))
 
-        // ─── Root API ─────────────────────────
-        // 获取全局根块
-        .route("/api/v1/root", get(handler::get_root))
-
         // ─── Document API ─────────────────────
         // 列出根文档 / 创建文档
         .route("/api/v1/documents",
@@ -42,9 +38,9 @@ async fn main() {
         // 获取文档 / 删除文档
         .route("/api/v1/documents/{id}",
             get(handler::get_document).delete(handler::delete_document))
-        // 获取文档树
-        .route("/api/v1/documents/{id}/tree",
-            get(handler::get_document_tree))
+        // 获取文档直系子文档（侧边栏导航用）
+        .route("/api/v1/documents/{id}/children",
+            get(handler::get_document_children))
 
         // ─── Block API ────────────────────────
         // 批量操作（必须在 /blocks/{id} 之前注册，避免路径冲突）
@@ -62,9 +58,6 @@ async fn main() {
         // 恢复 Block
         .route("/api/v1/blocks/{id}/restore",
             post(handler::restore_block))
-        // 获取子块列表
-        .route("/api/v1/blocks/{id}/children",
-            get(handler::get_children))
 
         // ─── 文本导入/导出 API ────────────
         // 导入文本（Markdown → Block 树）

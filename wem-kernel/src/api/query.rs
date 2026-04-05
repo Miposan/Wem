@@ -23,33 +23,7 @@ pub struct GetBlockQuery {
     pub include_deleted: bool,
 }
 
-/// 获取子块列表的查询参数
-///
-/// `?limit=50&cursor=xxx`
-#[derive(Debug, Deserialize)]
-pub struct ChildrenQuery {
-    /// 每页数量（默认 50，最大 500）
-    #[serde(default = "default_limit")]
-    pub limit: u32,
-    /// 游标（上一页最后一条的 position）
-    pub cursor: Option<String>,
-}
-
-/// 文档列表查询参数
-///
-/// `GET /api/v1/documents?limit=50&cursor=xxx`
-#[derive(Debug, Deserialize)]
-pub struct DocumentListQuery {
-    /// 每页数量（默认 50，最大 500）
-    #[serde(default = "default_limit")]
-    pub limit: u32,
-    /// 游标（上一页最后一条的 position）
-    pub cursor: Option<String>,
-}
-
-fn default_limit() -> u32 {
-    50
-}
+// 文档列表和子块列表不需要分页参数，直接返回全部数据
 
 /// 导出查询参数
 ///

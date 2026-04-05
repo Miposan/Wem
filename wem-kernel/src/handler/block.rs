@@ -12,10 +12,10 @@ use axum::{
 
 use crate::api::request::{BatchReq, CreateBlockReq, CreateDocumentReq, ImportTextReq, MoveBlockReq, UpdateBlockReq};
 use crate::api::response::{
-    BatchResult, ChildrenResult, DeleteResult, DocumentContentResult,
-    DocumentListResponse, DocumentTreeResult, ExportResult, ImportResult, RestoreResult,
+    BatchResult, DeleteResult, DocumentChildrenResult,
+    DocumentContentResult, ExportResult, ImportResult, RestoreResult,
 };
-use crate::api::query::{ChildrenQuery, DocumentListQuery, ExportQuery, GetBlockQuery, VersionQuery};
+use crate::api::query::{ExportQuery, GetBlockQuery, VersionQuery};
 use crate::db::Db;
 use crate::error::{AppError, ApiResponse};
 use crate::model::Block;
@@ -29,19 +29,7 @@ pub async fn health() -> Json<ApiResponse<()>> {
 }
 
 // ─── Root API ───────────────────────────────────────────────────
-
-/// GET /api/v1/root
-///
-/// 获取全局根块 "/"（所有文档的挂载点）
-pub async fn get_root(
-    State(db): State<Db>,
-) -> Result<Json<ApiResponse<Block>>, AppError> {
-    let root = tokio::task::spawn_blocking(move || block::get_root(&db))
-        .await
-        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
-
-    Ok(Json(ApiResponse::ok(Some(root))))
-}
+// get_root 已删除：前端不需要单独获取全局根块
 
 // ─── Document API ──────────────────────────────────────────────
 
@@ -66,22 +54,17 @@ pub async fn create_document(
     Ok(Json(ApiResponse::ok(Some(doc))))
 }
 
-/// GET /api/v1/documents?limit=50&cursor=xxx
+/// GET /api/v1/documents
 ///
-/// 列出根文档（游标分页）
+/// 列出所有根文档（不分页）
 pub async fn list_documents(
     State(db): State<Db>,
-    Query(params): Query<DocumentListQuery>,
-) -> Result<Json<ApiResponse<DocumentListResponse>>, AppError> {
-    let limit = params.limit.min(500);
-    let cursor = params.cursor;
-    let resp: DocumentListResponse = tokio::task::spawn_blocking(move || {
-        block::list_root_documents(&db, limit, cursor.as_deref())
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+) -> Result<Json<ApiResponse<Vec<Block>>>, AppError> {
+    let docs = tokio::task::spawn_blocking(move || block::list_root_documents(&db))
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    Ok(Json(ApiResponse::ok(Some(resp))))
+    Ok(Json(ApiResponse::ok(Some(docs))))
 }
 
 /// GET /api/v1/documents/{id}
@@ -99,18 +82,18 @@ pub async fn get_document(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// GET /api/v1/documents/{id}/tree
+/// GET /api/v1/documents/{id}/children
 ///
 /// 获取文档直系子文档列表（侧边栏导航用）
-pub async fn get_document_tree(
+pub async fn get_document_children(
     State(db): State<Db>,
     Path(id): Path<String>,
-) -> Result<Json<ApiResponse<DocumentTreeResult>>, AppError> {
-    let tree = tokio::task::spawn_blocking(move || block::get_document_tree(&db, &id))
+) -> Result<Json<ApiResponse<DocumentChildrenResult>>, AppError> {
+    let result = tokio::task::spawn_blocking(move || block::get_document_children(&db, &id))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    Ok(Json(ApiResponse::ok(Some(tree))))
+    Ok(Json(ApiResponse::ok(Some(result))))
 }
 
 /// DELETE /api/v1/documents/{id}?version=N
@@ -227,22 +210,8 @@ pub async fn restore_block(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// GET /api/v1/blocks/{id}/children
-///
-/// 获取子块列表（分页）
-pub async fn get_children(
-    State(db): State<Db>,
-    Path(id): Path<String>,
-    Query(params): Query<ChildrenQuery>,
-) -> Result<Json<ApiResponse<ChildrenResult>>, AppError> {
-    let result = tokio::task::spawn_blocking(move || {
-        block::get_children(&db, &id, params.limit, params.cursor.as_deref())
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
-
-    Ok(Json(ApiResponse::ok(Some(result))))
-}
+// get_children (Block 子块列表) 已删除
+// MVP 阶段通过 GET /documents/{id} 获取完整内容树
 
 // ─── 文本导入/导出 API ──────────────────────────────────────────
 

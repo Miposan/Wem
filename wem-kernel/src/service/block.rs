@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use crate::api::request::{BatchOp, BatchReq, CreateBlockReq, MoveBlockReq, UpdateBlockReq};
 use crate::api::response::{
-    BatchOpResult, BatchResult, BlockNode, ChildrenResult, DeleteResult, DocumentContentResult,
-    DocumentListResponse, DocumentTreeResult, RestoreResult,
+    BatchOpResult, BatchResult, BlockNode, DeleteResult, DocumentChildrenResult,
+    DocumentContentResult, RestoreResult,
 };
 use crate::db::block_repo as repo;
 use crate::db::block_repo::InsertBlockParams;
@@ -170,129 +170,52 @@ fn build_block_tree(parent_id: &str, blocks: &[Block]) -> Vec<BlockNode> {
     children
 }
 
-/// 获取文档树的直系子文档（侧边栏导航用）
+/// 获取文档的直系子文档（侧边栏导航用）
 ///
 /// 只返回该文档下的直接子 document 块（一层），不含内容块。
-/// 用户展开某个子文档时，再请求该子文档的 /tree 获取下一层。
-///
-/// 参考 03-api-rest.md §2 "获取文档树"
-pub fn get_document_tree(db: &Db, doc_id: &str) -> Result<DocumentTreeResult, AppError> {
+/// 用户展开某个子文档时，再请求该子文档的 /children 获取下一层。
+pub fn get_document_children(db: &Db, doc_id: &str) -> Result<DocumentChildrenResult, AppError> {
     let conn = db.lock().unwrap();
 
-    // 查询文档块本身
-    let document = repo::find_by_id(&conn, doc_id)
+    // 验证文档存在
+    let _doc = repo::find_by_id(&conn, doc_id)
         .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", doc_id)))?;
 
-    // 只查询直系子 document（一层，不递归）
+    // 查询直系子块，过滤出 document 类型
     let all_children = repo::find_children_paginated(&conn, doc_id, None, 10000)
         .map_err(|e| AppError::Internal(format!("查询子文档失败: {}", e)))?;
 
-    // 过滤：只保留 document 类型
     let children: Vec<Block> = all_children
         .into_iter()
         .filter(|b| matches!(b.block_type, BlockType::Document))
         .collect();
 
-    Ok(DocumentTreeResult {
-        document,
-        children,
-    })
+    Ok(DocumentChildrenResult { children })
 }
 
-/// 列出所有根文档（分页）
+/// 列出所有根文档
 ///
-/// 根文档 = 全局根块 "/" 的直接子文档。
-/// 按 position 排序，支持 cursor 分页。
-///
-/// 参考 03-api-rest.md §2 "列出根文档"
-pub fn list_root_documents(
-    db: &Db,
-    limit: u32,
-    cursor: Option<&str>,
-) -> Result<DocumentListResponse, AppError> {
+/// 根文档 = 全局根块 "/" 的直接子 document 块。
+/// 按 position 排序，直接返回全部（不分页）。
+pub fn list_root_documents(db: &Db) -> Result<Vec<Block>, AppError> {
     let conn = db.lock().unwrap();
 
-    // 限制 limit 范围 [1, 500]
-    let limit = limit.clamp(1, 500);
-    let fetch_limit = limit + 1;
-
-    let mut blocks = repo::find_root_documents_paginated(&conn, cursor, fetch_limit)
+    let blocks = repo::find_root_documents(&conn)
         .map_err(|e| AppError::Internal(format!("查询根文档失败: {}", e)))?;
 
-    let has_more = blocks.len() > limit as usize;
-    if has_more {
-        blocks.truncate(limit as usize);
-    }
-    let next_cursor = if has_more {
-        blocks.last().map(|b| b.position.clone())
-    } else {
-        None
-    };
+    // 只保留 document 类型
+    let docs: Vec<Block> = blocks
+        .into_iter()
+        .filter(|b| matches!(b.block_type, BlockType::Document))
+        .collect();
 
-    Ok(DocumentListResponse {
-        blocks,
-        has_more,
-        next_cursor,
-    })
+    Ok(docs)
 }
 
-/// 获取全局根块 "/"
-///
-/// 根块是所有文档的唯一挂载点，固定 ID = `model::ROOT_ID`。
-/// 前端可用于渲染导航树的起点。
-pub fn get_root(db: &Db) -> Result<Block, AppError> {
-    let conn = db.lock().unwrap();
-    repo::find_by_id_raw(&conn, crate::model::ROOT_ID)
-        .map_err(|_| AppError::Internal("全局根块不存在（数据库未正确初始化）".to_string()))
-}
+// get_root 已删除：前端不需要单独获取全局根块
 
-/// 获取子块列表（分页）
-///
-/// 返回指定 Block 的直接子块，按 position 排序。
-/// 使用 cursor（position 值）实现游标分页。
-///
-/// 参考 03-api-rest.md §3 "获取子 Block 列表"
-pub fn get_children(
-    db: &Db,
-    parent_id: &str,
-    limit: u32,
-    cursor: Option<&str>,
-) -> Result<ChildrenResult, AppError> {
-    let conn = db.lock().unwrap();
-
-    // 验证父块存在
-    repo::exists_normal(&conn, parent_id)
-        .map_err(|e| AppError::Internal(format!("验证父块失败: {}", e)))?
-        .then_some(())
-        .ok_or_else(|| AppError::NotFound(format!("Block {} 不存在", parent_id)))?;
-
-    // 限制 limit 范围 [1, 500]
-    let limit = limit.clamp(1, 500);
-    // 多取一条判断是否有更多数据
-    let fetch_limit = limit + 1;
-
-    let blocks = repo::find_children_paginated(&conn, parent_id, cursor, fetch_limit)
-        .map_err(|e| AppError::Internal(format!("查询子块失败: {}", e)))?;
-
-    // 判断是否有更多数据
-    let has_more = blocks.len() > limit as usize;
-    let blocks = if has_more {
-        blocks[..limit as usize].to_vec()
-    } else {
-        blocks
-    };
-    let next_cursor = if has_more {
-        blocks.last().map(|b| b.position.clone())
-    } else {
-        None
-    };
-
-    Ok(ChildrenResult {
-        blocks,
-        has_more,
-        next_cursor,
-    })
-}
+// get_children (Block 子块分页) 已删除
+// MVP 阶段通过 GET /documents/{id} 获取完整内容树，不需要单独的子块列表接口
 
 // ─── 更新 Block ────────────────────────────────────────────────
 
