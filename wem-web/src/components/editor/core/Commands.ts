@@ -9,7 +9,7 @@
  */
 
 import type { BlockNode, BlockType } from '@/types/api'
-import { createBlock, updateBlock, deleteBlock } from '@/api/client'
+import { deleteBlock, splitBlock, mergeBlock } from '@/api/client'
 import {
   flattenTree,
   insertAfter,
@@ -30,18 +30,26 @@ export interface CommandContext {
   /** 同步更新块树（内部用 flushSync，确保 DOM 立即更新） */
   setTreeSync: (updater: (prev: BlockNode[]) => BlockNode[]) => void
   /**
-   * 获取最新创建的块 ID（用于连续 split 时自动指向新块）
+   * 获取最新创建的块 ID（消费式：读取后应立即 setLatestBlockId(null) 清除）
    *
    * 快速连续按 Enter 时，keydown 捕获的 blockId 是过期的（UI 还没更新），
    * 用此方法获取上一个 split 创建的块 ID。
+   * 读取后必须清除，防止残留到后续无关操作导致 offset 被错误置零。
    */
   getLatestBlockId: () => string | null
   /**
    * 设置最新创建的块 ID
    *
-   * split 完成后调用，后续排队的 split 会通过 getLatestBlockId() 获取。
+   * split 完成后调用。被下一次 executeSplit 消费后自动清除。
    */
   setLatestBlockId: (id: string | null) => void
+  /**
+   * 取消指定块的待处理内容保存（debounce 定时器）
+   *
+   * 结构变更（split/merge/delete）前调用，防止旧的 debounce 定时器
+   * 在操作完成后触发，覆盖服务端已更新的内容。
+   */
+  cancelPendingSave: (blockId: string) => void
 }
 
 /** Split 参数 */
@@ -65,64 +73,59 @@ export interface MergeParams {
 /**
  * Split — 在光标处拆分段落
  *
- * 悲观更新：并行调 API（updateBlock + createBlock），成功后用真实数据更新 UI。
+ * 原子意图 API：前端做文本切割，后端一次性完成 update+create。
+ * 悲观更新：等 API 返回真实数据后再刷新 UI。
  *
  * 连续 split 处理：
  *   当队列中有多个 split 排队时，通过 latestBlockId 跟踪上一个 split 创建的块，
  *   后续 split 自动指向新块（而不是使用 keydown 时捕获的过期 blockId）。
  */
 export async function executeSplit(ctx: CommandContext, params: SplitParams): Promise<void> {
-  // ── 解析目标块：优先使用最新创建的块 ──
+  // ── 解析目标块 ──
   const latestId = ctx.getLatestBlockId()
+  ctx.setLatestBlockId(null)
+
   const tree = ctx.getTree()
+  const flat = flattenTree(tree)
 
   // latestBlockId 可能已被 delete/merge 消灭，验证是否仍在树中
-  const targetId = (latestId && flattenTree(tree).some((b) => b.id === latestId))
+  const targetId = (latestId && flat.some((b) => b.id === latestId))
     ? latestId
     : params.blockId
-  const block = flattenTree(tree).find((b) => b.id === targetId)
+  const block = flat.find((b) => b.id === targetId)
   if (!block) return
 
-  // 如果目标是最新块（刚被 split 创建），offset 应为 0
-  const effectiveOffset = latestId ? 0 : params.offset
+  const effectiveOffset = targetId !== params.blockId ? 0 : params.offset
 
   const text = block.content ?? ''
-  const firstHalf = text.slice(0, effectiveOffset)
-  const secondHalf = text.slice(effectiveOffset)
+  const contentBefore = text.slice(0, effectiveOffset)
+  const contentAfter = text.slice(effectiveOffset)
+
+  ctx.cancelPendingSave(targetId)
 
   const newBlockType: BlockType =
     block.block_type.type === 'heading' ? { type: 'paragraph' } : { ...block.block_type }
 
-  // ── 悲观：并行等 API ──
+  // ── 原子 API：一次调用完成 split ──
   try {
-    const [, created] = await Promise.all([
-      updateBlock(targetId, { content: firstHalf }),
-      createBlock({
-        parent_id: block.parent_id,
-        after_id: targetId,
-        block_type: newBlockType,
-        content: secondHalf,
-        content_type: 'markdown',
-      }),
-    ])
+    const { updated_block, new_block } = await splitBlock(targetId, {
+      content_before: contentBefore,
+      content_after: contentAfter,
+      new_block_type: newBlockType,
+    })
 
-    // API 成功 → 用真实数据更新 UI
-    const newBlock: BlockNode = { ...created, children: [] }
+    // 用后端返回的真实数据更新 UI
+    const newBlock: BlockNode = { ...new_block, children: [] }
     ctx.setTreeSync((prev) => {
-      const updated = updateBlockInTree(prev, targetId, { content: firstHalf })
+      const updated = updateBlockInTree(prev, targetId, { content: updated_block.content })
       return insertAfter(updated, targetId, newBlock)
     })
 
-    // 直接同步原块 DOM（contentEditable 不受 React 控制）
-    syncBlockContent(targetId, firstHalf)
-
-    // 记录最新创建的块，供后续排队的 split 使用
-    ctx.setLatestBlockId(created.id)
-
-    // 聚焦新块
-    focusBlock(created.id)
+    syncBlockContent(targetId, updated_block.content ?? contentBefore)
+    ctx.setLatestBlockId(new_block.id)
+    focusBlock(new_block.id)
   } catch (err) {
-    console.error('[split] 创建块失败:', err)
+    console.error('[split] 拆分块失败:', err)
   }
 }
 
@@ -140,6 +143,9 @@ export async function executeDelete(ctx: CommandContext, params: DeleteParams): 
   if (!block) return
 
   const prev = findPrevBlock(tree, params.blockId)
+
+  // 取消目标块的 debounce 定时器
+  ctx.cancelPendingSave(params.blockId)
 
   // 悲观：先等 API
   try {
@@ -160,7 +166,8 @@ export async function executeDelete(ctx: CommandContext, params: DeleteParams): 
 /**
  * Merge — 将当前块内容合并到前一个块
  *
- * 悲观更新：先调 API（updateBlock + deleteBlock），成功后更新 UI。
+ * 原子意图 API：后端一次性完成 content 合并 + 源块删除。
+ * 悲观更新：等 API 返回真实数据后再刷新 UI。
  */
 export async function executeMerge(ctx: CommandContext, params: MergeParams): Promise<void> {
   const tree = ctx.getTree()
@@ -170,38 +177,33 @@ export async function executeMerge(ctx: CommandContext, params: MergeParams): Pr
   const prev = findPrevBlock(tree, params.blockId)
   if (!prev) return
 
-  const prevText = prev.content ?? ''
-  const currentText = block.content ?? ''
-  const merged = prevText + currentText
-  const mergePoint = prevText.length
+  const mergePoint = (prev.content ?? '').length
 
-  // 悲观：先等 API
+  // 取消两个块的 debounce 定时器，防止旧内容覆盖合并结果
+  ctx.cancelPendingSave(prev.id)
+  ctx.cancelPendingSave(params.blockId)
+
+  // ── 原子 API：一次调用完成 merge ──
   try {
-    await updateBlock(prev.id, { content: merged })
-    try {
-      await deleteBlock(params.blockId)
-    } catch {
-      // 非致命：内容已合并，源块未删除
-      console.warn('[merge] 删除源块失败（非致命）')
-    }
+    const { merged_block } = await mergeBlock(params.blockId, {
+      direction: 'previous',
+    })
+
+    ctx.setLatestBlockId(null)
+
+    // 用后端返回的真实数据更新 UI
+    ctx.setTreeSync((prevTree) => {
+      const updated = updateBlockInTree(prevTree, merged_block.id, {
+        content: merged_block.content,
+      })
+      return removeBlock(updated, params.blockId)
+    })
+
+    syncBlockContent(merged_block.id, merged_block.content ?? '')
+    focusBlock(merged_block.id, mergePoint)
   } catch (err) {
-    console.error('[merge] 合并失败:', err)
-    return
+    console.error('[merge] 合并块失败:', err)
   }
-
-  // 清除 latestBlockId（当前块已被合并掉）
-  ctx.setLatestBlockId(null)
-
-  // API 成功 → 更新 UI
-  ctx.setTreeSync((prevTree) => {
-    const updated = updateBlockInTree(prevTree, prev.id, { content: merged })
-    return removeBlock(updated, params.blockId)
-  })
-
-  // 直接同步 prev 块 DOM（contentEditable 不受 React 控制）
-  syncBlockContent(prev.id, merged)
-
-  focusBlock(prev.id, mergePoint)
 }
 
 /**

@@ -120,6 +120,28 @@ fn apply_schema_patches(conn: &Connection) {
     // let _ = conn.execute_batch(
     //     "ALTER TABLE blocks ADD COLUMN new_field TEXT NOT NULL DEFAULT '';"
     // );
+
+    // ---- document_id 修正（v2.1）----
+    // 旧数据中文档块的 document_id 可能是 ROOT_ID（而不是指向自身），
+    // 导致 create_block 为子块继承了错误的 document_id，
+    // find_descendants 按 document_id 查询时无法命中这些子块。
+    //
+    // 修正策略：
+    // 1. 文档块（block_type = document）→ document_id = id（指向自身）
+    // 2. 内容块 → 沿 parent 链找到所属文档块，取其 id
+    //    简化实现：如果 parent 是文档块，直接 document_id = parent_id
+    let _ = conn.execute_batch(
+        "UPDATE blocks SET document_id = id \
+         WHERE json_extract(block_type, '$.type') = 'document' \
+         AND document_id != id;"
+    );
+    // 内容块：如果 parent 是文档块，document_id 应 = parent_id
+    let _ = conn.execute_batch(
+        "UPDATE blocks SET document_id = parent_id \
+         WHERE json_extract(block_type, '$.type') != 'document' \
+         AND parent_id IN (SELECT id FROM blocks WHERE json_extract(block_type, '$.type') = 'document') \
+         AND document_id != parent_id;"
+    );
 }
 
 /// 确保全局根块 "/" 存在

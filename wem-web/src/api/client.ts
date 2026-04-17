@@ -13,9 +13,13 @@ import type {
   HistoryEntry,
   ImportTextReq,
   ImportResult,
+  MergeReq,
+  MergeResult,
   MoveBlockReq,
   RestoreResult,
   RollbackReq,
+  SplitReq,
+  SplitResult,
   UpdateBlockReq,
 } from '@/types/api'
 
@@ -172,4 +176,14 @@ export function rollbackBlock(id: string, req: RollbackReq) {
 
 export function createSnapshot(id: string) {
   return post<unknown>(`/blocks/${id}/snapshot`)
+}
+
+// ---------- Split / Merge 意图 API ----------
+
+export function splitBlock(id: string, req: SplitReq) {
+  return post<SplitResult>(`/blocks/${id}/split`, req)
+}
+
+export function mergeBlock(id: string, req: MergeReq) {
+  return post<MergeResult>(`/blocks/${id}/merge`, req)
 }

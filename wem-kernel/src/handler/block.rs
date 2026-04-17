@@ -17,10 +17,11 @@ use axum::{
     Json,
 };
 
-use crate::api::request::{BatchReq, CreateBlockReq, CreateDocumentReq, ImportTextReq, MoveBlockReq, UpdateBlockReq};
+use crate::api::request::{BatchReq, CreateBlockReq, CreateDocumentReq, ImportTextReq, MergeReq, MoveBlockReq, SplitReq, UpdateBlockReq};
 use crate::api::response::{
     BatchResult, DeleteResult, DocumentChildrenResult,
-    DocumentContentResult, ExportResult, ImportResult, RestoreResult,
+    DocumentContentResult, ExportResult, ImportResult, MergeResult,
+    RestoreResult, SplitResult,
 };
 use crate::api::query::{ExportQuery, GetBlockQuery};
 use crate::model::event::BlockEvent;
@@ -267,7 +268,65 @@ pub async fn restore_block(
 
     Ok(Json(ApiResponse::ok(Some(_result))))
 }
-// ─── SSE 实时事件流 ────────────────────────────────────────────
+
+// ─── Split / Merge 意图 API ──────────────────────────────────
+
+/// POST /api/v1/blocks/{id}/split
+///
+/// 原子拆分：更新当前块内容 + 创建新块
+pub async fn split_block(
+    State(db): State<Db>,
+    Path(id): Path<String>,
+    Json(req): Json<SplitReq>,
+) -> Result<Json<ApiResponse<SplitResult>>, AppError> {
+    let result = tokio::task::spawn_blocking(move || {
+        block::split_block(&db, &id, req)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 广播事件：原块更新 + 新块创建
+    let doc_id = result.updated_block.document_id.clone();
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
+        document_id: doc_id.clone(),
+        block: result.updated_block.clone(),
+    });
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
+        document_id: doc_id,
+        block: result.new_block.clone(),
+    });
+
+    Ok(Json(ApiResponse::ok(Some(result))))
+}
+
+/// POST /api/v1/blocks/{id}/merge
+///
+/// 原子合并：当前块内容追加到前一个兄弟 + 删除当前块
+pub async fn merge_block(
+    State(db): State<Db>,
+    Path(id): Path<String>,
+    Json(req): Json<MergeReq>,
+) -> Result<Json<ApiResponse<MergeResult>>, AppError> {
+    let result = tokio::task::spawn_blocking(move || {
+        block::merge_block(&db, &id, req)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 广播事件：前驱块更新 + 当前块删除
+    let doc_id = result.merged_block.document_id.clone();
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
+        document_id: doc_id.clone(),
+        block: result.merged_block.clone(),
+    });
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
+        document_id: doc_id,
+        block_id: result.deleted_block_id.clone(),
+        cascade_count: 0,
+    });
+
+    Ok(Json(ApiResponse::ok(Some(result))))
+}
 
 /// GET /api/v1/documents/{id}/events
 ///

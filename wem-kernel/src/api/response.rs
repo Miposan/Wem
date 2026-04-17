@@ -130,6 +130,36 @@ pub struct ExportResult {
     pub lossy_types: Vec<String>,
 }
 
+// ─── Split / Merge 意图 API 响应 ────────────────────────────
+
+/// 拆分 Block 响应
+///
+/// `POST /api/v1/blocks/{id}/split`
+///
+/// 返回更新后的原块和新创建的块。
+/// 前端可直接用这两个 Block 替换 UI 中的原块 + 插入新块。
+#[derive(Debug, Serialize)]
+pub struct SplitResult {
+    /// 更新后的原块（content = content_before）
+    pub updated_block: Block,
+    /// 新创建的块（content = content_after，位于原块之后）
+    pub new_block: Block,
+}
+
+/// 合并 Block 响应
+///
+/// `POST /api/v1/blocks/{id}/merge`
+///
+/// 返回合并后的块和被删除的块 ID。
+/// 前端可直接用 merged_block 替换前一个块，并移除 deleted_block_id 对应的 DOM。
+#[derive(Debug, Serialize)]
+pub struct MergeResult {
+    /// 合并后的前一个兄弟块（content = prev.content + current.content）
+    pub merged_block: Block,
+    /// 被删除的块 ID
+    pub deleted_block_id: String,
+}
+
 // ─── Oplog 操作响应 ────────────────────────────────────────────
 
 /// Block 变更历史响应

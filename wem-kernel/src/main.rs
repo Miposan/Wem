@@ -61,6 +61,12 @@ async fn main() {
         // 恢复 Block
         .route("/api/v1/blocks/{id}/restore",
             post(handler::restore_block))
+        // 拆分 Block（原子操作：更新当前块 + 创建新块）
+        .route("/api/v1/blocks/{id}/split",
+            post(handler::split_block))
+        // 合并 Block（原子操作：合并到前驱兄弟 + 删除当前块）
+        .route("/api/v1/blocks/{id}/merge",
+            post(handler::merge_block))
 
         // ─── 文本导入/导出 API ────────────
         // 导入文本（Markdown → Block 树）

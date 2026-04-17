@@ -3,7 +3,7 @@ import { useTextBlock } from '../core/useTextBlock'
 
 /** 段落块 */
 export function ParagraphBlock(props: TextBlockProps) {
-  const { ref, handleInput, handleKeyDown } = useTextBlock(props)
+  const { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useTextBlock(props)
 
   return (
     <div
@@ -14,6 +14,8 @@ export function ParagraphBlock(props: TextBlockProps) {
       data-placeholder={props.placeholder || '输入文字…'}
       onInput={handleInput}
       onKeyDown={handleKeyDown}
+      onCompositionStart={handleCompositionStart}
+      onCompositionEnd={handleCompositionEnd}
     />
   )
 }

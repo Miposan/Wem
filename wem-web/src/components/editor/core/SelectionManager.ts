@@ -25,7 +25,10 @@ export function findEditable(blockId: string): HTMLElement | null {
  */
 export function syncBlockContent(blockId: string, content: string): void {
   const el = findEditable(blockId)
-  if (el) el.textContent = content
+  if (!el) return
+  // 内容一致时跳过，避免无谓地重写 textContent 导致光标重置
+  if (el.textContent === content) return
+  el.textContent = content
 }
 
 /** 最大重试次数（每帧一次） */

@@ -11,18 +11,22 @@
 import { useEffect, useRef } from 'react'
 import type { Block } from '@/types/api'
 
-// ─── SSE 事件类型（与后端 BlockEvent 一一对应） ───
+// ─── SSE 事件类型（与后端 BlockEvent serde(flatten) 一一对应） ───
+//
+// 后端 BlockEvent 使用 #[serde(flatten)] 将 block 字段展平到 JSON 根级别，
+// 所以 block 的 id/content/version 等字段与 type/document_id 平级。
 
-export interface BlockCreatedEvent {
-  type: 'block_created'
+/** 携带完整 block 数据的事件（block 字段被 serde flatten 展平到顶层） */
+export type BlockEventPayload = Block & {
   document_id: string
-  block: Block
 }
 
-export interface BlockUpdatedEvent {
+export interface BlockCreatedEvent extends BlockEventPayload {
+  type: 'block_created'
+}
+
+export interface BlockUpdatedEvent extends BlockEventPayload {
   type: 'block_updated'
-  document_id: string
-  block: Block
 }
 
 export interface BlockDeletedEvent {
@@ -32,16 +36,12 @@ export interface BlockDeletedEvent {
   cascade_count: number
 }
 
-export interface BlockMovedEvent {
+export interface BlockMovedEvent extends BlockEventPayload {
   type: 'block_moved'
-  document_id: string
-  block: Block
 }
 
-export interface BlockRestoredEvent {
+export interface BlockRestoredEvent extends BlockEventPayload {
   type: 'block_restored'
-  document_id: string
-  block: Block
 }
 
 export type BlockEvent =

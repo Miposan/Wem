@@ -49,8 +49,15 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     let parent = repo::find_by_id(&conn, &req.parent_id)
         .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", req.parent_id)))?;
 
-    // 1.5 推断 document_id：继承父块的 document_id
-    let document_id = parent.document_id.clone();
+    // 1.5 推断 document_id：
+    // - 如果 parent 是 Document 类型 → document_id = parent.id（文档块自身就是文档根）
+    // - 否则继承 parent.document_id（内容块指向所属文档）
+    // 不能无条件继承 parent.document_id，因为旧数据中文档块的 document_id 可能是 ROOT_ID。
+    let document_id = if matches!(parent.block_type, BlockType::Document) {
+        parent.id.clone()
+    } else {
+        parent.document_id.clone()
+    };
 
     // 2. 计算 position
     let position =
@@ -846,6 +853,158 @@ fn get_sibling_position(
                 sibling_id, target_parent_id
             ))
         })
+}
+
+// ─── Split / Merge 意图操作 ──────────────────────────────────
+
+use crate::api::request::{MergeReq, SplitReq};
+use crate::api::response::{MergeResult, SplitResult};
+
+/// 拆分 Block（原子操作）
+///
+/// 在单个锁范围内完成「更新当前块内容 + 创建新块」两步操作，
+/// 保证数据一致性：要么全部成功，要么全部失败。
+///
+/// 流程：
+/// 1. 查询当前 Block
+/// 2. 更新当前块 content = content_before
+/// 3. 创建新块（content = content_after，位于当前块之后，同父块）
+/// 4. 返回更新后的原块和新块
+pub fn split_block(db: &Db, id: &str, req: SplitReq) -> Result<SplitResult, AppError> {
+    let conn = db.lock().unwrap();
+
+    // 1. 查询当前 Block
+    let current = repo::find_by_id(&conn, id)
+        .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
+
+    // 2. 更新当前块 content
+    let now = now_iso();
+    let new_content = req.content_before.into_bytes();
+    let properties_json = serde_json::to_string(&current.properties).unwrap_or_default();
+
+    let rows = repo::update_content_and_props(
+        &conn, id, &new_content, &properties_json, &now,
+    )
+    .map_err(|e| AppError::Internal(format!("更新 Block 失败: {}", e)))?;
+
+    if rows == 0 {
+        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
+    }
+
+    // 3. 查询更新后的原块
+    let updated_block = repo::find_by_id_raw(&conn, id)
+        .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))?;
+
+    // 4. 计算新块的 position（插在当前块之后）
+    let position = calculate_insert_position(&conn, &current.parent_id, Some(id))?;
+
+    // 5. 确定新块的 block_type
+    let new_block_type = req.new_block_type.unwrap_or(BlockType::Paragraph);
+    let content_type = new_block_type.default_content_type();
+
+    // 6. 创建新块
+    let new_id = generate_block_id();
+    let document_id = if matches!(current.block_type, BlockType::Document) {
+        current.id.clone()
+    } else {
+        current.document_id.clone()
+    };
+
+    repo::insert_block(&conn, &InsertBlockParams {
+        id: new_id.clone(),
+        parent_id: current.parent_id.clone(),
+        document_id,
+        position,
+        block_type: serde_json::to_string(&new_block_type).unwrap_or_default(),
+        content_type: content_type.as_str().to_string(),
+        content: req.content_after.into_bytes(),
+        properties: "{}".to_string(),
+        version: 1,
+        status: "normal".to_string(),
+        schema_version: 1,
+        author: "system".to_string(),
+        owner_id: None,
+        encrypted: false,
+        created: now_iso(),
+        modified: now_iso(),
+    })
+    .map_err(|e| AppError::Internal(format!("插入新 Block 失败: {}", e)))?;
+
+    // 7. 查询新创建的 Block
+    let new_block = repo::find_by_id_raw(&conn, &new_id)
+        .map_err(|e| AppError::Internal(format!("查询新创建的 Block 失败: {}", e)))?;
+
+    Ok(SplitResult {
+        updated_block,
+        new_block,
+    })
+}
+
+/// 合并 Block 到前一个兄弟（原子操作）
+///
+/// 在单个锁范围内完成「查找前一个兄弟 + 合并内容 + 删除当前块」三步操作。
+///
+/// 流程：
+/// 1. 查询当前 Block
+/// 2. 查找前一个兄弟 Block（同 parent_id，position < 当前 position）
+/// 3. 合并内容：prev.content + current.content
+/// 4. 更新前一个兄弟块
+/// 5. 软删除当前块
+/// 6. 返回合并后的块和被删除的块 ID
+pub fn merge_block(db: &Db, id: &str, _req: MergeReq) -> Result<MergeResult, AppError> {
+    let conn = db.lock().unwrap();
+
+    // 1. 查询当前 Block
+    let current = repo::find_by_id(&conn, id)
+        .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
+
+    // 全局根块不可合并
+    if id == crate::model::ROOT_ID {
+        return Err(AppError::BadRequest("全局根块不可合并".to_string()));
+    }
+
+    // 2. 查找前一个兄弟 Block
+    let prev = repo::find_prev_sibling(&conn, &current.parent_id, &current.position)
+        .map_err(|e| AppError::Internal(format!("查询前驱兄弟失败: {}", e)))?;
+
+    let prev = prev.ok_or_else(|| {
+        AppError::BadRequest(format!("Block {} 没有前驱兄弟，无法合并", id))
+    })?;
+
+    // 3. 合并内容
+    let prev_text = String::from_utf8_lossy(&prev.content);
+    let current_text = String::from_utf8_lossy(&current.content);
+    let merged_content = format!("{}{}", prev_text, current_text);
+
+    // 4. 更新前一个兄弟块
+    let now = now_iso();
+    let properties_json = serde_json::to_string(&prev.properties).unwrap_or_default();
+
+    let rows = repo::update_content_and_props(
+        &conn,
+        &prev.id,
+        merged_content.as_bytes(),
+        &properties_json,
+        &now,
+    )
+    .map_err(|e| AppError::Internal(format!("更新前驱兄弟失败: {}", e)))?;
+
+    if rows == 0 {
+        return Err(AppError::NotFound(format!("前驱兄弟 Block {} 不存在", prev.id)));
+    }
+
+    // 5. 软删除当前块（不含级联，因为 merge 只删除叶子块）
+    repo::update_status(&conn, id, "deleted", &now)
+        .map_err(|e| AppError::Internal(format!("软删除当前块失败: {}", e)))?;
+
+    // 6. 查询合并后的块
+    let merged_block = repo::find_by_id_raw(&conn, &prev.id)
+        .map_err(|e| AppError::Internal(format!("查询合并后的 Block 失败: {}", e)))?;
+
+    Ok(MergeResult {
+        merged_block,
+        deleted_block_id: id.to_string(),
+    })
 }
 
 // ─── 单元测试 ─────────────────────────────────────────────────

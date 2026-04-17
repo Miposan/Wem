@@ -298,6 +298,27 @@ pub fn get_prev_sibling_position(
     }
 }
 
+/// 获取指定 position 之前的前一个兄弟完整 Block
+///
+/// `SELECT * FROM blocks WHERE parent_id = ? AND status != 'deleted' AND position < ? ORDER BY position DESC LIMIT 1`
+pub fn find_prev_sibling(
+    conn: &Connection,
+    parent_id: &str,
+    before_pos: &str,
+) -> Result<Option<Block>, rusqlite::Error> {
+    match conn.query_row(
+        "SELECT * FROM blocks
+         WHERE parent_id = ?1 AND status != 'deleted' AND position < ?2
+         ORDER BY position DESC LIMIT 1",
+        params![parent_id, before_pos],
+        Block::from_row,
+    ) {
+        Ok(block) => Ok(Some(block)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 // ─── 写入（Write）────────────────────────────────────────────
 
 /// 插入一条 Block 记录

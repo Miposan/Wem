@@ -79,7 +79,7 @@ export function removeBlock(tree: BlockNode[], blockId: string): BlockNode[] {
 export function updateBlockInTree(
   tree: BlockNode[],
   blockId: string,
-  updates: Partial<Pick<BlockNode, 'content' | 'block_type' | 'properties' | 'version'>>,
+  updates: Partial<Pick<BlockNode, 'content' | 'block_type' | 'properties' | 'version' | 'modified'>>,
 ): BlockNode[] {
   return tree.map((block) => {
     if (block.id === blockId) {

@@ -220,3 +220,35 @@ export interface RollbackReq {
   target_version: number
   current_version: number
 }
+
+// ---- Split / Merge 意图 API ----
+
+export interface SplitReq {
+  /** 光标前的内容（更新当前块） */
+  content_before: string
+  /** 光标后的内容（创建新块） */
+  content_after: string
+  /** 新块的类型（不传则默认 paragraph） */
+  new_block_type?: BlockType
+}
+
+export interface SplitResult {
+  /** 更新后的原块 */
+  updated_block: Block
+  /** 新创建的块 */
+  new_block: Block
+}
+
+export interface MergeReq {
+  /** 合并方向（默认 "previous"） */
+  direction?: string
+  /** 前一个兄弟块的当前内容（校验用，可选） */
+  prev_content?: string
+}
+
+export interface MergeResult {
+  /** 合并后的前驱兄弟块 */
+  merged_block: Block
+  /** 被删除的块 ID */
+  deleted_block_id: string
+}
