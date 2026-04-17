@@ -48,8 +48,6 @@ pub struct UpdateBlockReq {
     /// 属性更新模式："merge"（合并，默认）或 "replace"（替换全部）
     #[serde(default = "default_properties_mode")]
     pub properties_mode: String,
-    /// 乐观锁版本号（必填，必须与服务器当前 version 匹配）
-    pub version: u64,
 }
 
 /// 移动 Block 请求
@@ -63,8 +61,6 @@ pub struct MoveBlockReq {
     pub before_id: Option<String>,
     /// 移到此 Block 之后（可选）
     pub after_id: Option<String>,
-    /// 乐观锁版本号（必填）
-    pub version: u64,
 }
 
 fn default_properties_mode() -> String {
@@ -148,8 +144,6 @@ pub enum BatchOp {
     Update {
         /// Block ID（可以是之前的 temp_id）
         block_id: String,
-        /// 乐观锁版本号（必填）
-        version: u64,
         /// 新内容（可选）
         content: Option<String>,
         /// 新属性（可选）
@@ -162,15 +156,11 @@ pub enum BatchOp {
     Delete {
         /// Block ID
         block_id: String,
-        /// 乐观锁版本号
-        version: u64,
     },
     /// 移动 Block
     Move {
         /// Block ID
         block_id: String,
-        /// 乐观锁版本号
-        version: u64,
         /// 目标父块 ID（可选）
         target_parent_id: Option<String>,
         /// 移到此 Block 之前（可选）

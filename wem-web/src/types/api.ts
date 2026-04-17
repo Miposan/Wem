@@ -106,14 +106,12 @@ export interface UpdateBlockReq {
   block_type?: BlockType
   properties?: Record<string, string>
   properties_mode?: 'merge' | 'replace'
-  version: number // 乐观锁必填
 }
 
 export interface MoveBlockReq {
   target_parent_id?: string
   before_id?: string
   after_id?: string
-  version: number // 乐观锁必填
 }
 
 // ---- Batch ----
@@ -132,7 +130,6 @@ export interface BatchCreateOp {
 export interface BatchUpdateOp {
   action: 'update'
   block_id: string
-  version: number
   content?: string
   block_type?: BlockType
   properties?: Record<string, string>
@@ -142,13 +139,11 @@ export interface BatchUpdateOp {
 export interface BatchDeleteOp {
   action: 'delete'
   block_id: string
-  version: number
 }
 
 export interface BatchMoveOp {
   action: 'move'
   block_id: string
-  version: number
   target_parent_id?: string
   before_id?: string
   after_id?: string

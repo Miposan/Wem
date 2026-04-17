@@ -10,6 +10,7 @@ pub use block::{
     health, create_document, list_documents, get_document, get_document_children, delete_document,
     create_block, get_block, update_block, delete_block, move_block, restore_block,
     import_text, export_text, batch_blocks,
+    document_events,
 };
 
 // 重导出 oplog handler 函数

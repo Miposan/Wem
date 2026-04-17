@@ -395,7 +395,7 @@ impl ParserState {
         properties: HashMap<String, String>,
     ) -> String {
         let position = self.next_position(&parent_id);
-        let block = build_block(id.clone(), parent_id, position, block_type, content, properties, &self.now);
+        let block = build_block(id.clone(), parent_id, self.heading_stack.doc_id.clone(), position, block_type, content, properties, &self.now);
         self.blocks.push(block);
         id
     }
@@ -413,6 +413,7 @@ impl ParserState {
 fn build_block(
     id: String,
     parent_id: String,
+    document_id: String,
     position: String,
     block_type: BlockType,
     content: Vec<u8>,
@@ -422,6 +423,7 @@ fn build_block(
     Block {
         id,
         parent_id,
+        document_id,
         position,
         content_type: block_type.default_content_type(),
         block_type,
@@ -738,6 +740,7 @@ fn parse_markdown(
     let mut doc = build_block(
         doc_id.clone(),
         doc_id.clone(),
+        doc_id.clone(), // 文档块的 document_id 指向自身
         "a0".to_string(),
         BlockType::Document,
         Vec::new(),
@@ -791,6 +794,7 @@ fn empty_result() -> ParseResult {
     let doc = build_block(
         doc_id.clone(),
         doc_id.clone(),
+        doc_id.clone(), // 文档块的 document_id 指向自身
         "a0".to_string(),
         BlockType::Document,
         Vec::new(),
@@ -800,7 +804,8 @@ fn empty_result() -> ParseResult {
 
     let para = build_block(
         para_id,
-        doc_id,
+        doc_id.clone(),
+        doc_id, // 内容块指向所属文档
         "a0".to_string(),
         BlockType::Paragraph,
         Vec::new(),

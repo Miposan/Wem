@@ -9,7 +9,7 @@
 //!
 //! 参考 05-oplog.md §1~§6
 
-use crate::db::{block_repo as repo, oplog_repo, Db};
+use crate::repo::{block_repo as repo, oplog_repo, Db};
 use crate::error::AppError;
 use crate::model::Block;
 use crate::model::oplog::{
@@ -180,17 +180,12 @@ pub fn rollback_block(
     db: &Db,
     block_id: &str,
     target_version: u64,
-    current_version: u64,
 ) -> Result<RollbackResult, AppError> {
     let conn = db.lock().unwrap();
 
     // 1. 验证当前 Block
     let current = repo::find_by_id(&conn, block_id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", block_id)))?;
-
-    if current_version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
 
     if target_version >= current.version {
         return Err(AppError::BadRequest(
@@ -217,12 +212,11 @@ pub fn rollback_block(
         &content_bytes,
         &properties_json,
         &now,
-        current.version,
     )
     .map_err(|e| AppError::Internal(format!("回滚更新失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::VersionConflict(current.version));
+        return Err(AppError::NotFound(format!("Block {} 不存在", block_id)));
     }
 
     // 4. 记录 oplog（标记为回滚）

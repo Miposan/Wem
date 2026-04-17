@@ -22,6 +22,7 @@ use crate::model::Block;
 pub(crate) struct InsertBlockParams {
     pub(crate) id: String,
     pub(crate) parent_id: String,
+    pub(crate) document_id: String,
     pub(crate) position: String,
     pub(crate) block_type: String,      // JSON 序列化后的 BlockType
     pub(crate) content_type: String,    // "markdown" / "empty" / "query"
@@ -180,25 +181,19 @@ pub fn find_root_documents_paginated(
 
 /// 查询 Block 的所有后代（不含自身，排除已删除）
 ///
-/// 使用递归 CTE 按 parent_id 遍历子树，不依赖 root_id 冗余字段。
+/// 使用 document_id 等值查询替代递归 CTE，性能从 O(n·log n) 降为 O(n)。
+/// 需要文档块和所有内容块的 document_id 正确维护。
 pub fn find_descendants(
     conn: &Connection,
-    block_id: &str,
+    document_id: &str,
 ) -> Result<Vec<Block>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "WITH RECURSIVE tree(bid) AS (
-            SELECT id FROM blocks WHERE parent_id = ?1 AND status != 'deleted'
-            UNION ALL
-            SELECT b.id FROM blocks b
-                INNER JOIN tree t ON b.parent_id = t.bid
-            WHERE b.status != 'deleted'
-        )
-        SELECT blocks.* FROM blocks
-            INNER JOIN tree ON blocks.id = tree.bid
-        ORDER BY blocks.position ASC",
+        "SELECT * FROM blocks
+         WHERE document_id = ?1 AND id != ?1 AND status != 'deleted'
+         ORDER BY position ASC",
     )?;
     let blocks: Vec<Block> = stmt
-        .query_map([block_id], Block::from_row)?
+        .query_map([document_id], Block::from_row)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(blocks)
@@ -311,15 +306,16 @@ pub fn get_prev_sibling_position(
 pub fn insert_block(conn: &Connection, p: &InsertBlockParams) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO blocks (
-            id, parent_id, position,
+            id, parent_id, document_id, position,
             block_type, content_type, content, properties,
             version, status, schema_version,
             author, owner_id, encrypted,
             created, modified
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             p.id,
             p.parent_id,
+            p.document_id,
             p.position,
             p.block_type,
             p.content_type,
@@ -338,18 +334,12 @@ pub fn insert_block(conn: &Connection, p: &InsertBlockParams) -> Result<(), rusq
     Ok(())
 }
 
-/// 更新 Block 的 content 和 properties（乐观锁）
-///
-/// `UPDATE blocks SET content=?, properties=?, modified=?, version=version+1 WHERE id=? AND version=?`
-///
-/// 返回受影响行数（0 表示版本冲突）
 /// 更新 Block 内容、属性、类型
 ///
-/// `UPDATE blocks SET content=?, properties=?, block_type=?, content_type=?, modified=?, version=version+1
-///  WHERE id=? AND version=?`
+/// `UPDATE blocks SET content=?, properties=?, block_type=?, content_type=?, modified=?, version=version+1 WHERE id=?`
 ///
 /// 如果 `block_type` 为 None，则不更新 block_type 和 content_type 字段。
-/// 返回受影响行数（0 表示版本冲突）
+/// 返回受影响行数（0 表示不存在）
 pub fn update_block_fields(
     conn: &Connection,
     id: &str,
@@ -358,18 +348,17 @@ pub fn update_block_fields(
     block_type: Option<&str>,
     content_type: Option<&str>,
     modified: &str,
-    version: u64,
 ) -> Result<u64, rusqlite::Error> {
     let rows = match (block_type, content_type) {
         (Some(bt), Some(ct)) => conn.execute(
             "UPDATE blocks SET content = ?1, properties = ?2, block_type = ?3, content_type = ?4, modified = ?5, version = version + 1
-             WHERE id = ?6 AND version = ?7",
-            params![content, properties, bt, ct, modified, id, version],
+             WHERE id = ?6",
+            params![content, properties, bt, ct, modified, id],
         )?,
         _ => conn.execute(
             "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1
-             WHERE id = ?4 AND version = ?5",
-            params![content, properties, modified, id, version],
+             WHERE id = ?4",
+            params![content, properties, modified, id],
         )?,
     };
     Ok(rows as u64)
@@ -377,21 +366,20 @@ pub fn update_block_fields(
 
 /// 更新 Block 内容和属性（不含 block_type）
 ///
-/// `UPDATE blocks SET content=?, properties=?, modified=?, version=version+1 WHERE id=? AND version=?`
+/// `UPDATE blocks SET content=?, properties=?, modified=?, version=version+1 WHERE id=?`
 ///
-/// 返回受影响行数（0 表示版本冲突）
+/// 返回受影响行数（0 表示不存在）
 pub fn update_content_and_props(
     conn: &Connection,
     id: &str,
     content: &[u8],
     properties: &str,
     modified: &str,
-    version: u64,
 ) -> Result<u64, rusqlite::Error> {
     let rows = conn.execute(
         "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1
-         WHERE id = ?4 AND version = ?5",
-        params![content, properties, modified, id, version],
+         WHERE id = ?4",
+        params![content, properties, modified, id],
     )?;
     Ok(rows as u64)
 }
@@ -435,30 +423,29 @@ pub fn update_status_if_not(
     Ok(rows as u64)
 }
 
-/// 更新 Block 的 parent_id 和 position（移动操作，乐观锁）
+/// 更新 Block 的 parent_id 和 position（移动操作）
 ///
-/// `UPDATE blocks SET parent_id=?, position=?, modified=?, version=version+1 WHERE id=? AND version=?`
+/// `UPDATE blocks SET parent_id=?, position=?, modified=?, version=version+1 WHERE id=?`
 ///
-/// 返回受影响行数（0 表示版本冲突）
+/// 返回受影响行数（0 表示不存在）
 pub fn update_parent_position(
     conn: &Connection,
     id: &str,
     parent_id: &str,
     position: &str,
     modified: &str,
-    version: u64,
 ) -> Result<u64, rusqlite::Error> {
     let rows = conn.execute(
         "UPDATE blocks SET parent_id = ?1, position = ?2, modified = ?3, version = version + 1
-         WHERE id = ?4 AND version = ?5",
-        params![parent_id, position, modified, id, version],
+         WHERE id = ?4",
+        params![parent_id, position, modified, id],
     )?;
     Ok(rows as u64)
 }
 
-/// 批量更新状态（带 status 过滤条件）
+/// 批量更新状态（带 status 过滤条件，单条 WHERE IN）
 ///
-/// 对每个 id 执行 `UPDATE blocks SET status=?, modified=?, version=version+1 WHERE id=? AND status=?`
+/// `UPDATE blocks SET status=?, modified=?, version=version+1 WHERE id IN (...) AND status=?`
 ///
 /// 返回成功更新的总行数
 pub fn batch_update_status_if(
@@ -468,16 +455,62 @@ pub fn batch_update_status_if(
     modified: &str,
     current_status: &str,
 ) -> Result<u64, rusqlite::Error> {
-    let mut total = 0u64;
-    for id in ids {
-        let rows = conn.execute(
-            "UPDATE blocks SET status = ?1, modified = ?2, version = version + 1
-             WHERE id = ?3 AND status = ?4",
-            params![status, modified, id, current_status],
-        )?;
-        total += rows as u64;
+    if ids.is_empty() {
+        return Ok(0);
     }
-    Ok(total)
+    // 构建动态占位符: "?1, ?2, ?3, ..."
+    let placeholders: Vec<&str> = (1..=ids.len()).map(|_| "?").collect();
+    let sql = format!(
+        "UPDATE blocks SET status = ?1, modified = ?2, version = version + 1 \
+         WHERE id IN ({}) AND status = ?{}",
+        placeholders.join(", "),
+        ids.len() + 3
+    );
+    // 参数: [status, modified, id1, id2, ..., current_status]
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(ids.len() + 3);
+    params_vec.push(Box::new(status.to_string()));
+    params_vec.push(Box::new(modified.to_string()));
+    for id in ids {
+        params_vec.push(Box::new(id.clone()));
+    }
+    params_vec.push(Box::new(current_status.to_string()));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let rows = conn.execute(&sql, param_refs.as_slice())?;
+    Ok(rows as u64)
+}
+
+/// 批量更新状态（带 status != ? 过滤条件，单条 WHERE IN）
+///
+/// `UPDATE blocks SET status=?, modified=?, version=version+1 WHERE id IN (...) AND status != ?`
+///
+/// 返回成功更新的总行数
+pub fn batch_update_status_if_not(
+    conn: &Connection,
+    ids: &[String],
+    status: &str,
+    modified: &str,
+    not_status: &str,
+) -> Result<u64, rusqlite::Error> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<&str> = (1..=ids.len()).map(|_| "?").collect();
+    let sql = format!(
+        "UPDATE blocks SET status = ?1, modified = ?2, version = version + 1 \
+         WHERE id IN ({}) AND status != ?{}",
+        placeholders.join(", "),
+        ids.len() + 3
+    );
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(ids.len() + 3);
+    params_vec.push(Box::new(status.to_string()));
+    params_vec.push(Box::new(modified.to_string()));
+    for id in ids {
+        params_vec.push(Box::new(id.clone()));
+    }
+    params_vec.push(Box::new(not_status.to_string()));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let rows = conn.execute(&sql, param_refs.as_slice())?;
+    Ok(rows as u64)
 }
 
 // ─── CTE 递归查询（Recursive）────────────────────────────────
@@ -621,15 +654,16 @@ pub fn check_is_descendant(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::tests::init_test_db;
+    use crate::repo::tests::init_test_db;
 
     /// 辅助：构造一个 InsertBlockParams
     ///
     /// 提供合理的默认值，只需指定 id 和 parent_id。
-    fn make_params(id: &str, parent_id: &str, position: &str) -> InsertBlockParams {
+    fn make_params(id: &str, parent_id: &str, document_id: &str, position: &str) -> InsertBlockParams {
         InsertBlockParams {
             id: id.to_string(),
             parent_id: parent_id.to_string(),
+            document_id: document_id.to_string(),
             position: position.to_string(),
             block_type: r#"{"type":"paragraph"}"#.to_string(),
             content_type: "markdown".to_string(),
@@ -651,6 +685,7 @@ mod tests {
         InsertBlockParams {
             id: id.to_string(),
             parent_id: parent_id.to_string(),
+            document_id: id.to_string(), // 文档块的 document_id 指向自身
             position: position.to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
             content_type: "markdown".to_string(),
@@ -730,7 +765,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("test_block_000001", crate::model::ROOT_ID, "a1");
+        let p = make_params("test_block_000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         let block = find_by_id(&conn, "test_block_000001").unwrap();
@@ -746,10 +781,10 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("dup_block_0000001", crate::model::ROOT_ID, "a1");
+        let p = make_params("dup_block_0000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
-        let p2 = make_params("dup_block_0000001", crate::model::ROOT_ID, "a2");
+        let p2 = make_params("dup_block_0000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2");
         assert!(insert_block(&conn, &p2).is_err());
     }
 
@@ -760,7 +795,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("raw_test_blk_00001", crate::model::ROOT_ID, "a1");
+        let p = make_params("raw_test_blk_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         // 软删除
@@ -781,7 +816,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("del_test_blk_00001", crate::model::ROOT_ID, "a1");
+        let p = make_params("del_test_blk_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
         update_status(&conn, "del_test_blk_00001", "deleted", "2026-01-02T00:00:00.000Z").unwrap();
 
@@ -794,7 +829,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("normal_test_00001", crate::model::ROOT_ID, "a1");
+        let p = make_params("normal_test_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         assert!(find_deleted(&conn, "normal_test_00001").is_err());
@@ -807,7 +842,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("upd_test_blk_00001", crate::model::ROOT_ID, "a1");
+        let p = make_params("upd_test_blk_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         let rows = update_content_and_props(
@@ -816,33 +851,12 @@ mod tests {
             b"updated",
             r#"{"key":"value"}"#,
             "2026-01-02T00:00:00.000Z",
-            1,
         ).unwrap();
         assert_eq!(rows, 1);
 
         let block = find_by_id_raw(&conn, "upd_test_blk_00001").unwrap();
         assert_eq!(block.content, b"updated");
         assert_eq!(block.version, 2);
-    }
-
-    #[test]
-    fn update_content_and_props_version_conflict() {
-        let db = init_test_db();
-        let conn = db.lock().unwrap();
-
-        let p = make_params("conflict_blk_00001", crate::model::ROOT_ID, "a1");
-        insert_block(&conn, &p).unwrap();
-
-        // 传入错误的 version=99
-        let rows = update_content_and_props(
-            &conn,
-            "conflict_blk_00001",
-            b"should not update",
-            "{}",
-            "2026-01-02T00:00:00.000Z",
-            99,
-        ).unwrap();
-        assert_eq!(rows, 0); // 0 行受影响 = 版本冲突
     }
 
     // ── update_status / update_status_if_not ──────────────
@@ -852,7 +866,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("status_blk_000001", crate::model::ROOT_ID, "a1");
+        let p = make_params("status_blk_000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         let rows = update_status(&conn, "status_blk_000001", "deleted", "2026-01-02T00:00:00.000Z").unwrap();
@@ -866,7 +880,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        let p = make_params("skip_blk_00000001", crate::model::ROOT_ID, "a1");
+        let p = make_params("skip_blk_00000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         // 状态已经是 normal，再次设为 normal 应跳过
@@ -893,7 +907,7 @@ mod tests {
         // 将 doc2 移动到 doc1 下
         let rows = update_parent_position(
             &conn, "move_doc_00000002", "move_doc_00000001", "a0",
-            "2026-01-02T00:00:00.000Z", 1,
+            "2026-01-02T00:00:00.000Z",
         ).unwrap();
         assert_eq!(rows, 1);
 
@@ -911,8 +925,8 @@ mod tests {
         let conn = db.lock().unwrap();
 
         // 根块下已有 a0
-        insert_block(&conn, &make_params("pos_blk_00000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("pos_blk_00000002", crate::model::ROOT_ID, "a2")).unwrap();
+        insert_block(&conn, &make_params("pos_blk_00000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("pos_blk_00000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2")).unwrap();
 
         let max = get_max_position(&conn, crate::model::ROOT_ID).unwrap();
         assert_eq!(max, Some("a2".to_string()));
@@ -935,8 +949,8 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        insert_block(&conn, &make_params("sib_a_000000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("sib_a_000000002", crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("sib_a_000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("sib_a_000000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
 
         let next = get_next_sibling_position(&conn, crate::model::ROOT_ID, "a1").unwrap();
         assert_eq!(next, Some("a3".to_string()));
@@ -950,8 +964,8 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        insert_block(&conn, &make_params("sib_b_000000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("sib_b_000000002", crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("sib_b_000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("sib_b_000000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
 
         let prev = get_prev_sibling_position(&conn, crate::model::ROOT_ID, "a3").unwrap();
         assert_eq!(prev, Some("a1".to_string()));
@@ -975,7 +989,7 @@ mod tests {
         // 插入两个文档和一个段落
         insert_block(&conn, &make_doc_params("rootdoc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &make_doc_params("rootdoc_00000002", crate::model::ROOT_ID, "a3")).unwrap();
-        insert_block(&conn, &make_params("para_00000000001", crate::model::ROOT_ID, "a2")).unwrap();
+        insert_block(&conn, &make_params("para_00000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2")).unwrap();
 
         let docs = find_root_documents(&conn).unwrap();
         // 只应该返回文档类型（通过 id != parent_id 过滤掉根块自身）
@@ -1001,11 +1015,12 @@ mod tests {
         insert_block(&conn, &InsertBlockParams {
             id: "tree_hdg_0000001".to_string(),
             parent_id: "tree_doc_0000001".to_string(),
+            document_id: "tree_doc_0000001".to_string(),
             position: "a0".to_string(),
             block_type: r#"{"type":"heading","level":2}"#.to_string(),
-            ..make_params("tree_hdg_0000001", "tree_doc_0000001", "a0")
+            ..make_params("tree_hdg_0000001", "tree_doc_0000001", "tree_doc_0000001", "a0")
         }).unwrap();
-        insert_block(&conn, &make_params("tree_para_000001", "tree_hdg_0000001", "a0")).unwrap();
+        insert_block(&conn, &make_params("tree_para_000001", "tree_hdg_0000001", "tree_doc_0000001", "a0")).unwrap();
 
         let descendants = find_descendants(&conn, "tree_doc_0000001").unwrap();
         assert_eq!(descendants.len(), 2); // heading + para
@@ -1020,7 +1035,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        insert_block(&conn, &make_params("leaf_blk_0000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("leaf_blk_0000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
 
         let desc = find_descendants(&conn, "leaf_blk_0000001").unwrap();
         assert!(desc.is_empty());
@@ -1034,9 +1049,9 @@ mod tests {
         let conn = db.lock().unwrap();
 
         // 注意：根块自身也以 parent_id=ROOT_ID 存在，position="a0"
-        insert_block(&conn, &make_params("page_a_00000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("page_a_00000002", crate::model::ROOT_ID, "a3")).unwrap();
-        insert_block(&conn, &make_params("page_a_00000003", crate::model::ROOT_ID, "a5")).unwrap();
+        insert_block(&conn, &make_params("page_a_00000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("page_a_00000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("page_a_00000003", crate::model::ROOT_ID, crate::model::ROOT_ID, "a5")).unwrap();
 
         // 取前 2 个（含根块 a0）
         let page1 = find_children_paginated(&conn, crate::model::ROOT_ID, None, 2).unwrap();
@@ -1074,8 +1089,8 @@ mod tests {
         let conn = db.lock().unwrap();
 
         insert_block(&conn, &make_doc_params("des_doc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("des_chd_00000001", "des_doc_00000001", "a0")).unwrap();
-        insert_block(&conn, &make_params("des_chd_00000002", "des_doc_00000001", "a1")).unwrap();
+        insert_block(&conn, &make_params("des_chd_00000001", "des_doc_00000001", "des_doc_00000001", "a0")).unwrap();
+        insert_block(&conn, &make_params("des_chd_00000002", "des_doc_00000001", "des_doc_00000001", "a1")).unwrap();
 
         let ids = find_descendant_ids_include_self(&conn, "des_doc_00000001").unwrap();
         assert_eq!(ids.len(), 3);
@@ -1092,8 +1107,8 @@ mod tests {
         let conn = db.lock().unwrap();
 
         insert_block(&conn, &make_doc_params("dd_doc_000000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("dd_chd_000000001", "dd_doc_000000001", "a0")).unwrap();
-        insert_block(&conn, &make_params("dd_chd_000000002", "dd_doc_000000001", "a1")).unwrap();
+        insert_block(&conn, &make_params("dd_chd_000000001", "dd_doc_000000001", "dd_doc_000000001", "a0")).unwrap();
+        insert_block(&conn, &make_params("dd_chd_000000002", "dd_doc_000000001", "dd_doc_000000001", "a1")).unwrap();
 
         // 级联删除：先删除 doc，再删除 children
         update_status(&conn, "dd_doc_000000001", "deleted", "2026-01-02T00:00:00.000Z").unwrap();
@@ -1115,7 +1130,7 @@ mod tests {
         let conn = db.lock().unwrap();
 
         insert_block(&conn, &make_doc_params("anc_doc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("anc_chd_00000001", "anc_doc_00000001", "a0")).unwrap();
+        insert_block(&conn, &make_params("anc_chd_00000001", "anc_doc_00000001", "anc_doc_00000001", "a0")).unwrap();
 
         assert!(check_is_descendant(&conn, "anc_doc_00000001", "anc_chd_00000001").unwrap());
     }
@@ -1126,7 +1141,7 @@ mod tests {
         let conn = db.lock().unwrap();
 
         insert_block(&conn, &make_doc_params("anc_doc_00000002", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("anc_chd_00000002", "anc_doc_00000002", "a0")).unwrap();
+        insert_block(&conn, &make_params("anc_chd_00000002", "anc_doc_00000002", "anc_doc_00000002", "a0")).unwrap();
 
         // ROOT 不是 doc 的后代
         assert!(!check_is_descendant(&conn, "anc_doc_00000002", crate::model::ROOT_ID).unwrap());
@@ -1145,7 +1160,7 @@ mod tests {
             insert_block(&conn, &InsertBlockParams {
                 id: id.clone(),
                 status: "deleted".to_string(),
-                ..make_params(id, crate::model::ROOT_ID, &format!("a{}", i + 2))
+                ..make_params(id, crate::model::ROOT_ID, crate::model::ROOT_ID, &format!("a{}", i + 2))
             }).unwrap();
         }
 
@@ -1165,7 +1180,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        insert_block(&conn, &make_params("gp_blk_000000001", crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("gp_blk_000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
 
         let pos = get_position(&conn, "gp_blk_000000001", crate::model::ROOT_ID).unwrap();
         assert_eq!(pos, "a3");
@@ -1176,7 +1191,7 @@ mod tests {
         let db = init_test_db();
         let conn = db.lock().unwrap();
 
-        insert_block(&conn, &make_params("gp_blk_000000002", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("gp_blk_000000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
 
         // 用错误的 parent_id 查询
         assert!(get_position(&conn, "gp_blk_000000002", "wrong_parent").is_err());

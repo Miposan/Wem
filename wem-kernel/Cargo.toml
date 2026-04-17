@@ -28,4 +28,15 @@ tower-http = { version = "0.6", features = ["cors"] }
 # 错误类型定义简写（AppError）
 thiserror = "2"
 
+# TOML 配置文件解析
+toml = "0.8"
+
 # Markdown 解析：已替换为自研递归下降解析器
+
+# 异步 Stream 适配（SSE 事件流）
+tokio-stream = "0.1"
+futures = "0.3"
+async-stream = "0.3"
+
+# 日志（EventBus 调试用）
+tracing = "0.1"

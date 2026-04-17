@@ -5,7 +5,7 @@
 //! - 移动 Block 时的目标位置
 //! - 兄弟 Block 的位置查询
 
-use crate::db::block_repo as repo;
+use crate::repo::block_repo as repo;
 use crate::error::AppError;
 use crate::util::fractional;
 

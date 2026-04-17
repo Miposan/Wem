@@ -1,0 +1,172 @@
+/* ═══════════════════════════════════════════════════
+   Wem Custom Editor Styles
+   自研块编辑器 — 基于 BlockNode 树 + contentEditable
+   ═══════════════════════════════════════════════════ */
+
+/* ─── 根容器 ─── */
+
+.wem-editor-root {
+  min-height: 200px;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+/* ─── Block 外壳 ─── */
+
+.wem-block-container {
+  position: relative;
+}
+
+.wem-block-content {
+  display: flex;
+  align-items: flex-start;
+  padding: 1px 0;
+}
+
+/* ─── contentEditable 通用 ─── */
+
+.wem-block-content [contenteditable] {
+  outline: none;
+  min-height: 1em;
+  caret-color: currentColor;
+}
+
+.wem-block-content [contenteditable]:focus {
+  outline: none;
+}
+
+/* Placeholder — 空 contentEditable 时显示 */
+.wem-block-content [contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-text-3, #999);
+  pointer-events: none;
+}
+
+/* ─── 段落 ─── */
+
+.wem-paragraph {
+  margin: 1px 0;
+}
+
+/* ─── 标题 ─── */
+
+.wem-heading {
+  margin: 0.6em 0 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.wem-heading-1 { font-size: 2em; }
+.wem-heading-2 { font-size: 1.5em; }
+.wem-heading-3 { font-size: 1.25em; }
+.wem-heading-4 { font-size: 1.1em; }
+.wem-heading-5 { font-size: 1em; }
+.wem-heading-6 { font-size: 0.9em; color: var(--color-text-2, #666); }
+
+/* ─── 分隔线 ─── */
+
+.wem-thematic-break {
+  border: none;
+  border-top: 1px solid var(--color-border, #e5e5e5);
+  margin: 12px 0;
+  cursor: default;
+}
+
+/* ─── 折叠控制 ─── */
+
+.wem-collapse-toggle {
+  display: none;                    /* 默认隐藏 */
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-3, #999);
+  border-radius: 3px;
+  line-height: 1;
+  font-size: 10px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.wem-block-collapsible > .wem-block-content > .wem-collapse-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wem-collapse-toggle:hover {
+  background: var(--color-fill-3, #f0f0f0);
+  color: var(--color-text-1, #333);
+}
+
+.wem-collapse-arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  transform: rotate(90deg);        /* 展开：箭头朝下 */
+}
+
+.wem-collapse-arrow.collapsed {
+  transform: rotate(0deg);          /* 折叠：箭头朝右 */
+}
+
+.wem-block-editable {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ─── 子块容器 ─── */
+
+.wem-block-children {
+  padding-left: 24px;
+}
+
+/* ─── 未知块 ─── */
+
+.wem-unknown-block {
+  padding: 8px 12px;
+  border: 1px dashed var(--color-border, #e5e5e5);
+  border-radius: 4px;
+  margin: 4px 0;
+}
+
+/* ─── Focus 高亮 ─── */
+
+.wem-block-container:focus-within > .wem-block-content {
+  border-radius: 3px;
+}
+
+/* ─── Inline Marks（Phase 3 预留） ─── */
+
+.wem-editor-root strong {
+  font-weight: 600;
+}
+
+.wem-editor-root em {
+  font-style: italic;
+}
+
+.wem-editor-root u {
+  text-decoration: underline;
+}
+
+.wem-editor-root s {
+  text-decoration: line-through;
+}
+
+.wem-editor-root code {
+  background: var(--color-fill-3, #f0f0f0);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.875em;
+}
+
+.wem-editor-root a {
+  color: var(--primary-6, #1890ff);
+  text-decoration: underline;
+  cursor: pointer;
+}

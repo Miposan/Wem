@@ -3,8 +3,15 @@
 //! Axum route handlers：解析 HTTP 请求 → 调用 service 层 → 返回 JSON 响应。
 //! 所有 handler 接收 `State<Db>` 作为数据库连接。
 //!
-//! 参考 03-api-rest.md §1~§3
+//! **Event-Driven 设计**：
+//! 每个 mutation handler 在 service 调用成功后，通过 EventBus 广播变更事件。
+//! SSE 端点 (`document_events`) 将事件推送给前端。
+//! 无论变更来自前端 REST 调用还是 Agent 后端操作，都走同一条事件通道。
 
+use std::convert::Infallible;
+
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::IntoResponse;
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -15,11 +22,12 @@ use crate::api::response::{
     BatchResult, DeleteResult, DocumentChildrenResult,
     DocumentContentResult, ExportResult, ImportResult, RestoreResult,
 };
-use crate::api::query::{ExportQuery, GetBlockQuery, VersionQuery};
-use crate::db::Db;
+use crate::api::query::{ExportQuery, GetBlockQuery};
+use crate::model::event::BlockEvent;
+use crate::repo::Db;
 use crate::error::{AppError, ApiResponse};
 use crate::model::Block;
-use crate::service::block;
+use crate::service::{block, document};
 
 // ─── Health 健康检查 ────────────────────────────────────────────
 
@@ -46,10 +54,16 @@ pub async fn create_document(
     let after_id = req.after_id;
 
     let doc = tokio::task::spawn_blocking(move || {
-        block::create_document(&db, title, parent_id, after_id)
+        document::create_document(&db, title, parent_id, after_id)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
+        document_id: doc.document_id.clone(),
+        block: doc.clone(),
+    });
 
     Ok(Json(ApiResponse::ok(Some(doc))))
 }
@@ -60,7 +74,7 @@ pub async fn create_document(
 pub async fn list_documents(
     State(db): State<Db>,
 ) -> Result<Json<ApiResponse<Vec<Block>>>, AppError> {
-    let docs = tokio::task::spawn_blocking(move || block::list_root_documents(&db))
+    let docs = tokio::task::spawn_blocking(move || document::list_root_documents(&db))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
@@ -75,7 +89,7 @@ pub async fn get_document(
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<DocumentContentResult>>, AppError> {
     let doc_id = id;
-    let result = tokio::task::spawn_blocking(move || block::get_document_content(&db, &doc_id))
+    let result = tokio::task::spawn_blocking(move || document::get_document_content(&db, &doc_id))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
@@ -89,26 +103,33 @@ pub async fn get_document_children(
     State(db): State<Db>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<DocumentChildrenResult>>, AppError> {
-    let result = tokio::task::spawn_blocking(move || block::get_document_children(&db, &id))
+    let result = tokio::task::spawn_blocking(move || document::get_document_children(&db, &id))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// DELETE /api/v1/documents/{id}?version=N
+/// DELETE /api/v1/documents/{id}
 ///
 /// 删除文档（级联软删除所有子块）
 pub async fn delete_document(
     State(db): State<Db>,
     Path(id): Path<String>,
-    Query(params): Query<VersionQuery>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
+    let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        block::delete_block(&db, &id, params.version)
+        block::delete_block(&db, &id)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
+        document_id: id_clone,
+        block_id: result.id.clone(),
+        cascade_count: result.cascade_count,
+    });
 
     Ok(Json(ApiResponse::ok(Some(result))))
 }
@@ -122,11 +143,17 @@ pub async fn create_block(
     State(db): State<Db>,
     Json(req): Json<CreateBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
-    let block = tokio::task::spawn_blocking(move || block::create_block(&db, req))
+    let blk = tokio::task::spawn_blocking(move || block::create_block(&db, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    Ok(Json(ApiResponse::ok(Some(block))))
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
+        document_id: blk.document_id.clone(),
+        block: blk.clone(),
+    });
+
+    Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
 /// GET /api/v1/blocks/{id}
@@ -158,22 +185,35 @@ pub async fn update_block(
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
+        document_id: blk.document_id.clone(),
+        block: blk.clone(),
+    });
+
     Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
-/// DELETE /api/v1/blocks/{id}?version=N
+/// DELETE /api/v1/blocks/{id}
 ///
 /// 软删除 Block（级联删除子块）
 pub async fn delete_block(
     State(db): State<Db>,
     Path(id): Path<String>,
-    Query(params): Query<VersionQuery>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
+    let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        block::delete_block(&db, &id, params.version)
+        block::delete_block(&db, &id)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
+        document_id: id_clone,
+        block_id: result.id.clone(),
+        cascade_count: result.cascade_count,
+    });
 
     Ok(Json(ApiResponse::ok(Some(result))))
 }
@@ -190,6 +230,12 @@ pub async fn move_block(
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockMoved {
+        document_id: blk.document_id.clone(),
+        block: blk.clone(),
+    });
+
     Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
@@ -199,17 +245,65 @@ pub async fn move_block(
 pub async fn restore_block(
     State(db): State<Db>,
     Path(id): Path<String>,
-    Json(body): Json<VersionQuery>,
 ) -> Result<Json<ApiResponse<RestoreResult>>, AppError> {
-    let result = tokio::task::spawn_blocking(move || {
-        block::restore_block(&db, &id, body.version)
+    let db2 = db.clone();
+    let id2 = id.clone();
+    let _result = tokio::task::spawn_blocking(move || {
+        block::restore_block(&db, &id)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    Ok(Json(ApiResponse::ok(Some(result))))
-}
+    // 恢复后重新查询 Block 最新状态用于广播
+    let restored = tokio::task::spawn_blocking(move || block::get_block(&db2, &id2))
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
+    // 广播事件
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockRestored {
+        document_id: restored.document_id.clone(),
+        block: restored,
+    });
+
+    Ok(Json(ApiResponse::ok(Some(_result))))
+}
+// ─── SSE 实时事件流 ────────────────────────────────────────────
+
+/// GET /api/v1/documents/{id}/events
+///
+/// SSE 实时事件端点。订阅指定文档的所有变更事件。
+/// 前端通过 EventSource 连接此端点，实现"后端即数据真相源"。
+///
+/// 事件格式：
+/// ```text
+/// event: block_created
+/// data: {"type":"block_created","document_id":"...","block":{...}}
+/// ```
+pub async fn document_events(
+    Path(document_id): Path<String>,
+) -> impl IntoResponse {
+    let mut receiver = crate::service::event::EventBus::global().subscribe();
+
+    // 将 broadcast::Receiver 转为 Stream，过滤当前文档事件
+    let stream = async_stream::stream! {
+        loop {
+            match receiver.recv().await {
+                Ok(event) if event.document_id() == document_id => {
+                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    yield Ok::<_, Infallible>(Event::default().event(event.event_type()).data(data));
+                }
+                Ok(_) => continue, // 其他文档事件，跳过
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("SSE client lagged, skipped {} events", n);
+                    continue;
+                }
+                Err(_) => break, // 通道关闭
+            }
+        }
+    };
+
+    Sse::new(Box::pin(stream)).keep_alive(KeepAlive::default())
+}
 // get_children (Block 子块列表) 已删除
 // MVP 阶段通过 GET /documents/{id} 获取完整内容树
 

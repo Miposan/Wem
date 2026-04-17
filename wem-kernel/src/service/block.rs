@@ -1,28 +1,24 @@
-//! Block CRUD 业务逻辑
+//! Block 原子操作
 //!
 //! 提供 Block 的完整生命周期管理：创建、查询、更新、软删除/恢复、移动。
 //! 所有函数接收 `&Db`（即 `Arc<Mutex<Connection>>`），内部自动加锁。
+//! 文档级编排见 `service::document`。
 //!
 //! **架构分层**：
-//! - 本文件（service）负责业务逻辑：校验、计算、编排
-//! - `db::block_repo` 负责所有 SQL 操作：查询、插入、更新、删除
-//! - `util::fractional` 负责 Fractional Index 位置计算（纯计算，无 SQL）
-//!
-//! 参考：
-//! - 01-block-model.md §1~§6（Block 结构、类型系统）
-//! - 02-block-tree.md §2~§3（Fractional Index、树操作）
-//! - 03-api-rest.md §2~§3（API 语义）
+//! - 本文件（service/block）负责 Block 原子操作
+//! - `service::document` 负责文档级编排（创建文档、获取文档树等）
+//! - `repo::block_repo` 负责所有 SQL 操作
+//! - `util::fractional` 负责 Fractional Index 位置计算
 
 use std::collections::HashMap;
 
 use crate::api::request::{BatchOp, BatchReq, CreateBlockReq, MoveBlockReq, UpdateBlockReq};
 use crate::api::response::{
-    BatchOpResult, BatchResult, BlockNode, DeleteResult, DocumentChildrenResult,
-    DocumentContentResult, RestoreResult,
+    BatchOpResult, BatchResult, DeleteResult, RestoreResult,
 };
-use crate::db::block_repo as repo;
-use crate::db::block_repo::InsertBlockParams;
-use crate::db::Db;
+use crate::repo::block_repo as repo;
+use crate::repo::block_repo::InsertBlockParams;
+use crate::repo::Db;
 use crate::error::AppError;
 use crate::model::{generate_block_id, Block, BlockType};
 use crate::util::fractional;
@@ -30,7 +26,7 @@ use crate::util::fractional;
 // ─── 辅助函数 ──────────────────────────────────────────────────
 
 /// 生成当前时间的 ISO 8601 字符串（毫秒精度）
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
@@ -50,8 +46,11 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     let conn = db.lock().unwrap();
 
     // 1. 验证 parent 存在且未删除
-    let _parent = repo::find_by_id(&conn, &req.parent_id)
+    let parent = repo::find_by_id(&conn, &req.parent_id)
         .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", req.parent_id)))?;
+
+    // 1.5 推断 document_id：继承父块的 document_id
+    let document_id = parent.document_id.clone();
 
     // 2. 计算 position
     let position =
@@ -71,6 +70,7 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     repo::insert_block(&conn, &InsertBlockParams {
         id: id.clone(),
         parent_id: req.parent_id,
+        document_id,
         position,
         block_type: serde_json::to_string(&req.block_type).unwrap_or_default(),
         content_type: content_type.as_str().to_string(),
@@ -114,119 +114,15 @@ fn get_block_impl(db: &Db, id: &str, include_deleted: bool) -> Result<Block, App
     result.map_err(|_| AppError::NotFound(format!("Block {} 不存在", id)))
 }
 
-/// 获取文档树（扁平列表 + children_map）
-///
-/// 返回文档根 Block + 所有未删除的后代 Block。
-/// 获取文档内容（编辑器用）
-///
-/// 返回文档块 + 嵌套的内容块树（paragraph、heading、codeBlock 等），
-/// 用于编辑器直接递归渲染。子 document 类型的块会被排除。
-///
-/// 参考 03-api-rest.md §2 "获取文档内容"
-pub fn get_document_content(db: &Db, doc_id: &str) -> Result<DocumentContentResult, AppError> {
-    let conn = db.lock().unwrap();
-
-    // 查询文档块本身
-    let document = repo::find_by_id(&conn, doc_id)
-        .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", doc_id)))?;
-
-    // 递归 CTE 查询所有未删除的后代（不含文档块自身）
-    let all_blocks = repo::find_descendants(&conn, doc_id)
-        .map_err(|e| AppError::Internal(format!("查询文档内容失败: {}", e)))?;
-
-    // 过滤：只保留非 document 类型的内容块
-    let content_blocks: Vec<Block> = all_blocks
-        .into_iter()
-        .filter(|b| !matches!(b.block_type, BlockType::Document))
-        .collect();
-
-    // 构建嵌套树
-    let blocks = build_block_tree(doc_id, &content_blocks);
-
-    Ok(DocumentContentResult {
-        document,
-        blocks,
-        has_more: false, // MVP 阶段不截断
-    })
-}
-
-/// 将扁平 Block 列表构建为嵌套树
-///
-/// `parent_id` 为根节点的 ID（通常是文档 ID），
-/// 所有 `block.parent_id == parent_id` 的块成为顶层节点，然后递归构建子节点。
-fn build_block_tree(parent_id: &str, blocks: &[Block]) -> Vec<BlockNode> {
-    // 找出所有直接子块（已按 position 排序）
-    let mut children: Vec<BlockNode> = blocks
-        .iter()
-        .filter(|b| b.parent_id == parent_id)
-        .map(|b| BlockNode {
-            block: b.clone(),
-            children: build_block_tree(&b.id, blocks),
-        })
-        .collect();
-
-    // 按 position 排序（确保顺序正确）
-    children.sort_by(|a, b| a.block.position.cmp(&b.block.position));
-    children
-}
-
-/// 获取文档的直系子文档（侧边栏导航用）
-///
-/// 只返回该文档下的直接子 document 块（一层），不含内容块。
-/// 用户展开某个子文档时，再请求该子文档的 /children 获取下一层。
-pub fn get_document_children(db: &Db, doc_id: &str) -> Result<DocumentChildrenResult, AppError> {
-    let conn = db.lock().unwrap();
-
-    // 验证文档存在
-    let _doc = repo::find_by_id(&conn, doc_id)
-        .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", doc_id)))?;
-
-    // 查询直系子块，过滤出 document 类型
-    let all_children = repo::find_children_paginated(&conn, doc_id, None, 10000)
-        .map_err(|e| AppError::Internal(format!("查询子文档失败: {}", e)))?;
-
-    let children: Vec<Block> = all_children
-        .into_iter()
-        .filter(|b| matches!(b.block_type, BlockType::Document))
-        .collect();
-
-    Ok(DocumentChildrenResult { children })
-}
-
-/// 列出所有根文档
-///
-/// 根文档 = 全局根块 "/" 的直接子 document 块。
-/// 按 position 排序，直接返回全部（不分页）。
-pub fn list_root_documents(db: &Db) -> Result<Vec<Block>, AppError> {
-    let conn = db.lock().unwrap();
-
-    let blocks = repo::find_root_documents(&conn)
-        .map_err(|e| AppError::Internal(format!("查询根文档失败: {}", e)))?;
-
-    // 只保留 document 类型
-    let docs: Vec<Block> = blocks
-        .into_iter()
-        .filter(|b| matches!(b.block_type, BlockType::Document))
-        .collect();
-
-    Ok(docs)
-}
-
-// get_root 已删除：前端不需要单独获取全局根块
-
-// get_children (Block 子块分页) 已删除
-// MVP 阶段通过 GET /documents/{id} 获取完整内容树，不需要单独的子块列表接口
-
 // ─── 更新 Block ────────────────────────────────────────────────
 
 /// 更新 Block 内容和/或属性
 ///
 /// 流程：
-/// 1. 查询当前 Block（含 version）
-/// 2. 乐观锁校验：`req.version == block.version`，否则返回 40901
-/// 3. 计算新的 content / properties
-/// 4. `UPDATE ... SET version=version+1 WHERE id=? AND version=?`（双重保护）
-/// 5. 返回更新后的 Block
+/// 1. 查询当前 Block
+/// 2. 计算新的 content / properties
+/// 3. `UPDATE ... SET version=version+1 WHERE id=?`
+/// 4. 返回更新后的 Block
 ///
 /// 参考 03-api-rest.md §3 "更新 Block"
 pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, AppError> {
@@ -236,29 +132,23 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
     let current = repo::find_by_id(&conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在", id)))?;
 
-    // 2. 乐观锁校验
-    if req.version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
-
-    // 3. 计算新 content
+    // 2. 计算新 content
     let new_content: Vec<u8> = req
         .content
         .map(|c| c.into_bytes())
         .unwrap_or(current.content);
 
-    // 4. 计算新 block_type 和 content_type
+    // 3. 计算新 block_type 和 content_type
     let new_block_type = req.block_type.clone().unwrap_or(current.block_type.clone());
     let new_content_type = req.block_type
         .as_ref()
         .map(|bt| bt.default_content_type())
         .unwrap_or(current.content_type.clone());
 
-    // 5. 计算新 properties（merge 或 replace）
+    // 4. 计算新 properties（merge 或 replace）
     let new_properties = match req.properties {
         Some(ref new_props) if req.properties_mode == "replace" => new_props.clone(),
         Some(ref new_props) => {
-            // merge 模式：请求中的 key 合并到现有 properties
             let mut merged = current.properties.clone();
             merged.extend(new_props.clone());
             merged
@@ -267,7 +157,7 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
     };
     let properties_json = serde_json::to_string(&new_properties).unwrap_or_default();
 
-    // 6. UPDATE with optimistic lock
+    // 5. UPDATE
     let now = now_iso();
     let block_type_changed = req.block_type.is_some();
     let bt_str = serde_json::to_string(&new_block_type).unwrap_or_default();
@@ -276,20 +166,20 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
     let rows = if block_type_changed {
         repo::update_block_fields(
             &conn, id, &new_content, &properties_json,
-            Some(&bt_str), Some(&ct_str), &now, req.version,
+            Some(&bt_str), Some(&ct_str), &now,
         )
     } else {
         repo::update_content_and_props(
-            &conn, id, &new_content, &properties_json, &now, req.version,
+            &conn, id, &new_content, &properties_json, &now,
         )
     }
     .map_err(|e| AppError::Internal(format!("更新 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::VersionConflict(current.version));
+        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
     }
 
-    // 7. 查询并返回更新后的 Block
+    // 6. 查询并返回更新后的 Block
     repo::find_by_id_raw(&conn, id)
         .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))
 }
@@ -299,16 +189,15 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
 /// 软删除 Block 及其所有后代
 ///
 /// 流程：
-/// 1. 版本校验
-/// 2. 用递归 CTE 查询所有后代（含自身）
-/// 3. 批量 UPDATE status='deleted'
-/// 4. 返回 `{ id, version, cascade_count }`
+/// 1. 用递归 CTE 查询所有后代（含自身）
+/// 2. 批量 UPDATE status='deleted'
+/// 3. 返回 `{ id, version, cascade_count }`
 ///
 /// 软删除的 Block 不参与排序查询（`WHERE status != 'deleted'` 过滤），
 /// 但可以通过 restore_block 恢复。
 ///
 /// 参考 03-api-rest.md §3 "删除 Block"
-pub fn delete_block(db: &Db, id: &str, version: u64) -> Result<DeleteResult, AppError> {
+pub fn delete_block(db: &Db, id: &str) -> Result<DeleteResult, AppError> {
     // 全局根块不可删除
     if id == crate::model::ROOT_ID {
         return Err(AppError::BadRequest("全局根块不可删除".to_string()));
@@ -316,13 +205,9 @@ pub fn delete_block(db: &Db, id: &str, version: u64) -> Result<DeleteResult, App
 
     let conn = db.lock().unwrap();
 
-    // 1. 版本校验
-    let current = repo::find_by_id(&conn, id)
+    // 1. 确认 Block 存在
+    let _current = repo::find_by_id(&conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
-
-    if version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
 
     // 2. 递归 CTE 查所有后代（含自身）
     let descendant_ids = repo::find_descendant_ids_include_self(&conn, id)
@@ -331,12 +216,10 @@ pub fn delete_block(db: &Db, id: &str, version: u64) -> Result<DeleteResult, App
     // cascade_count 不含自身
     let cascade_count = descendant_ids.len().saturating_sub(1) as u32;
 
-    // 3. 批量软删除
+    // 3. 批量软删除（单条 WHERE IN，替代 N 次循环）
     let now = now_iso();
-    for did in &descendant_ids {
-        repo::update_status_if_not(&conn, did, "deleted", &now, "deleted")
-            .map_err(|e| AppError::Internal(format!("软删除 Block 失败: {}", e)))?;
-    }
+    repo::batch_update_status_if_not(&conn, &descendant_ids, "deleted", &now, "deleted")
+        .map_err(|e| AppError::Internal(format!("批量软删除失败: {}", e)))?;
 
     // 4. 获取更新后的 version
     let new_version = repo::get_version(&conn, id)
@@ -358,16 +241,12 @@ pub fn delete_block(db: &Db, id: &str, version: u64) -> Result<DeleteResult, App
 /// - 父块不能是 `deleted`（否则需要先恢复父块）
 ///
 /// 参考 03-api-rest.md §3 "恢复 Block"
-pub fn restore_block(db: &Db, id: &str, version: u64) -> Result<RestoreResult, AppError> {
+pub fn restore_block(db: &Db, id: &str) -> Result<RestoreResult, AppError> {
     let conn = db.lock().unwrap();
 
     // 1. 查询当前 Block（必须是 deleted 状态）
     let current = repo::find_deleted(&conn, id)
         .map_err(|_| AppError::BadRequest(format!("Block {} 不是已删除状态", id)))?;
-
-    if version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
 
     // 2. 检查父块状态（根文档 parent_id == id，跳过检查）
     if current.parent_id != current.id {
@@ -431,10 +310,6 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
     let current = repo::find_by_id(&conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
 
-    if req.version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
-
     // 2. 确定目标父块（未传则保持当前父块）
     let target_parent_id = req
         .target_parent_id
@@ -486,114 +361,16 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
         &target_parent_id,
         &new_position,
         &now,
-        req.version,
     )
     .map_err(|e| AppError::Internal(format!("移动 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::VersionConflict(current.version));
+        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
     }
 
     // 6. 查询并返回
     repo::find_by_id_raw(&conn, id)
         .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))
-}
-
-// ─── 创建文档 ──────────────────────────────────────────────────
-
-/// 创建文档
-///
-/// 创建一个 Document Block + 一个空 Paragraph 子块。
-/// 根文档（无 parent_id）挂到全局根块 "/" 下。
-///
-/// 参考 03-api-rest.md §2 "创建文档"
-pub fn create_document(
-    db: &Db,
-    title: String,
-    parent_id: Option<String>,
-    after_id: Option<String>,
-) -> Result<Block, AppError> {
-    let conn = db.lock().unwrap();
-
-    let doc_id = generate_block_id();
-    let now = now_iso();
-
-    // 1. 确定 parent_id
-    let parent_id_actual = match parent_id {
-        Some(ref pid) => {
-            // 子文档：验证父文档存在且是 Document 类型
-            let parent = repo::find_by_id(&conn, pid)
-                .map_err(|_| AppError::BadRequest(format!("父文档 {} 不存在", pid)))?;
-
-            if !matches!(parent.block_type, BlockType::Document) {
-                return Err(AppError::BadRequest(
-                    "parent_id 必须指向文档类型的 Block".to_string(),
-                ));
-            }
-
-            pid.clone()
-        }
-        None => {
-            // 根文档：挂到全局根块 "/" 下
-            crate::model::ROOT_ID.to_string()
-        }
-    };
-
-    // 2. 计算 position（在同级兄弟文档中的位置）
-    let position = calculate_insert_position(&conn, &parent_id_actual, after_id.as_deref())?;
-
-    // 3. 创建 Document Block
-    let mut properties = HashMap::new();
-    properties.insert("title".to_string(), title.clone());
-    let properties_json = serde_json::to_string(&properties).unwrap_or_default();
-    let block_type_json = serde_json::to_string(&BlockType::Document).unwrap();
-
-    repo::insert_block(&conn, &InsertBlockParams {
-        id: doc_id.clone(),
-        parent_id: parent_id_actual,
-        position,
-        block_type: block_type_json,
-        content_type: "markdown".to_string(),
-        content: title.into_bytes(),
-        properties: properties_json,
-        version: 1,
-        status: "normal".to_string(),
-        schema_version: 1,
-        author: "system".to_string(),
-        owner_id: None,
-        encrypted: false,
-        created: now.clone(),
-        modified: now.clone(),
-    })
-    .map_err(|e| AppError::Internal(format!("创建文档失败: {}", e)))?;
-
-    // 4. 创建空段落子块（段落是文档的子块，与文档不在同一 parent 下）
-    let para_id = generate_block_id();
-    let para_position = fractional::generate_first();
-    let para_block_type = serde_json::to_string(&BlockType::Paragraph).unwrap();
-
-    repo::insert_block(&conn, &InsertBlockParams {
-        id: para_id,
-        parent_id: doc_id.clone(),
-        position: para_position,
-        block_type: para_block_type,
-        content_type: "markdown".to_string(),
-        content: Vec::new(), // 空段落
-        properties: "{}".to_string(),
-        version: 1,
-        status: "normal".to_string(),
-        schema_version: 1,
-        author: "system".to_string(),
-        owner_id: None,
-        encrypted: false,
-        created: now.clone(),
-        modified: now,
-    })
-    .map_err(|e| AppError::Internal(format!("创建默认段落失败: {}", e)))?;
-
-    // 5. 查询并返回文档 Block
-    repo::find_by_id_raw(&conn, &doc_id)
-        .map_err(|e| AppError::Internal(format!("查询刚创建的文档失败: {}", e)))
 }
 
 // ─── 批量操作 ──────────────────────────────────────────────────
@@ -670,7 +447,6 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
 
             BatchOp::Update {
                 block_id,
-                version,
                 content,
                 properties,
                 properties_mode,
@@ -679,7 +455,6 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 let result = batch_update_block(
                     &conn,
                     &resolved_id,
-                    version,
                     content.as_deref(),
                     &properties,
                     &properties_mode,
@@ -705,9 +480,9 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 }
             }
 
-            BatchOp::Delete { block_id, version } => {
+            BatchOp::Delete { block_id } => {
                 let resolved_id = resolve_id(&block_id, &id_map);
-                let result = batch_delete_block(&conn, &resolved_id, version);
+                let result = batch_delete_block(&conn, &resolved_id);
 
                 match result {
                     Ok(new_version) => {
@@ -731,7 +506,6 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
 
             BatchOp::Move {
                 block_id,
-                version,
                 target_parent_id,
                 before_id,
                 after_id,
@@ -745,7 +519,6 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 let result = batch_move_block(
                     &conn,
                     &resolved_id,
-                    version,
                     resolved_target.as_deref(),
                     resolved_before.as_deref(),
                     resolved_after.as_deref(),
@@ -788,8 +561,11 @@ fn batch_create_block(
     after_id: Option<&str>,
 ) -> Result<Block, AppError> {
     // 验证 parent 存在且未删除
-    let _parent = repo::find_by_id(conn, parent_id)
+    let parent = repo::find_by_id(conn, parent_id)
         .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", parent_id)))?;
+
+    // 推断 document_id：继承父块的 document_id
+    let document_id = parent.document_id.clone();
 
     let position = calculate_insert_position(conn, parent_id, after_id)?;
     let ct = content_type
@@ -802,6 +578,7 @@ fn batch_create_block(
     repo::insert_block(conn, &InsertBlockParams {
         id: id.clone(),
         parent_id: parent_id.to_string(),
+        document_id,
         position,
         block_type: serde_json::to_string(&block_type).unwrap_or_default(),
         content_type: ct,
@@ -825,17 +602,12 @@ fn batch_create_block(
 fn batch_update_block(
     conn: &rusqlite::Connection,
     id: &str,
-    version: u64,
     content: Option<&str>,
     properties: &Option<HashMap<String, String>>,
     properties_mode: &str,
 ) -> Result<u64, AppError> {
     let current = repo::find_by_id(conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在", id)))?;
-
-    if version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
 
     let new_content: Vec<u8> = content
         .map(|c| c.as_bytes().to_vec())
@@ -854,12 +626,12 @@ fn batch_update_block(
 
     let now = now_iso();
     let rows = repo::update_content_and_props(
-        conn, id, &new_content, &properties_json, &now, version,
+        conn, id, &new_content, &properties_json, &now,
     )
     .map_err(|e| AppError::Internal(format!("批量更新 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::VersionConflict(current.version));
+        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
     }
 
     repo::get_version(conn, id)
@@ -869,27 +641,21 @@ fn batch_update_block(
 fn batch_delete_block(
     conn: &rusqlite::Connection,
     id: &str,
-    version: u64,
 ) -> Result<u64, AppError> {
     if id == crate::model::ROOT_ID {
         return Err(AppError::BadRequest("全局根块不可删除".to_string()));
     }
 
-    let current = repo::find_by_id(conn, id)
+    let _current = repo::find_by_id(conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
-
-    if version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
 
     let descendant_ids = repo::find_descendant_ids_include_self(conn, id)
         .map_err(|e| AppError::Internal(format!("查询后代失败: {}", e)))?;
 
+    // 单条 WHERE IN，替代 N 次循环
     let now = now_iso();
-    for did in &descendant_ids {
-        repo::update_status_if_not(conn, did, "deleted", &now, "deleted")
-            .map_err(|e| AppError::Internal(format!("批量软删除失败: {}", e)))?;
-    }
+    repo::batch_update_status_if_not(conn, &descendant_ids, "deleted", &now, "deleted")
+        .map_err(|e| AppError::Internal(format!("批量软删除失败: {}", e)))?;
 
     repo::get_version(conn, id)
         .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))
@@ -898,7 +664,6 @@ fn batch_delete_block(
 fn batch_move_block(
     conn: &rusqlite::Connection,
     id: &str,
-    version: u64,
     target_parent_id: Option<&str>,
     before_id: Option<&str>,
     after_id: Option<&str>,
@@ -909,10 +674,6 @@ fn batch_move_block(
 
     let current = repo::find_by_id(conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
-
-    if version != current.version {
-        return Err(AppError::VersionConflict(current.version));
-    }
 
     let target_parent = target_parent_id
         .unwrap_or(&current.parent_id)
@@ -945,12 +706,12 @@ fn batch_move_block(
 
     let now = now_iso();
     let rows = repo::update_parent_position(
-        conn, id, &target_parent, &new_position, &now, version,
+        conn, id, &target_parent, &new_position, &now,
     )
     .map_err(|e| AppError::Internal(format!("批量移动 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::VersionConflict(current.version));
+        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
     }
 
     repo::get_version(conn, id)
@@ -1092,7 +853,7 @@ fn get_sibling_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::tests::init_test_db;
+    use crate::repo::tests::init_test_db;
     use crate::model::BlockType;
 
     // ── get_root ─────────────────────────────────────────
@@ -1282,10 +1043,10 @@ mod tests {
         }).unwrap();
 
         let updated = update_block(&db, &created.id, UpdateBlockReq {
+            block_type: None,
             content: Some("updated".to_string()),
             properties: None,
             properties_mode: "merge".to_string(),
-            version: 1,
         }).unwrap();
 
         assert_eq!(updated.content, b"updated");
@@ -1310,10 +1071,10 @@ mod tests {
         let mut new_props = HashMap::new();
         new_props.insert("key2".to_string(), "val2".to_string());
         let updated = update_block(&db, &created.id, UpdateBlockReq {
+            block_type: None,
             content: None,
             properties: Some(new_props),
             properties_mode: "merge".to_string(),
-            version: 1,
         }).unwrap();
 
         assert_eq!(updated.properties.get("key1").unwrap(), "val1");
@@ -1338,41 +1099,14 @@ mod tests {
         let mut new_props = HashMap::new();
         new_props.insert("key2".to_string(), "val2".to_string());
         let updated = update_block(&db, &created.id, UpdateBlockReq {
+            block_type: None,
             content: None,
             properties: Some(new_props),
             properties_mode: "replace".to_string(),
-            version: 1,
         }).unwrap();
 
         assert!(updated.properties.get("key1").is_none()); // 被替换掉
         assert_eq!(updated.properties.get("key2").unwrap(), "val2");
-    }
-
-    #[test]
-    fn update_block_version_conflict() {
-        let db = init_test_db();
-
-        let created = create_block(&db, CreateBlockReq {
-            parent_id: crate::model::ROOT_ID.to_string(),
-            block_type: BlockType::Paragraph,
-            content_type: None,
-            content: "test".to_string(),
-            properties: HashMap::new(),
-            after_id: None,
-        }).unwrap();
-
-        let result = update_block(&db, &created.id, UpdateBlockReq {
-            content: Some("should fail".to_string()),
-            properties: None,
-            properties_mode: "merge".to_string(),
-            version: 999, // 错误版本号
-        });
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            AppError::VersionConflict(v) => assert_eq!(v, 1),
-            other => panic!("预期 VersionConflict，实际: {:?}", other),
-        }
     }
 
     // ── delete_block ─────────────────────────────────────
@@ -1390,7 +1124,7 @@ mod tests {
             after_id: None,
         }).unwrap();
 
-        let result = delete_block(&db, &created.id, 1).unwrap();
+        let result = delete_block(&db, &created.id).unwrap();
         assert_eq!(result.id, created.id);
         assert_eq!(result.cascade_count, 0); // 叶子块无后代
 
@@ -1408,7 +1142,7 @@ mod tests {
 
         let doc = create_document(&db, "Cascade Doc".to_string(), None, None).unwrap();
 
-        let result = delete_block(&db, &doc.id, 1).unwrap();
+        let result = delete_block(&db, &doc.id).unwrap();
         assert!(result.cascade_count >= 1); // 至少包含默认段落
 
         // 文档和段落都不可查
@@ -1419,29 +1153,12 @@ mod tests {
     fn delete_root_block_forbidden() {
         let db = init_test_db();
 
-        let result = delete_block(&db, crate::model::ROOT_ID, 1);
+        let result = delete_block(&db, crate::model::ROOT_ID);
         assert!(result.is_err());
         match result.unwrap_err() {
             AppError::BadRequest(msg) => assert!(msg.contains("不可删除")),
             other => panic!("预期 BadRequest，实际: {:?}", other),
         }
-    }
-
-    #[test]
-    fn delete_block_version_conflict() {
-        let db = init_test_db();
-
-        let created = create_block(&db, CreateBlockReq {
-            parent_id: crate::model::ROOT_ID.to_string(),
-            block_type: BlockType::Paragraph,
-            content_type: None,
-            content: "test".to_string(),
-            properties: HashMap::new(),
-            after_id: None,
-        }).unwrap();
-
-        let result = delete_block(&db, &created.id, 999);
-        assert!(result.is_err());
     }
 
     // ── restore_block ────────────────────────────────────
@@ -1459,13 +1176,9 @@ mod tests {
             after_id: None,
         }).unwrap();
 
-        delete_block(&db, &created.id, 1).unwrap();
+        delete_block(&db, &created.id).unwrap();
 
-        // 获取删除后的 version
-        let deleted = get_block_include_deleted(&db, &created.id, true).unwrap();
-        let new_version = deleted.version;
-
-        let result = restore_block(&db, &created.id, new_version).unwrap();
+        let result = restore_block(&db, &created.id).unwrap();
         assert_eq!(result.id, created.id);
 
         // 恢复后可以正常查询
@@ -1486,7 +1199,7 @@ mod tests {
             after_id: None,
         }).unwrap();
 
-        let result = restore_block(&db, &created.id, 1);
+        let result = restore_block(&db, &created.id);
         assert!(result.is_err());
     }
 
@@ -1504,7 +1217,6 @@ mod tests {
             target_parent_id: Some(doc1.id.clone()),
             before_id: None,
             after_id: None,
-            version: 1,
         }).unwrap();
 
         assert_eq!(moved.parent_id, doc1.id);
@@ -1519,7 +1231,6 @@ mod tests {
             target_parent_id: Some("any".to_string()),
             before_id: None,
             after_id: None,
-            version: 1,
         });
         assert!(result.is_err());
     }
@@ -1535,7 +1246,6 @@ mod tests {
             target_parent_id: Some(doc.id.clone()),
             before_id: None,
             after_id: None,
-            version: 1,
         });
         assert!(result.is_err());
         match result.unwrap_err() {

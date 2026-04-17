@@ -32,6 +32,7 @@ pub const CREATE_BLOCKS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS blocks (
     id              TEXT PRIMARY KEY,                -- 20 位 Block ID
     parent_id       TEXT NOT NULL,                   -- 父块 ID（Document 根节点指向自身）
+    document_id     TEXT NOT NULL,                   -- 所属文档 ID（文档块指向自身）
     position        TEXT NOT NULL,                   -- Fractional Index（字符串，字典序排序）
     block_type      TEXT NOT NULL,                   -- JSON: {"type":"heading","level":2}
     content_type    TEXT NOT NULL,                   -- markdown / empty / query
@@ -65,8 +66,10 @@ pub const CREATE_BLOCKS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_blocks_modified ON blocks(modified);",
     // 按 author 查询（Agent 操作审计）
     "CREATE INDEX IF NOT EXISTS idx_blocks_author ON blocks(author);",
+    // 按 document_id 查询（替代递归 CTE，O(n) 等值查询）
+    "CREATE INDEX IF NOT EXISTS idx_blocks_document_id ON blocks(document_id, status, position);",
     // 加密块过滤
-    "CREATE INDEX IF NOT EXISTS idx_blocks_encrypted ON blocks(encrypted) WHERE encrypted = 1;",
+    "CREATE INDEX IF NOT EXISTS idx_blocks_encrypted ON blocks(encrypted) WHERE encrypted = 1;"
 ];
 
 // ─── oplog 表 ──────────────────────────────────────────────────

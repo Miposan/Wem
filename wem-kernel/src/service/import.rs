@@ -12,9 +12,9 @@
 
 use crate::api::request::ImportTextReq;
 use crate::api::response::ImportResult;
-use crate::db::block_repo as repo;
-use crate::db::block_repo::InsertBlockParams;
-use crate::db::Db;
+use crate::repo::block_repo as repo;
+use crate::repo::block_repo::InsertBlockParams;
+use crate::repo::Db;
 use crate::error::AppError;
 use crate::model::Block;
 use crate::parser;
@@ -67,12 +67,20 @@ pub fn import_text(db: &Db, req: ImportTextReq) -> Result<ImportResult, AppError
         root.content = title.clone().into_bytes();
     }
 
-    // 5. 批量插入
-    // TODO: 事务包裹（目前遵循现有代码风格，逐条 INSERT）
-    insert_block_from_model(&conn, &root)?;
-    for child in &parse_result.children {
-        insert_block_from_model(&conn, child)?;
+    // 5. 事务包裹批量插入（失败时整体回滚，不会半导入）
+    conn.execute_batch("BEGIN")?;
+    let insert_result = (|| -> Result<(), AppError> {
+        insert_block_from_model(&conn, &root)?;
+        for child in &parse_result.children {
+            insert_block_from_model(&conn, child)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = insert_result {
+        conn.execute_batch("ROLLBACK").ok();
+        return Err(e);
     }
+    conn.execute_batch("COMMIT")?;
 
     // 6. 返回
     Ok(ImportResult {
@@ -91,6 +99,7 @@ fn insert_block_from_model(conn: &rusqlite::Connection, block: &Block) -> Result
         &InsertBlockParams {
             id: block.id.clone(),
             parent_id: block.parent_id.clone(),
+            document_id: block.document_id.clone(),
             position: block.position.clone(),
             block_type: serde_json::to_string(&block.block_type).unwrap_or_default(),
             content_type: block.content_type.as_str().to_string(),
@@ -116,7 +125,7 @@ fn insert_block_from_model(conn: &rusqlite::Connection, block: &Block) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::tests::init_test_db;
+    use crate::repo::tests::init_test_db;
     use crate::model::ROOT_ID;
     use crate::model::BlockType;
     use crate::service::block;

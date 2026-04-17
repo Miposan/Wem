@@ -11,7 +11,7 @@ use crate::api::query::{HistoryQuery, RollbackReq};
 use crate::api::response::{
     HistoryResponse, RollbackResponse, SnapshotResponse, VersionResponse,
 };
-use crate::db::Db;
+use crate::repo::Db;
 use crate::error::{AppError, ApiResponse};
 use crate::service::oplog;
 
@@ -67,7 +67,7 @@ pub async fn rollback_block(
     Json(req): Json<RollbackReq>,
 ) -> Result<Json<ApiResponse<RollbackResponse>>, AppError> {
     let result = tokio::task::spawn_blocking(move || {
-        oplog::rollback_block(&db, &id, req.target_version, req.current_version)
+        oplog::rollback_block(&db, &id, req.target_version)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;

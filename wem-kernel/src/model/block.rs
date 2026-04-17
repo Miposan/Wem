@@ -53,6 +53,8 @@ pub struct Block {
     pub id: String,
     /// 父块 ID（Document 根节点指向自身）
     pub parent_id: String,
+    /// 所属文档 ID（文档块指向自身，内容块指向文档根块）
+    pub document_id: String,
     /// Fractional Index 排序位置（字典序字符串）
     pub position: String,
     /// Block 类型（Paragraph、Heading、Document 等）
@@ -98,6 +100,7 @@ impl Block {
         Ok(Block {
             id: row.get("id")?,
             parent_id: row.get("parent_id")?,
+            document_id: row.get("document_id")?,
             position: row.get("position")?,
             block_type: serde_json::from_str(&block_type_str)
                 .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?,

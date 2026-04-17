@@ -104,8 +104,8 @@ export function getDocument(id: string) {
   return get<DocumentContentResult>(`/documents/${id}`)
 }
 
-export function deleteDocument(id: string, version: number) {
-  return del<DeleteResult>(`/documents/${id}`, { version })
+export function deleteDocument(id: string) {
+  return del<DeleteResult>(`/documents/${id}`)
 }
 
 export function getDocumentChildren(id: string) {
@@ -130,16 +130,16 @@ export function updateBlock(id: string, req: UpdateBlockReq) {
   return put<Block>(`/blocks/${id}`, req)
 }
 
-export function deleteBlock(id: string, version: number) {
-  return del<DeleteResult>(`/blocks/${id}`, { version })
+export function deleteBlock(id: string) {
+  return del<DeleteResult>(`/blocks/${id}`)
 }
 
 export function moveBlock(id: string, req: MoveBlockReq) {
   return post<Block>(`/blocks/${id}/move`, req)
 }
 
-export function restoreBlock(id: string, version: number) {
-  return post<RestoreResult>(`/blocks/${id}/restore`, { version })
+export function restoreBlock(id: string) {
+  return post<RestoreResult>(`/blocks/${id}/restore`)
 }
 
 // getChildren 已删除：MVP 阶段通过 getDocument 获取完整内容树

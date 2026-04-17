@@ -5,14 +5,6 @@
 
 use serde::Deserialize;
 
-/// 删除/恢复请求中的 version 参数
-///
-/// `?version=N`
-#[derive(Debug, Deserialize)]
-pub struct VersionQuery {
-    pub version: u64,
-}
-
 /// 获取 Block 时的查询参数
 ///
 /// `?include_deleted=true`
@@ -62,6 +54,4 @@ fn default_history_limit() -> u32 {
 pub struct RollbackReq {
     /// 回滚到的目标版本号
     pub target_version: u64,
-    /// 当前版本号（乐观锁）
-    pub current_version: u64,
 }

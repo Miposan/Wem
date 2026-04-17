@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
-import { getDocument, type BlockNode } from '@/api/client'
+import { useEffect, useState, useCallback } from 'react'
+import { getDocument, updateBlock, type BlockNode } from '@/api/client'
+import { WemEditor } from '@/components/editor'
+import '@/components/editor/editor.css'
 
 interface Props {
   documentId: string | null
@@ -9,6 +11,21 @@ export default function EditorPage({ documentId }: Props) {
   const [tree, setTree] = useState<BlockNode[]>([])
   const [title, setTitle] = useState('')
   const [loading, setLoading] = useState(false)
+
+  const handleTitleBlur = useCallback(
+    (e: React.FocusEvent<HTMLHeadingElement>) => {
+      const newTitle = e.currentTarget.textContent || ''
+      setTitle(newTitle)
+      // 持久化标题到后端：更新文档根块的 properties
+      if (documentId) {
+        updateBlock(documentId, {
+          properties: { title: newTitle },
+          properties_mode: 'merge',
+        }).catch((err) => console.error('标题保存失败:', err))
+      }
+    },
+    [documentId],
+  )
 
   useEffect(() => {
     if (!documentId) {
@@ -46,54 +63,30 @@ export default function EditorPage({ documentId }: Props) {
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-8 py-12">
         {/* Document Title */}
-        <h1 className="text-3xl font-bold mb-8 outline-none" contentEditable suppressContentEditableWarning>
+        <h1
+          className="text-3xl font-bold mb-8 outline-none"
+          contentEditable
+          suppressContentEditableWarning
+          onBlur={handleTitleBlur}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              // 聚焦到编辑器第一个块
+              const firstBlock = document.querySelector('[data-block-id] [contenteditable]') as HTMLElement | null
+              firstBlock?.focus()
+            }
+          }}
+        >
           {title}
         </h1>
 
-        {/* Block Tree (flat for now — will become rich editor) */}
-        <div className="space-y-2">
-          {tree.map((node) => (
-            <BlockRenderer key={node.id} node={node} />
-          ))}
-        </div>
-
-        {tree.length === 0 && (
-          <p className="text-muted-foreground text-sm">
-            文档为空，开始输入内容…
-          </p>
-        )}
+        {/* Wem Editor — 自研编辑器内部处理保存 */}
+        <WemEditor
+          blocks={tree}
+          documentId={documentId!}
+          placeholder="输入内容，或输入 / 插入块…"
+        />
       </div>
     </main>
-  )
-}
-
-function BlockRenderer({ node }: { node: BlockNode }) {
-  const typeTag = node.block_type.type
-
-  const Tag =
-    typeTag === 'heading'
-      ? ((node.block_type as { type: 'heading'; level: number }).level === 1 ? 'h2' :
-         (node.block_type as { type: 'heading'; level: number }).level === 2 ? 'h3' : 'h4')
-      : typeTag === 'thematicBreak'
-        ? 'hr'
-        : 'p'
-
-  if (typeTag === 'thematicBreak') {
-    return <hr className="border-border my-4" />
-  }
-
-  return (
-    <div className="group relative rounded hover:bg-accent/20 px-2 py-1 -mx-2 transition-colors">
-      <Tag className="outline-none" contentEditable suppressContentEditableWarning>
-        {node.content}
-      </Tag>
-      {node.children.length > 0 && (
-        <div className="pl-4 border-l-2 border-border/50 space-y-1">
-          {node.children.map((child) => (
-            <BlockRenderer key={child.id} node={child} />
-          ))}
-        </div>
-      )}
-    </div>
   )
 }

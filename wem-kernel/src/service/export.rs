@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use crate::api::response::ExportResult;
-use crate::db::block_repo as repo;
-use crate::db::Db;
+use crate::repo::block_repo as repo;
+use crate::repo::Db;
 use crate::error::AppError;
 use crate::model::Block;
 use crate::parser;
@@ -74,7 +74,7 @@ pub fn export_text(db: &Db, doc_id: &str, format: &str) -> Result<ExportResult, 
 mod tests {
     use super::*;
     use crate::api::request::ImportTextReq;
-    use crate::db::tests::init_test_db;
+    use crate::repo::tests::init_test_db;
     use crate::model::ROOT_ID;
     use crate::service::block;
     use crate::service::import;

@@ -9,7 +9,7 @@ mod api;        // API 数据传输对象（请求/响应/查询参数）
 mod config;     // 全局配置（端口、数据库路径）
 mod error;      // 统一错误处理 + API 响应格式
 mod model;      // 数据模型（Block、BlockType 等）
-mod db;         // 数据库层（SQLite 连接、建表）
+mod repo;        // 数据访问层（SQLite 连接、建表、查询）
 mod service;    // 业务逻辑层（Block CRUD、树操作）
 mod handler;    // HTTP 处理层（Axum route handlers）
 mod parser;     // 文本格式转换（Markdown ↔ Block 树，可扩展）
@@ -22,9 +22,12 @@ use tower_http::cors::{CorsLayer, Any};
 
 #[tokio::main]
 async fn main() {
-    // 初始化数据库
-    let db = db::init_db(config::DB_PATH)
+    // 加载配置（配置文件 + 环境变量）
+    let cfg = config::load();
+    let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
+    let db = repo::init_db(&cfg.database.path)
         .expect("数据库初始化失败");
+
 
     // 创建 Axum 路由器，注册所有 API 路由
     let app = Router::new()
@@ -67,6 +70,11 @@ async fn main() {
         .route("/api/v1/documents/{id}/export",
             get(handler::export_text))
 
+        // ─── SSE 实时事件 ─────────────────
+        // 前端 EventSource 连接，接收文档变更推送
+        .route("/api/v1/documents/{id}/events",
+            get(handler::document_events))
+
         // ─── Oplog / 历史版本 API ─────────
         // 获取 Block 变更历史
         .route("/api/v1/blocks/{id}/history",
@@ -93,11 +101,11 @@ async fn main() {
         );
 
     // 绑定 TCP 监听端口
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config::PORT))
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("Failed to bind port");
 
-    println!("🚀 Wem Kernel listening on port {}", config::PORT);
+    println!("🚀 Wem Kernel listening on {}", addr);
     println!("📋 API 端点:");
     println!("   GET    /api/v1/health");
     println!("   GET    /api/v1/root");
@@ -116,6 +124,7 @@ async fn main() {
     println!("   GET    /api/v1/blocks/{{id}}/children");
     println!("   POST   /api/v1/blocks/import");
     println!("   GET    /api/v1/documents/{{id}}/export");
+    println!("   GET    /api/v1/documents/{{id}}/events  [SSE]");
 
     // 启动 HTTP 服务器
     axum::serve(listener, app)

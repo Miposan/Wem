@@ -51,8 +51,6 @@ impl<T: Serialize> ApiResponse<T> {
 pub const CODE_BAD_REQUEST: i32 = 40001;
 /// Block 不存在
 pub const CODE_NOT_FOUND: i32 = 40401;
-/// 版本冲突（乐观锁：客户端传的 version 已过期）
-pub const CODE_VERSION_CONFLICT: i32 = 40901;
 /// 循环引用（移动 Block 时目标父块是被移动块的后代）
 pub const CODE_CYCLE_REFERENCE: i32 = 40902;
 /// 内部错误（数据库异常等不可预期错误）
@@ -65,7 +63,6 @@ pub const CODE_INTERNAL: i32 = 50001;
 /// 每个变体对应一种错误场景，通过 IntoResponse 自动转为 HTTP 响应：
 /// - BadRequest      → 400 + code:40001
 /// - NotFound        → 404 + code:40401
-/// - VersionConflict → 409 + code:40901（data 含当前 version）
 /// - CycleReference  → 409 + code:40902
 /// - Internal        → 500 + code:50001
 #[derive(Debug, thiserror::Error)]
@@ -77,10 +74,6 @@ pub enum AppError {
     /// Block 不存在，携带 Block ID 方便排查
     #[error("Block not found: {0}")]
     NotFound(String),
-
-    /// 乐观锁版本冲突，携带服务器上的当前版本号
-    #[error("Version conflict: current version is {0}")]
-    VersionConflict(u64),
 
     /// 移动操作导致循环引用
     #[error("Cycle reference detected")]
@@ -112,13 +105,6 @@ impl IntoResponse for AppError {
                 CODE_NOT_FOUND,
                 format!("Block not found: {}", id),
                 None,
-            ),
-            AppError::VersionConflict(v) => (
-                StatusCode::CONFLICT,
-                CODE_VERSION_CONFLICT,
-                self.to_string(),
-                // 冲突时 data 包含当前版本号，方便客户端重试
-                Some(serde_json::json!({"current_version": v})),
             ),
             AppError::CycleReference => (
                 StatusCode::CONFLICT,

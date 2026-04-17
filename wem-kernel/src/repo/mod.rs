@@ -48,9 +48,12 @@ pub fn init_db(path: &str) -> Result<Db, AppError> {
     conn.execute_batch(schema::PRAGMAS)
         .map_err(|e| AppError::Internal(format!("设置 PRAGMA 失败: {}", e)))?;
 
-    // 建表
+    // 建表（IF NOT EXISTS：新库才生效，旧库保持原样）
     conn.execute_batch(schema::CREATE_BLOCKS_TABLE)
         .map_err(|e| AppError::Internal(format!("建表失败: {}", e)))?;
+
+    // 补列：旧库可能缺少新增字段，逐个尝试添加，已存在则跳过
+    apply_schema_patches(&conn);
 
     // 建索引
     for idx_sql in schema::CREATE_BLOCKS_INDEXES {
@@ -81,6 +84,44 @@ pub fn init_db(path: &str) -> Result<Db, AppError> {
     Ok(Arc::new(Mutex::new(conn)))
 }
 
+/// 补列：对已有数据库尝试添加新增字段
+///
+/// 每次 DDL 新增字段时，在这里追加一条 `ALTER TABLE ... ADD COLUMN`。
+/// SQLite 不支持 `IF NOT EXISTS` 语法用于列，所以用 "try and ignore" 策略——
+/// 列已存在时 SQLite 会报错 `duplicate column name`，我们静默跳过即可。
+///
+/// 新建的数据库不会走到这里（`CREATE TABLE IF NOT EXISTS` 已经包含全部字段），
+/// 但执行一下也无害。
+fn apply_schema_patches(conn: &Connection) {
+    // ---- document_id (v2) ----
+    // 所属文档 ID：文档块指向自身，内容块指向文档根块
+    let _ = conn.execute_batch(
+        "ALTER TABLE blocks ADD COLUMN document_id TEXT NOT NULL DEFAULT '';"
+    );
+    // 回填：让已有数据拥有合理的 document_id
+    // 1. 根块 → 指向自身
+    let _ = conn.execute(
+        "UPDATE blocks SET document_id = id WHERE id = ?1 AND document_id = ''",
+        [ROOT_ID],
+    );
+    // 2. 文档块（parent_id = ROOT_ID 的 document 类型）→ 指向自身
+    let _ = conn.execute_batch(
+        "UPDATE blocks SET document_id = id \
+         WHERE parent_id = '/' AND id != '/' AND document_id = '' \
+         AND json_extract(block_type, '$.type') = 'document';"
+    );
+    // 3. 内容块 → 指向其所属文档（沿 parent_id 链找到文档块）
+    let _ = conn.execute_batch(
+        "UPDATE blocks SET document_id = parent_id \
+         WHERE document_id = '' AND parent_id != '/';"
+    );
+
+    // ---- 未来新增字段在此追加 ----
+    // let _ = conn.execute_batch(
+    //     "ALTER TABLE blocks ADD COLUMN new_field TEXT NOT NULL DEFAULT '';"
+    // );
+}
+
 /// 确保全局根块 "/" 存在
 ///
 /// 根块是所有文档的挂载点，类似文件系统的根目录。
@@ -103,10 +144,10 @@ fn ensure_root_block(conn: &Connection) -> Result<(), AppError> {
 
     conn.execute(
         "INSERT INTO blocks (
-            id, parent_id, position, block_type, content_type,
+            id, parent_id, document_id, position, block_type, content_type,
             content, properties, version, status, schema_version,
             author, encrypted, created, modified
-        ) VALUES (?1, ?1, ?2, ?3, ?4, X'', '{}', 1, 'normal', 1, 'system', 0, ?5, ?5)",
+        ) VALUES (?1, ?1, ?1, ?2, ?3, ?4, X'', '{}', 1, 'normal', 1, 'system', 0, ?5, ?5)",
         rusqlite::params![
             ROOT_ID,
             "a0",                                    // position: 第一个
