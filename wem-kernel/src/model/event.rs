@@ -65,6 +65,12 @@ pub enum BlockEvent {
         #[serde(flatten)]
         block: Block,
     },
+    /// 批量操作完成（前端应 refetch 整个文档）
+    BlocksBatchChanged {
+        document_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
+    },
 }
 
 impl BlockEvent {
@@ -76,6 +82,7 @@ impl BlockEvent {
             Self::BlockDeleted { document_id, .. } => document_id,
             Self::BlockMoved { document_id, .. } => document_id,
             Self::BlockRestored { document_id, .. } => document_id,
+            Self::BlocksBatchChanged { document_id, .. } => document_id,
         }
     }
 
@@ -87,6 +94,7 @@ impl BlockEvent {
             Self::BlockDeleted { .. } => "block_deleted",
             Self::BlockMoved { .. } => "block_moved",
             Self::BlockRestored { .. } => "block_restored",
+            Self::BlocksBatchChanged { .. } => "blocks_batch_changed",
         }
     }
 }

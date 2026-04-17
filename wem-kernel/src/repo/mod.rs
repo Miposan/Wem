@@ -24,6 +24,20 @@ pub use crate::model::ROOT_ID;
 /// 后续可升级为连接池（如 r2d2-sqlite）。
 pub type Db = Arc<Mutex<Connection>>;
 
+/// 获取数据库锁，自动恢复被毒化的 Mutex
+///
+/// 如果某个线程在持有锁期间 panic，Mutex 会被标记为“毒化”，
+/// 后续 `.lock().unwrap()` 会 panic。这里恢复毒化锁以保证服务可用。
+pub fn lock_db(db: &Db) -> std::sync::MutexGuard<'_, Connection> {
+    match db.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("数据库 Mutex 被毒化，恢复中...");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// 初始化数据库
 ///
 /// 1. 确保数据库文件目录存在（如 `wem-data/`）
@@ -95,53 +109,63 @@ pub fn init_db(path: &str) -> Result<Db, AppError> {
 fn apply_schema_patches(conn: &Connection) {
     // ---- document_id (v2) ----
     // 所属文档 ID：文档块指向自身，内容块指向文档根块
-    let _ = conn.execute_batch(
+    if let Err(e) = conn.execute_batch(
         "ALTER TABLE blocks ADD COLUMN document_id TEXT NOT NULL DEFAULT '';"
-    );
+    ) {
+        if !e.to_string().contains("duplicate column") {
+            tracing::warn!("schema patch document_id ALTER 失败: {}", e);
+        }
+    }
     // 回填：让已有数据拥有合理的 document_id
     // 1. 根块 → 指向自身
-    let _ = conn.execute(
+    if let Err(e) = conn.execute(
         "UPDATE blocks SET document_id = id WHERE id = ?1 AND document_id = ''",
         [ROOT_ID],
-    );
+    ) {
+        tracing::warn!("schema patch 根块 document_id 回填失败: {}", e);
+    }
     // 2. 文档块（parent_id = ROOT_ID 的 document 类型）→ 指向自身
-    let _ = conn.execute_batch(
+    if let Err(e) = conn.execute_batch(
         "UPDATE blocks SET document_id = id \
          WHERE parent_id = '/' AND id != '/' AND document_id = '' \
          AND json_extract(block_type, '$.type') = 'document';"
-    );
+    ) {
+        tracing::warn!("schema patch 文档块 document_id 回填失败: {}", e);
+    }
     // 3. 内容块 → 指向其所属文档（沿 parent_id 链找到文档块）
-    let _ = conn.execute_batch(
+    if let Err(e) = conn.execute_batch(
         "UPDATE blocks SET document_id = parent_id \
          WHERE document_id = '' AND parent_id != '/';"
-    );
+    ) {
+        tracing::warn!("schema patch 内容块 document_id 回填失败: {}", e);
+    }
 
     // ---- 未来新增字段在此追加 ----
-    // let _ = conn.execute_batch(
+    // if let Err(e) = conn.execute_batch(
     //     "ALTER TABLE blocks ADD COLUMN new_field TEXT NOT NULL DEFAULT '';"
-    // );
+    // ) {
+    //     if !e.to_string().contains("duplicate column") {
+    //         tracing::warn!("schema patch new_field ALTER 失败: {}", e);
+    //     }
+    // }
 
     // ---- document_id 修正（v2.1）----
-    // 旧数据中文档块的 document_id 可能是 ROOT_ID（而不是指向自身），
-    // 导致 create_block 为子块继承了错误的 document_id，
-    // find_descendants 按 document_id 查询时无法命中这些子块。
-    //
-    // 修正策略：
-    // 1. 文档块（block_type = document）→ document_id = id（指向自身）
-    // 2. 内容块 → 沿 parent 链找到所属文档块，取其 id
-    //    简化实现：如果 parent 是文档块，直接 document_id = parent_id
-    let _ = conn.execute_batch(
+    if let Err(e) = conn.execute_batch(
         "UPDATE blocks SET document_id = id \
          WHERE json_extract(block_type, '$.type') = 'document' \
          AND document_id != id;"
-    );
+    ) {
+        tracing::warn!("schema patch 文档块 document_id 修正失败: {}", e);
+    }
     // 内容块：如果 parent 是文档块，document_id 应 = parent_id
-    let _ = conn.execute_batch(
+    if let Err(e) = conn.execute_batch(
         "UPDATE blocks SET document_id = parent_id \
          WHERE json_extract(block_type, '$.type') != 'document' \
          AND parent_id IN (SELECT id FROM blocks WHERE json_extract(block_type, '$.type') = 'document') \
          AND document_id != parent_id;"
-    );
+    ) {
+        tracing::warn!("schema patch 内容块 document_id 修正失败: {}", e);
+    }
 }
 
 /// 确保全局根块 "/" 存在

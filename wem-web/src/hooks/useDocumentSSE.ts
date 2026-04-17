@@ -46,12 +46,19 @@ export interface BlockRestoredEvent extends BlockEventPayload {
   type: 'block_restored'
 }
 
+export interface BlocksBatchChangedEvent {
+  type: 'blocks_batch_changed'
+  document_id: string
+  operation_id?: string
+}
+
 export type BlockEvent =
   | BlockCreatedEvent
   | BlockUpdatedEvent
   | BlockDeletedEvent
   | BlockMovedEvent
   | BlockRestoredEvent
+  | BlocksBatchChangedEvent
 
 // ─── Hook 回调 ───
 
@@ -66,6 +73,8 @@ export interface SSECallbacks {
   onBlockMoved?: (event: BlockMovedEvent) => void
   /** 块被恢复 */
   onBlockRestored?: (event: BlockRestoredEvent) => void
+  /** 批量操作完成，前端应 refetch */
+  onBlocksBatchChanged?: (event: BlocksBatchChangedEvent) => void
 }
 
 // ─── Hook ───
@@ -114,6 +123,9 @@ export function useDocumentSSE(
           case 'block_restored':
             cbs.onBlockRestored?.(event)
             break
+          case 'blocks_batch_changed':
+            cbs.onBlocksBatchChanged?.(event)
+            break
         }
       } catch (err) {
         console.error('[SSE] 解析事件失败:', err, e.data)
@@ -126,6 +138,7 @@ export function useDocumentSSE(
     es.addEventListener('block_deleted', handler)
     es.addEventListener('block_moved', handler)
     es.addEventListener('block_restored', handler)
+    es.addEventListener('blocks_batch_changed', handler)
 
     es.onerror = () => {
       console.warn('[SSE] 连接断开，将自动重连...')

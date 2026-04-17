@@ -165,6 +165,8 @@ pub struct CreateDocumentReq {
 /// `POST /api/v1/blocks/import`
 #[derive(Debug, Deserialize)]
 pub struct ImportTextReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// 源格式（"markdown" 或 "md"）
     pub format: String,
     /// 文本内容

@@ -56,7 +56,7 @@ pub fn get_block_history(
     block_id: &str,
     limit: u32,
 ) -> Result<Vec<HistoryEntry>, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 验证 Block 存在
     let _block = repo::find_by_id_raw(&conn, block_id)
@@ -101,7 +101,7 @@ pub fn get_version_content(
     block_id: &str,
     version: u64,
 ) -> Result<VersionContent, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 验证 Block 存在（含已删除）
     let current = repo::find_by_id_raw(&conn, block_id)
@@ -181,7 +181,7 @@ pub fn rollback_block(
     block_id: &str,
     target_version: u64,
 ) -> Result<RollbackResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 1. 验证当前 Block
     let current = repo::find_by_id(&conn, block_id)
@@ -253,7 +253,7 @@ pub fn create_snapshot(
     db: &Db,
     block_id: &str,
 ) -> Result<SnapshotResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     let block = repo::find_by_id_raw(&conn, block_id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在", block_id)))?;

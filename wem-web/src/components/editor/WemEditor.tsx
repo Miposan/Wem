@@ -108,6 +108,14 @@ export function WemEditor({
    */
   const pendingOperationIds = useRef<Set<string>>(new Set())
 
+  /** 将 operation_id 延迟清理，避免 SSE 事件到达时已被删除导致误判为外部事件 */
+  const addPendingOperationId = useCallback((id: string) => {
+    pendingOperationIds.current.add(id)
+    setTimeout(() => {
+      pendingOperationIds.current.delete(id)
+    }, 5000)
+  }, [])
+
   /** 取消指定块的 debounce 保存定时器（split/merge/delete 前调用，防止覆盖新数据） */
   const cancelPendingSave = useCallback((blockId: string) => {
     const saves = pendingTimers.current
@@ -231,6 +239,7 @@ export function WemEditor({
     onBlockDeleted: handleStructuralEvent,
     onBlockMoved: handleStructuralEvent,
     onBlockRestored: handleStructuralEvent,
+    onBlocksBatchChanged: handleStructuralEvent,
   })
 
   // ─── Command Context ───
@@ -258,16 +267,12 @@ export function WemEditor({
           undoManager.current.pushBeforeStructuralOp(treeRef.current, operation)
 
           const operationId = crypto.randomUUID()
-          pendingOperationIds.current.add(operationId)
-          try {
-            await execute(makeContext(operationId))
-          } finally {
-            pendingOperationIds.current.delete(operationId)
-          }
+          addPendingOperationId(operationId)
+          await execute(makeContext(operationId))
         },
       })
     },
-    [makeContext],
+    [makeContext, addPendingOperationId],
   )
 
   // ─── 内容变更（打字）→ debounce 保存 ───
@@ -532,9 +537,7 @@ export function WemEditor({
               const origBlock = postOpFlat[newIdx - 1]
               try {
                 await updateBlock(origBlock.id, { content: origBlock.content ?? '' })
-                // 新块需要 createBlock
-                const { createBlock: createBlk } = await import('@/api/client')
-                await createBlk({
+                await createBlock({
                   parent_id: documentId,
                   block_type: newBlock.block_type,
                   content: newBlock.content ?? '',
@@ -624,10 +627,11 @@ export function WemEditor({
     }
 
     // 后端执行逆操作（异步，不阻塞 UI）
-    executeInverseOp(entry, currentTree).catch((err) =>
-      console.error('[undo] 后端逆操作失败:', err),
-    )
-  }, [setTreeSync, executeInverseOp])
+    executeInverseOp(entry, currentTree).catch((err) => {
+      console.error('[undo] 后端逆操作失败:', err)
+      refetchDocument()
+    })
+  }, [setTreeSync, executeInverseOp, refetchDocument])
 
   /** 执行重做 */
   const handleRedo = useCallback(() => {
@@ -650,10 +654,11 @@ export function WemEditor({
     }
 
     // 后端重新执行正向操作
-    executeForwardOp(entry, currentTree).catch((err) =>
-      console.error('[redo] 后端正向操作失败:', err),
-    )
-  }, [setTreeSync, executeForwardOp])
+    executeForwardOp(entry, currentTree).catch((err) => {
+      console.error('[redo] 后端正向操作失败:', err)
+      refetchDocument()
+    })
+  }, [setTreeSync, executeForwardOp, refetchDocument])
 
   /** 键盘快捷键：Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y */
   const handleEditorKeyDown = useCallback(
@@ -691,7 +696,7 @@ export function WemEditor({
       if (treeRef.current.length > 0) return
 
       const operationId = crypto.randomUUID()
-      pendingOperationIds.current.add(operationId)
+      addPendingOperationId(operationId)
 
       createBlock({
         parent_id: documentId,
@@ -703,15 +708,11 @@ export function WemEditor({
         .then((created) => {
           const newBlock: BlockNode = { ...created, children: [] }
           setTreeSync(() => [newBlock])
-          // 下一帧聚焦，确保 DOM 已渲染
           requestAnimationFrame(() => focusBlock(created.id))
         })
         .catch((err) => console.error('[editor] 创建初始段落失败:', err))
-        .finally(() => {
-          pendingOperationIds.current.delete(operationId)
-        })
     },
-    [readonly, documentId, setTreeSync],
+    [readonly, documentId, setTreeSync, addPendingOperationId],
   )
 
   return (

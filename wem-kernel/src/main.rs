@@ -15,7 +15,8 @@ mod handler;    // HTTP 处理层（Axum route handlers）
 mod parser;     // 文本格式转换（Markdown ↔ Block 树，可扩展）
 mod util;       // 纯工具函数（零外部依赖的算法）
 
-use axum::{Router, routing::{get, post}};
+use axum::{Router, routing::{get, post}, extract::DefaultBodyLimit};
+use axum::http::header::HeaderValue;
 use tower_http::cors::{CorsLayer, Any};
 
 // ─── 启动入口 ───────────────────────────────────────────────────
@@ -65,10 +66,20 @@ async fn main() {
         // 注入数据库 State
         .with_state(db)
 
-        // CORS 中间件：允许前端开发服务器（如 Vite localhost:5173）跨域访问
+        // 请求体大小限制（10 MB）
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+
+        // CORS 中间件
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
+                .allow_origin(if cfg.server.cors_origin.is_empty() {
+                    tower_http::cors::AllowOrigin::any()
+                } else {
+                    tower_http::cors::AllowOrigin::exact(
+                        cfg.server.cors_origin.parse::<HeaderValue>()
+                            .expect("WEM_CORS_ORIGIN 不是合法的 Origin 值")
+                    )
+                })
                 .allow_methods(Any)
                 .allow_headers(Any),
         );
@@ -81,23 +92,27 @@ async fn main() {
     println!("🚀 Wem Kernel listening on {}", addr);
     println!("📋 API 端点:");
     println!("   GET    /api/v1/health");
-    println!("   GET    /api/v1/root");
-    println!("   GET    /api/v1/documents");
     println!("   POST   /api/v1/documents");
-    println!("   GET    /api/v1/documents/{{id}}");
-    println!("   GET    /api/v1/documents/{{id}}/tree");
-    println!("   DELETE /api/v1/documents/{{id}}");
-    println!("   POST   /api/v1/blocks");
-    println!("   POST   /api/v1/blocks/batch");
-    println!("   GET    /api/v1/blocks/{{id}}");
-    println!("   PUT    /api/v1/blocks/{{id}}");
-    println!("   DELETE /api/v1/blocks/{{id}}");
-    println!("   POST   /api/v1/blocks/{{id}}/move");
-    println!("   POST   /api/v1/blocks/{{id}}/restore");
-    println!("   GET    /api/v1/blocks/{{id}}/children");
-    println!("   POST   /api/v1/blocks/import");
-    println!("   GET    /api/v1/documents/{{id}}/export");
+    println!("   POST   /api/v1/documents/list");
+    println!("   POST   /api/v1/documents/get");
+    println!("   POST   /api/v1/documents/children");
+    println!("   POST   /api/v1/documents/delete");
+    println!("   POST   /api/v1/documents/export");
     println!("   GET    /api/v1/documents/{{id}}/events  [SSE]");
+    println!("   POST   /api/v1/blocks");
+    println!("   POST   /api/v1/blocks/get");
+    println!("   POST   /api/v1/blocks/update");
+    println!("   POST   /api/v1/blocks/delete");
+    println!("   POST   /api/v1/blocks/move");
+    println!("   POST   /api/v1/blocks/restore");
+    println!("   POST   /api/v1/blocks/split");
+    println!("   POST   /api/v1/blocks/merge");
+    println!("   POST   /api/v1/blocks/batch");
+    println!("   POST   /api/v1/blocks/import");
+    println!("   POST   /api/v1/blocks/history");
+    println!("   POST   /api/v1/blocks/version");
+    println!("   POST   /api/v1/blocks/rollback");
+    println!("   POST   /api/v1/blocks/snapshot");
 
     // 启动 HTTP 服务器
     axum::serve(listener, app)

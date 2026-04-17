@@ -31,7 +31,7 @@ pub fn create_document(
     parent_id: Option<String>,
     after_id: Option<String>,
 ) -> Result<Block, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     let doc_id = generate_block_id();
     let now = now_iso();
@@ -125,7 +125,7 @@ pub fn create_document(
 /// 用于编辑器直接递归渲染。子 document 类型的块会被排除。
 ///
 pub fn get_document_content(db: &Db, doc_id: &str) -> Result<DocumentContentResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 查询文档块本身
     let document = repo::find_by_id(&conn, doc_id)
@@ -156,7 +156,7 @@ pub fn get_document_content(db: &Db, doc_id: &str) -> Result<DocumentContentResu
 /// 只返回该文档下的直接子 document 块（一层），不含内容块。
 /// 用户展开某个子文档时，再请求该子文档的 /children 获取下一层。
 pub fn get_document_children(db: &Db, doc_id: &str) -> Result<DocumentChildrenResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 验证文档存在
     let _doc = repo::find_by_id(&conn, doc_id)
@@ -179,7 +179,7 @@ pub fn get_document_children(db: &Db, doc_id: &str) -> Result<DocumentChildrenRe
 /// 根文档 = 全局根块 "/" 的直接子 document 块。
 /// 按 position 排序，直接返回全部（不分页）。
 pub fn list_root_documents(db: &Db) -> Result<Vec<Block>, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     let blocks = repo::find_root_documents(&conn)
         .map_err(|e| AppError::Internal(format!("查询根文档失败: {}", e)))?;

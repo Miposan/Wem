@@ -13,6 +13,7 @@ use crate::api::response::{
 };
 use crate::repo::Db;
 use crate::error::{AppError, ApiResponse};
+use crate::model::event::BlockEvent;
 use crate::service::oplog;
 
 // ─── 历史查询 ──────────────────────────────────────────────────
@@ -67,13 +68,29 @@ pub async fn rollback_block(
     State(db): State<Db>,
     Json(req): Json<RollbackReq>,
 ) -> Result<Json<ApiResponse<RollbackResponse>>, AppError> {
-    let id = req.id;
+    let id = req.id.clone();
     let target_version = req.target_version;
+    let db_for_query = db.clone();
     let result = tokio::task::spawn_blocking(move || {
         oplog::rollback_block(&db, &id, target_version)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 查询回滚后的 block 以获取 document_id 用于广播
+    let blk = tokio::task::spawn_blocking(move || {
+        crate::service::block::get_block(&db_for_query, &req.id, false)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))?;
+
+    if let Ok(block) = blk {
+        crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
+            document_id: block.document_id.clone(),
+            operation_id: None,
+            block,
+        });
+    }
 
     Ok(Json(ApiResponse::ok(Some(RollbackResponse { result }))))
 }

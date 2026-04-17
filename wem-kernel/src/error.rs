@@ -112,12 +112,16 @@ impl IntoResponse for AppError {
                 self.to_string(),
                 None,
             ),
-            AppError::Internal(m) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                CODE_INTERNAL,
-                m.clone(),
-                None,
-            ),
+            AppError::Internal(m) => {
+                // 记录详细错误到日志，对客户端返回通用消息
+                tracing::error!("Internal error: {}", m);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    CODE_INTERNAL,
+                    "内部错误".to_string(),
+                    None,
+                )
+            }
         };
 
         // 组装成 { code, msg, data } 的 JSON

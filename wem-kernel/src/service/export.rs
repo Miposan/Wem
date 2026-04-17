@@ -31,7 +31,7 @@ use crate::parser;
 ///
 /// 参考 03-api-rest.md §3 "导出文档"
 pub fn export_text(db: &Db, doc_id: &str, format: &str) -> Result<ExportResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 1. 加载文档根（必须存在且未删除）
     let root = repo::find_by_id(&conn, doc_id)
@@ -83,6 +83,7 @@ mod tests {
     /// 辅助：导入 Markdown 并返回 doc_id
     fn import_md(db: &Db, content: &str) -> String {
         let result = import::import_text(db, ImportTextReq {
+            operation_id: None,
             format: "markdown".to_string(),
             content: content.to_string(),
             parent_id: None,

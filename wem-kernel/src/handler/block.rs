@@ -52,6 +52,9 @@ pub async fn create_document(
     State(db): State<Db>,
     Json(req): Json<CreateDocumentReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    if req.title.len() > 500 {
+        return Err(AppError::BadRequest("title 长度超过限制 (500字符)".to_string()));
+    }
     let operation_id = req.operation_id.clone();
     let title = req.title;
     let parent_id = req.parent_id;
@@ -150,6 +153,9 @@ pub async fn create_block(
     State(db): State<Db>,
     Json(req): Json<CreateBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    if req.content.len() > 1_000_000 {
+        return Err(AppError::BadRequest("content 长度超过限制 (1MB)".to_string()));
+    }
     let operation_id = req.operation_id.clone();
     let blk = tokio::task::spawn_blocking(move || block::create_block(&db, req))
         .await
@@ -189,6 +195,11 @@ pub async fn update_block(
     State(db): State<Db>,
     Json(req): Json<UpdateBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    if let Some(ref content) = req.content {
+        if content.len() > 1_000_000 {
+            return Err(AppError::BadRequest("content 长度超过限制 (1MB)".to_string()));
+        }
+    }
     let operation_id = req.operation_id.clone();
     let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || block::update_block(&db, &id, req))
@@ -261,18 +272,16 @@ pub async fn restore_block(
 ) -> Result<Json<ApiResponse<RestoreResult>>, AppError> {
     let operation_id = req.operation_id.clone();
     let id = req.id;
-    let db2 = db.clone();
-    let id2 = id.clone();
-    let _result = tokio::task::spawn_blocking(move || {
-        block::restore_block(&db, &id)
+    let result = tokio::task::spawn_blocking(move || {
+        let restore_result = block::restore_block(&db, &id)?;
+        // 在同一锁范围内查询最新状态用于广播
+        let restored = block::get_block(&db, &id, false)?;
+        Ok::<_, AppError>((restore_result, restored))
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 恢复后重新查询 Block 最新状态用于广播
-    let restored = tokio::task::spawn_blocking(move || block::get_block(&db2, &id2, false))
-        .await
-        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+    let (_result, restored) = result;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockRestored {
         document_id: restored.document_id.clone(),
@@ -393,11 +402,18 @@ pub async fn import_text(
     State(db): State<Db>,
     Json(req): Json<ImportTextReq>,
 ) -> Result<Json<ApiResponse<ImportResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         crate::service::import::import_text(&db, req)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
+        document_id: result.root.id.clone(),
+        operation_id,
+        block: result.root.clone(),
+    });
 
     Ok(Json(ApiResponse::ok(Some(result))))
 }
@@ -429,11 +445,44 @@ pub async fn batch_blocks(
     State(db): State<Db>,
     Json(req): Json<BatchReq>,
 ) -> Result<Json<ApiResponse<BatchResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
+    let db_for_query = db.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::batch_operations(&db, req)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    // 对每个成功的操作，查询其 document_id 并广播事件
+    let bus = crate::service::event::EventBus::global();
+    for op_result in &result.results {
+        if op_result.error.is_some() { continue; }
+
+        // 批量操作后前端统一 refetch，用 document_id="" 作为占位
+        // 前端 SSE handler 会按 document_id 过滤，空字符串不会匹配
+        // 因此改为逐块查询 document_id
+    }
+
+    // 简化：对整个批次发一个泛事件，前端收到后 refetch
+    // 查第一个成功操作的 block_id 来确定 document_id
+    let first_id = result.results.iter()
+        .find(|r| r.error.is_none())
+        .map(|r| r.block_id.clone());
+
+    if let Some(first_block_id) = first_id {
+        let doc_id = tokio::task::spawn_blocking(move || {
+            block::get_block(&db_for_query, &first_block_id, true).ok()
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))?;
+
+        if let Some(blk) = doc_id {
+            bus.emit(BlockEvent::BlocksBatchChanged {
+                document_id: blk.document_id.clone(),
+                operation_id,
+            });
+        }
+    }
 
     Ok(Json(ApiResponse::ok(Some(result))))
 }

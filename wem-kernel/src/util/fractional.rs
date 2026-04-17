@@ -161,7 +161,7 @@ pub fn generate_between(a: &str, b: &str) -> String {
             // a 在 i 之后没有更多字符，直接追加中间字符
             // 例如 "a0" 和 "a1" 之间 → "a0U"
             let candidate = format!("{}{}", prefix, MID_CHAR);
-            debug_assert!(
+            assert!(
                 a < candidate.as_str() && candidate.as_str() < b,
                 "生成的 position {} 不在 {} 和 {} 之间",
                 candidate,
@@ -175,12 +175,12 @@ pub fn generate_between(a: &str, b: &str) -> String {
             let new_suffix = generate_after(&suffix);
             let candidate = format!("{}{}", prefix, new_suffix);
             if candidate.as_str() < b {
-                debug_assert!(a < candidate.as_str(), "递增后应大于 a");
+                assert!(a < candidate.as_str(), "递增后应大于 a");
                 return candidate;
             }
             // 递增后超过了 b（极端情况），改用追加策略
             let candidate = format!("{}{}", a, MID_CHAR);
-            debug_assert!(
+            assert!(
                 a < candidate.as_str() && candidate.as_str() < b,
                 "无法在 {} 和 {} 之间生成 position",
                 a,
@@ -201,7 +201,7 @@ pub fn generate_between(a: &str, b: &str) -> String {
         }
         // generate_before 不行，尝试追加中间字符
         let candidate = format!("{}{}", a, MID_CHAR);
-        debug_assert!(
+        assert!(
             a < candidate.as_str() && candidate.as_str() < b,
             "无法在 {} 和 {} 之间生成 position",
             a,

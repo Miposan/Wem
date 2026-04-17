@@ -45,6 +45,8 @@ pub struct ServerConfig {
     pub port: u16,
     /// HTTP 绑定地址
     pub host: String,
+    /// CORS 允许的来源（空字符串表示允许所有）
+    pub cors_origin: String,
 }
 
 /// 数据库配置
@@ -80,6 +82,7 @@ impl Default for ServerConfig {
         Self {
             port: 6809,
             host: "0.0.0.0".to_string(),
+            cors_origin: String::new(),
         }
     }
 }
@@ -150,6 +153,9 @@ pub fn load() -> &'static Config {
         }
         if let Ok(host) = std::env::var("WEM_HOST") {
             config.server.host = host;
+        }
+        if let Ok(origin) = std::env::var("WEM_CORS_ORIGIN") {
+            config.server.cors_origin = origin;
         }
         if let Ok(path) = std::env::var("WEM_DB_PATH") {
             config.database.path = path;

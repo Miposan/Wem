@@ -4,12 +4,58 @@
 //! - 新建 Block 时的插入位置
 //! - 移动 Block 时的目标位置
 //! - 兄弟 Block 的位置查询
+//!
+//! 核心函数 `calculate_position` 统一处理所有场景，
+//! `calculate_insert_position` / `calculate_move_position` 是它的语义化封装。
 
 use crate::repo::block_repo as repo;
 use crate::error::AppError;
 use crate::util::fractional;
 
-/// 计算新 Block 的插入 position
+// ─── 核心计算 ──────────────────────────────────────────────────
+
+/// 在指定父块内，根据前后邻居计算新的 fractional index position。
+///
+/// - 同时指定 after 和 before → 插在两者之间
+/// - 只指定 after → 插在其后（如有后继兄弟则插在中间）
+/// - 只指定 before → 插在其前（如有前驱兄弟则插在中间）
+/// - 都不指定 → 追加到末尾
+///
+/// `after` / `before` 是兄弟块的 position 值（已验证属于 target_parent）。
+fn calculate_position(
+    parent_id: &str,
+    after: Option<&str>,
+    before: Option<&str>,
+) -> Result<String, AppError> {
+    match (after, before) {
+        (Some(ap), Some(bp)) => {
+            if ap >= bp {
+                return Err(AppError::BadRequest(
+                    "after 位置必须在 before 位置之前".to_string(),
+                ));
+            }
+            Ok(fractional::generate_between(ap, bp))
+        }
+        (Some(ap), None) => {
+            // 理论上应该查 after 的下一个兄弟来 generate_between，
+            // 但调用方已处理了 sibling 查询，这里不可能走到。
+            // 此分支保留作为安全兜底。
+            Ok(fractional::generate_after(ap))
+        }
+        (None, Some(bp)) => {
+            Ok(fractional::generate_before(bp))
+        }
+        (None, None) => {
+            // 调用方已处理了空列表 → generate_first 的场景
+            // 此处为兜底，不应走到
+            Ok(fractional::generate_first())
+        }
+    }
+}
+
+// ─── 语义化封装 ────────────────────────────────────────────────
+
+/// 计算新 Block 的插入 position。
 ///
 /// - 有 after_id → 插在 after_id 之后（如有后继兄弟则插入两者之间）
 /// - 无 after_id → 追加到末尾
@@ -20,26 +66,18 @@ pub(crate) fn calculate_insert_position(
 ) -> Result<String, AppError> {
     match after_id {
         Some(aid) => {
-            // 获取 after_block 的 position
-            let after_pos = repo::get_position(conn, aid, parent_id)
-                .map_err(|_| {
-                    AppError::BadRequest(format!(
-                        "after_id {} 不是 {} 的有效子块",
-                        aid, parent_id
-                    ))
-                })?;
+            let after_pos = resolve_sibling_position(conn, aid, parent_id)?;
 
-            // 查找 after_pos 之后紧邻的兄弟（用于生成 between）
             let next_pos = repo::get_next_sibling_position(conn, parent_id, &after_pos)
                 .map_err(|e| AppError::Internal(format!("查询后继兄弟失败: {}", e)))?;
 
-            match next_pos {
-                Some(np) => Ok(fractional::generate_between(&after_pos, &np)),
-                None => Ok(fractional::generate_after(&after_pos)),
-            }
+            calculate_position(
+                parent_id,
+                Some(&after_pos),
+                next_pos.as_deref(),
+            )
         }
         None => {
-            // 追加到末尾
             let max_pos = repo::get_max_position(conn, parent_id)
                 .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
 
@@ -51,7 +89,7 @@ pub(crate) fn calculate_insert_position(
     }
 }
 
-/// 计算移动操作的新 position
+/// 计算移动操作的新 position。
 ///
 /// 支持三种定位方式（优先级从高到低）：
 /// 1. 同时指定 before_id 和 after_id → 插在两者之间
@@ -65,49 +103,35 @@ pub(crate) fn calculate_move_position(
     after_id: Option<&str>,
 ) -> Result<String, AppError> {
     match (before_id, after_id) {
-        // 情况 1：同时指定 → 插在两者之间
         (Some(bid), Some(aid)) => {
-            let after_pos = get_sibling_position(conn, aid, target_parent_id)?;
-            let before_pos = get_sibling_position(conn, bid, target_parent_id)?;
-
-            if after_pos >= before_pos {
-                return Err(AppError::BadRequest(
-                    "after_id 的位置必须在 before_id 之前".to_string(),
-                ));
-            }
-
-            Ok(fractional::generate_between(&after_pos, &before_pos))
+            let after_pos = resolve_sibling_position(conn, aid, target_parent_id)?;
+            let before_pos = resolve_sibling_position(conn, bid, target_parent_id)?;
+            calculate_position(target_parent_id, Some(&after_pos), Some(&before_pos))
         }
-
-        // 情况 2：只指定 before_id → 插在之前
         (Some(bid), None) => {
-            let before_pos = get_sibling_position(conn, bid, target_parent_id)?;
+            let before_pos = resolve_sibling_position(conn, bid, target_parent_id)?;
 
-            // 查找 before_pos 之前紧邻的兄弟
             let prev_pos = repo::get_prev_sibling_position(conn, target_parent_id, &before_pos)
                 .map_err(|e| AppError::Internal(format!("查询前驱兄弟失败: {}", e)))?;
 
-            match prev_pos {
-                Some(pp) => Ok(fractional::generate_between(&pp, &before_pos)),
-                None => Ok(fractional::generate_before(&before_pos)),
-            }
+            calculate_position(
+                target_parent_id,
+                prev_pos.as_deref(),
+                Some(&before_pos),
+            )
         }
-
-        // 情况 3：只指定 after_id → 插在之后
         (None, Some(aid)) => {
-            let after_pos = get_sibling_position(conn, aid, target_parent_id)?;
+            let after_pos = resolve_sibling_position(conn, aid, target_parent_id)?;
 
-            // 查找 after_pos 之后紧邻的兄弟
             let next_pos = repo::get_next_sibling_position(conn, target_parent_id, &after_pos)
                 .map_err(|e| AppError::Internal(format!("查询后继兄弟失败: {}", e)))?;
 
-            match next_pos {
-                Some(np) => Ok(fractional::generate_between(&after_pos, &np)),
-                None => Ok(fractional::generate_after(&after_pos)),
-            }
+            calculate_position(
+                target_parent_id,
+                Some(&after_pos),
+                next_pos.as_deref(),
+            )
         }
-
-        // 情况 4：都不指定 → 追加到末尾
         (None, None) => {
             let max_pos = repo::get_max_position(conn, target_parent_id)
                 .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
@@ -120,10 +144,12 @@ pub(crate) fn calculate_move_position(
     }
 }
 
-/// 获取指定兄弟 Block 的 position
+// ─── 辅助函数 ──────────────────────────────────────────────────
+
+/// 获取指定兄弟 Block 的 position。
 ///
 /// 验证该 Block 是 target_parent 的子块且未删除。
-fn get_sibling_position(
+fn resolve_sibling_position(
     conn: &rusqlite::Connection,
     sibling_id: &str,
     target_parent_id: &str,

@@ -43,6 +43,17 @@ fn derive_document_id(parent: &Block) -> String {
     }
 }
 
+/// 从 parent_id 推断 document_id（不加载完整 Block）。
+/// Document 块的 document_id = 自身 id；其他块继承 parent 的 document_id。
+fn derive_document_id_from_parent(
+    conn: &rusqlite::Connection,
+    parent_id: &str,
+) -> Result<String, AppError> {
+    let parent = repo::find_by_id(conn, parent_id)
+        .map_err(|_| AppError::Internal(format!("查询 parent {} 失败", parent_id)))?;
+    Ok(derive_document_id(&parent))
+}
+
 /// 校验 heading level 是否在合法范围 1..=6 内
 fn validate_heading_level(block_type: &BlockType) -> Result<(), AppError> {
     if let BlockType::Heading { level } = block_type {
@@ -69,7 +80,7 @@ fn validate_heading_level(block_type: &BlockType) -> Result<(), AppError> {
 ///
 /// 参考 03-api-rest.md §3 "创建 Block"
 pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 1. 校验 block_type 合法性
     validate_heading_level(&req.block_type)?;
@@ -128,7 +139,7 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
 ///
 /// `include_deleted` 为 true 时也返回已软删除的块，默认只返回正常块。
 pub fn get_block(db: &Db, id: &str, include_deleted: bool) -> Result<Block, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
     let result = if include_deleted {
         repo::find_by_id_raw(&conn, id)
     } else {
@@ -149,7 +160,7 @@ pub fn get_block(db: &Db, id: &str, include_deleted: bool) -> Result<Block, AppE
 ///
 /// 参考 03-api-rest.md §3 "更新 Block"
 pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 校验 heading level 合法性
     if let Some(ref bt) = req.block_type {
@@ -157,7 +168,7 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
     }
 
     // 开启事务：update + heading 重组必须原子化
-    conn.execute_batch("BEGIN")
+    conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
     let result = update_block_inner(&conn, id, req);
@@ -168,8 +179,10 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
                 .map_err(|e| AppError::Internal(format!("提交事务失败: {}", e)))?;
         }
         Err(_) => {
-            // ROLLBACK 失败不影响原始错误
-            let _ = conn.execute_batch("ROLLBACK");
+            // ROLLBACK 失败不影响原始错误，但记录日志
+            if let Err(e) = conn.execute_batch("ROLLBACK") {
+                tracing::error!("ROLLBACK 失败: {}", e);
+            }
         }
     }
 
@@ -195,10 +208,6 @@ fn update_block_inner(
 
     // 3. 计算新 block_type 和 content_type
     let new_block_type = req.block_type.clone().unwrap_or(current.block_type.clone());
-    let new_content_type = req.block_type
-        .as_ref()
-        .map(|bt| bt.default_content_type())
-        .unwrap_or(current.content_type.clone());
 
     // 4. 计算新 properties（merge 或 replace）
     let new_properties = match req.properties {
@@ -212,20 +221,48 @@ fn update_block_inner(
     };
     let properties_json = serde_json::to_string(&new_properties).unwrap_or_default();
 
-    // 5. UPDATE
+    // 5. 写入数据库
+    let new_content_type = req.block_type
+        .as_ref()
+        .map(|bt| bt.default_content_type())
+        .unwrap_or(current.content_type.clone());
+
+    write_block_updates(conn, id, &req.block_type, &new_content, &properties_json, &new_block_type, new_content_type.as_str())?;
+
+    // 6. Heading 层级自动重组（仅 block_type 变化时）
+    if req.block_type.is_some() {
+        reorganize_heading(conn, id, &current, &new_block_type)?;
+    }
+
+    // 7. 查询并返回更新后的 Block
+    repo::find_by_id_raw(conn, id)
+        .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))
+}
+
+// ─── update_block_inner 子步骤 ─────────────────────────────────
+
+/// 步骤 5：将字段更新写入数据库
+fn write_block_updates(
+    conn: &rusqlite::Connection,
+    id: &str,
+    block_type_req: &Option<BlockType>,
+    new_content: &[u8],
+    properties_json: &str,
+    new_block_type: &BlockType,
+    new_content_type: &str,
+) -> Result<(), AppError> {
     let now = now_iso();
-    let block_type_changed = req.block_type.is_some();
-    let bt_str = serde_json::to_string(&new_block_type).unwrap_or_default();
-    let ct_str = new_content_type.as_str().to_string();
+    let block_type_changed = block_type_req.is_some();
 
     let rows = if block_type_changed {
+        let bt_str = serde_json::to_string(new_block_type).unwrap_or_default();
         repo::update_block_fields(
-            &conn, id, &new_content, &properties_json,
-            Some(&bt_str), Some(&ct_str), &now,
+            conn, id, new_content, properties_json,
+            Some(&bt_str), Some(new_content_type), &now,
         )
     } else {
         repo::update_content_and_props(
-            &conn, id, &new_content, &properties_json, &now,
+            conn, id, new_content, properties_json, &now,
         )
     }
     .map_err(|e| AppError::Internal(format!("更新 Block 失败: {}", e)))?;
@@ -234,45 +271,45 @@ fn update_block_inner(
         return Err(AppError::NotFound(format!("Block {} 不存在", id)));
     }
 
-    // 6. Heading 层级自动重组
-    //
-    // 不变量：heading(N) 只能嵌套在 heading(M) 内，且 M < N。
-    // 当 block_type 变化时，通过三步操作维护此不变量：
-    //   6a. 提升子块（如果曾经是 heading）
-    //   6b. 逃逸校验（如果变为 heading，确保不被 ≥ 同级的 heading 包裹）
-    //   6c. 吸收兄弟（以新 heading level 吸收后续低级别块）
-    if block_type_changed {
-        let old_type = &current.block_type;
-        let new_type = &new_block_type;
+    Ok(())
+}
 
-        let was_heading = matches!(old_type, BlockType::Heading { .. });
-        let now_heading = matches!(new_type, BlockType::Heading { .. });
+/// 步骤 6：Heading 层级自动重组
+///
+/// 不变量：heading(N) 只能嵌套在 heading(M) 内，且 M < N。
+/// 当 block_type 变化时，通过三步操作维护此不变量：
+///   a. 提升子块（如果曾经是 heading）
+///   b. 逃逸校验（如果变为 heading，确保不被 ≥ 同级的 heading 包裹）
+///   c. 吸收兄弟（以新 heading level 吸收后续低级别块）
+fn reorganize_heading(
+    conn: &rusqlite::Connection,
+    id: &str,
+    current: &Block,
+    new_type: &BlockType,
+) -> Result<(), AppError> {
+    let was_heading = matches!(&current.block_type, BlockType::Heading { .. });
+    let now_heading = matches!(new_type, BlockType::Heading { .. });
 
-        // 6a. 如果曾经是 heading，先将所有子块提升到当前 parent
-        if was_heading {
-            promote_children(&conn, id, &current.parent_id, &current.position)?;
-        }
-
-        if now_heading {
-            // 提取新的 heading level
-            let new_level = match new_type {
-                BlockType::Heading { level } => *level,
-                _ => unreachable!(),
-            };
-
-            // 6b. 逃逸：如果父链中存在 heading(level >= new_level)，
-            // 将当前块 reparent 到正确的祖先下
-            let (effective_parent_id, effective_position) =
-                escape_heading_if_needed(&conn, id, &current, new_level)?;
-
-            // 6c. 吸收：在正确层级下，将后续低级别块变为子块
-            absorb_siblings_after(&conn, id, &effective_parent_id, &effective_position, new_level)?;
-        }
+    // a. 如果曾经是 heading，先将所有子块提升到当前 parent
+    if was_heading {
+        promote_children(&conn, id, &current.parent_id, &current.position)?;
     }
 
-    // 7. 查询并返回更新后的 Block
-    repo::find_by_id_raw(conn, id)
-        .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))
+    if now_heading {
+        let new_level = match new_type {
+            BlockType::Heading { level } => *level,
+            _ => unreachable!(),
+        };
+
+        // b. 逃逸：如果父链中存在 heading(level >= new_level)，reparent 到正确祖先
+        let (effective_parent_id, effective_position) =
+            escape_heading_if_needed(&conn, id, current, new_level)?;
+
+        // c. 吸收：在正确层级下，将后续低级别块变为子块
+        absorb_siblings_after(&conn, id, &effective_parent_id, &effective_position, new_level)?;
+    }
+
+    Ok(())
 }
 
 // ─── Heading 层级重组辅助 ──────────────────────────────────────
@@ -293,6 +330,9 @@ fn promote_children(
         return Ok(());
     }
 
+    // 提升后子块与 heading 同级，document_id 应继承 heading 的 parent 的 document_id
+    let new_document_id = derive_document_id_from_parent(conn, heading_parent_id)?;
+
     // 计算提升后的起始 position：紧接在 heading 之后
     let siblings_after_heading = repo::find_siblings_after(
         conn, heading_parent_id, heading_position,
@@ -307,8 +347,10 @@ fn promote_children(
 
     for child in &children {
         let now = now_iso();
-        repo::update_parent_position(conn, &child.id, heading_parent_id, &pos, &now)
-            .map_err(|e| AppError::Internal(format!("提升子块失败: {}", e)))?;
+        repo::update_parent_position_document_id(
+            conn, &child.id, heading_parent_id, &pos, &new_document_id, &now,
+        )
+        .map_err(|e| AppError::Internal(format!("提升子块失败: {}", e)))?;
         pos = fractional::generate_after(&pos);
     }
 
@@ -375,8 +417,11 @@ fn escape_heading_if_needed(
 
     // Reparent 当前块到 target_parent
     let now = now_iso();
-    repo::update_parent_position(conn, block_id, &target_parent_id, &new_position, &now)
-        .map_err(|e| AppError::Internal(format!("逃逸 reparent 失败: {}", e)))?;
+    let new_document_id = derive_document_id_from_parent(conn, &target_parent_id)?;
+    repo::update_parent_position_document_id(
+        conn, block_id, &target_parent_id, &new_position, &new_document_id, &now,
+    )
+    .map_err(|e| AppError::Internal(format!("逃逸 reparent 失败: {}", e)))?;
 
     Ok((target_parent_id, new_position))
 }
@@ -395,6 +440,9 @@ fn absorb_siblings_after(
     let siblings_after = repo::find_siblings_after(conn, parent_id, position)
         .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
 
+    // 被吸收的块成为 heading 的子块，document_id 应继承 heading 的 document_id
+    let new_document_id = derive_document_id_from_parent(conn, parent_id)?;
+
     let mut pos = position::calculate_insert_position(conn, heading_id, None)?;
     for sibling in &siblings_after {
         match &sibling.block_type {
@@ -404,8 +452,8 @@ fn absorb_siblings_after(
             }
             _ => {
                 let now = now_iso();
-                repo::update_parent_position(
-                    conn, &sibling.id, heading_id, &pos, &now,
+                repo::update_parent_position_document_id(
+                    conn, &sibling.id, heading_id, &pos, &new_document_id, &now,
                 )
                 .map_err(|e| AppError::Internal(format!("reparent 失败: {}", e)))?;
                 pos = fractional::generate_after(&pos);
@@ -435,7 +483,7 @@ pub fn delete_block(db: &Db, id: &str) -> Result<DeleteResult, AppError> {
         return Err(AppError::BadRequest("全局根块不可删除".to_string()));
     }
 
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 1. 确认 Block 存在
     let _current = repo::find_by_id(&conn, id)
@@ -474,7 +522,7 @@ pub fn delete_block(db: &Db, id: &str) -> Result<DeleteResult, AppError> {
 ///
 /// 参考 03-api-rest.md §3 "恢复 Block"
 pub fn restore_block(db: &Db, id: &str) -> Result<RestoreResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 1. 查询当前 Block（必须是 deleted 状态）
     let current = repo::find_deleted(&conn, id)
@@ -536,94 +584,105 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
         return Err(AppError::BadRequest("全局根块不可移动".to_string()));
     }
 
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
-    // 1. 查询当前 Block
-    let current = repo::find_by_id(&conn, id)
-        .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
+    // 事务保护：移动涉及读 position + 写 parent/position，必须原子化
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
-    // 2. 确定目标父块
-    //
-    //    优先级：
-    //    a) 显式传入 target_parent_id → 使用它
-    //    b) 传了 before_id/after_id → 从 sibling 的 parent_id 推导
-    //    c) 都没传 → 保持当前父块
-    let target_parent_id = match req.target_parent_id.as_deref() {
-        Some(pid) => pid.to_string(),
-        None => {
-            // 尝试从 sibling 推导 parent
-            let sibling_id = req
-                .before_id
-                .as_deref()
-                .or(req.after_id.as_deref());
+    let result = (|| -> Result<Block, AppError> {
+        // 1. 查询当前 Block
+        let current = repo::find_by_id(&conn, id)
+            .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
 
-            match sibling_id {
-                Some(sid) => {
-                    let sibling = repo::find_by_id(&conn, sid)
-                        .map_err(|_| AppError::NotFound(format!(
-                            "定位块 {} 不存在或已删除", sid
-                        )))?;
-                    sibling.parent_id.clone()
+        // 2. 确定目标父块
+        //
+        //    优先级：
+        //    a) 显式传入 target_parent_id → 使用它
+        //    b) 传了 before_id/after_id → 从 sibling 的 parent_id 推导
+        //    c) 都没传 → 保持当前父块
+        let target_parent_id = match req.target_parent_id.as_deref() {
+            Some(pid) => pid.to_string(),
+            None => {
+                let sibling_id = req
+                    .before_id
+                    .as_deref()
+                    .or(req.after_id.as_deref());
+
+                match sibling_id {
+                    Some(sid) => {
+                        let sibling = repo::find_by_id(&conn, sid)
+                            .map_err(|_| AppError::NotFound(format!(
+                                "定位块 {} 不存在或已删除", sid
+                            )))?;
+                        sibling.parent_id.clone()
+                    }
+                    None => current.parent_id.clone(),
                 }
-                None => current.parent_id.clone(),
+            }
+        };
+
+        // 3. 循环引用检测 + 父块验证（仅当父块改变时）
+        let parent_changed = target_parent_id != current.parent_id;
+        if parent_changed {
+            if target_parent_id == id {
+                return Err(AppError::BadRequest("不能将 Block 移动到自身下".to_string()));
+            }
+
+            let is_descendant = repo::check_is_descendant(&conn, id, &target_parent_id)
+                .unwrap_or(false);
+
+            if is_descendant {
+                return Err(AppError::CycleReference);
+            }
+
+            let parent_exists = repo::exists_normal(&conn, &target_parent_id)
+                .unwrap_or(false);
+
+            if !parent_exists {
+                return Err(AppError::BadRequest(format!(
+                    "目标父块 {} 不存在或已删除",
+                    target_parent_id
+                )));
             }
         }
-    };
 
-    // 3. 循环引用检测 + 父块验证（仅当父块改变时）
-    let parent_changed = target_parent_id != current.parent_id;
-    if parent_changed {
-        // 不能移动到自身
-        if target_parent_id == id {
-            return Err(AppError::BadRequest("不能将 Block 移动到自身下".to_string()));
+        // 4. 计算新 position
+        let new_position = position::calculate_move_position(
+            &conn,
+            &target_parent_id,
+            req.before_id.as_deref(),
+            req.after_id.as_deref(),
+        )?;
+
+        // 5. UPDATE block
+        let now = now_iso();
+        let rows = repo::update_parent_position(
+            &conn,
+            id,
+            &target_parent_id,
+            &new_position,
+            &now,
+        )
+        .map_err(|e| AppError::Internal(format!("移动 Block 失败: {}", e)))?;
+
+        if rows == 0 {
+            return Err(AppError::NotFound(format!("Block {} 不存在", id)));
         }
 
-        // 循环引用检测：target_parent 不能是当前 block 的后代
-        let is_descendant = repo::check_is_descendant(&conn, id, &target_parent_id)
-            .unwrap_or(false);
+        // 6. 查询并返回
+        repo::find_by_id_raw(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))
+    })();
 
-        if is_descendant {
-            return Err(AppError::CycleReference);
-        }
-
-        // 验证目标父块存在且未删除
-        let parent_exists = repo::exists_normal(&conn, &target_parent_id)
-            .unwrap_or(false);
-
-        if !parent_exists {
-            return Err(AppError::BadRequest(format!(
-                "目标父块 {} 不存在或已删除",
-                target_parent_id
-            )));
-        }
+    // 提交或回滚事务
+    match &result {
+        Ok(_) => conn.execute_batch("COMMIT")
+            .map_err(|e| AppError::Internal(format!("提交事务失败: {}", e)))?,
+        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
     }
 
-    // 4. 计算新 position
-    let new_position = position::calculate_move_position(
-        &conn,
-        &target_parent_id,
-        req.before_id.as_deref(),
-        req.after_id.as_deref(),
-    )?;
-
-    // 5. UPDATE block
-    let now = now_iso();
-    let rows = repo::update_parent_position(
-        &conn,
-        id,
-        &target_parent_id,
-        &new_position,
-        &now,
-    )
-    .map_err(|e| AppError::Internal(format!("移动 Block 失败: {}", e)))?;
-
-    if rows == 0 {
-        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
-    }
-
-    // 6. 查询并返回
-    repo::find_by_id_raw(&conn, id)
-        .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))
+    result
 }
 
 // ─── 批量操作 ──────────────────────────────────────────────────
@@ -643,7 +702,11 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
         ));
     }
 
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
+
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+
     let mut id_map: HashMap<String, String> = HashMap::new();
     let mut results: Vec<BatchOpResult> = Vec::with_capacity(req.operations.len());
 
@@ -799,7 +862,14 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
         }
     }
 
-    Ok(BatchResult { id_map, results })
+    // 单条操作失败不影响其他操作，但整个批次在同一个事务内
+    match conn.execute_batch("COMMIT") {
+        Ok(()) => Ok(BatchResult { id_map, results }),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(AppError::Internal(format!("提交批量事务失败: {}", e)))
+        }
+    }
 }
 
 // ─── 批量操作的内部实现（在已有 conn 上操作，不获取锁）──────────
@@ -987,10 +1057,10 @@ use crate::api::response::{MergeResult, SplitResult};
 /// 3. 创建新块（content = content_after，位于当前块之后，同父块）
 /// 4. 返回更新后的原块和新块
 pub fn split_block(db: &Db, id: &str, req: SplitReq) -> Result<SplitResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 开启事务：更新当前块 + 插入新块必须原子化
-    conn.execute_batch("BEGIN")
+    conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
     let result = split_block_inner(&conn, id, req);
@@ -1098,10 +1168,10 @@ fn split_block_inner(
 /// 5. 软删除当前块
 /// 6. 返回合并后的块和被删除的块 ID
 pub fn merge_block(db: &Db, id: &str, _req: MergeReq) -> Result<MergeResult, AppError> {
-    let conn = db.lock().unwrap();
+    let conn = crate::repo::lock_db(db);
 
     // 开启事务：合并内容 + reparent 子块 + 软删除必须原子化
-    conn.execute_batch("BEGIN")
+    conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
     let result = merge_block_inner(&conn, id);
@@ -1184,29 +1254,45 @@ fn merge_block_inner(
         )));
     }
 
-    // 5. 如果合并到父块，将当前块的子块 reparent 到父块
-    if merge_into_parent {
-        let children = repo::find_children(&conn, id)
-            .map_err(|e| AppError::Internal(format!("查询子块失败: {}", e)))?;
+    // 5. 将当前块的子块 reparent 到合并目标
+    let children = repo::find_children(&conn, id)
+        .map_err(|e| AppError::Internal(format!("查询子块失败: {}", e)))?;
 
-        if !children.is_empty() {
-            // 子块按原顺序插入到当前块之后的位置
-            let siblings_after =
-                repo::find_siblings_after(&conn, &current.parent_id, &current.position)
-                    .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
+    if !children.is_empty() {
+        // 子块按原顺序插入到 target（或 current 之后的位置）
+        let reparent_target_id = &target.id;
+        let new_document_id = derive_document_id_from_parent(conn, reparent_target_id)?;
 
-            let mut pos = if let Some(first_after) = siblings_after.first() {
+        // 计算插入起始位置：在 current 之后
+        let siblings_after =
+            repo::find_siblings_after(&conn, &current.parent_id, &current.position)
+                .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
+
+        let mut pos = if merge_into_parent {
+            // 合并到父块时，子块插入到 current 之后、current 的后续兄弟之前
+            if let Some(first_after) = siblings_after.first() {
                 fractional::generate_between(&current.position, &first_after.position)
             } else {
                 fractional::generate_after(&current.position)
-            };
-
-            for child in &children {
-                let t = now_iso();
-                repo::update_parent_position(&conn, &child.id, &target.id, &pos, &t)
-                    .map_err(|e| AppError::Internal(format!("Reparent 子块失败: {}", e)))?;
-                pos = fractional::generate_after(&pos);
             }
+        } else {
+            // 合并到前驱兄弟时，子块追加到 target 的子块末尾
+            // 使用 target 的 position 作为参考点，在其子块之后追加
+            let max_pos = repo::get_max_position(&conn, reparent_target_id)
+                .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
+            match max_pos {
+                Some(mp) => fractional::generate_after(&mp),
+                None => fractional::generate_first(),
+            }
+        };
+
+        for child in &children {
+            let t = now_iso();
+            repo::update_parent_position_document_id(
+                &conn, &child.id, reparent_target_id, &pos, &new_document_id, &t,
+            )
+            .map_err(|e| AppError::Internal(format!("Reparent 子块失败: {}", e)))?;
+            pos = fractional::generate_after(&pos);
         }
     }
 
@@ -1726,13 +1812,13 @@ mod tests {
         }
 
         // 通过 repo 层测试分页：限制每页 2 条（总共 4 个子块 = 1 默认段落 + 3 新增）
-        let db_conn = db.lock().unwrap();
+        let db_conn = crate::repo::lock_db(&db);
         let page1 = crate::repo::block_repo::find_children_paginated(&db_conn, &doc.id, None, 2).unwrap();
         drop(db_conn);
         assert_eq!(page1.len(), 2);
 
         // 翻页：取剩下的 2 条
-        let db_conn = db.lock().unwrap();
+        let db_conn = crate::repo::lock_db(&db);
         let page2 = crate::repo::block_repo::find_children_paginated(&db_conn, &doc.id, Some(&page1[1].position), 2).unwrap();
         drop(db_conn);
         assert_eq!(page2.len(), 2);
