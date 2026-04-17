@@ -19,9 +19,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
 import { getDocument, updateBlock, createBlock } from '@/api/client'
-
-/** 自身操作完成后抑制 SSE 回声的时间窗口（ms） */
-const SSE_ECHO_SUPPRESS_MS = 1_000
 import { BlockTreeRenderer } from './components/BlockTreeRenderer'
 import { updateBlockInTree } from './core/BlockOperations'
 import { OperationQueue } from './core/OperationQueue'
@@ -58,14 +55,14 @@ export function WemEditor({
   const [tree, setTreeState] = useState<BlockNode[]>([])
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
   const treeRef = useRef<BlockNode[]>([])
-  const blocksRef = useRef(blocks)
   const pendingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   /**
-   * SSE 回声抑制：记录自身操作完成后的时间戳，在此窗口内忽略结构性 SSE 事件。
-   * 防止自身 split/delete/merge 触发的 SSE echo 导致 refetch 与 OperationQueue 竞态。
+   * SSE 回声去重：追踪自身发起的操作 ID。
+   * 前端为每个结构操作生成唯一 operation_id，后端在 SSE 事件中原样回传。
+   * 收到 SSE 事件时，若 operation_id 在此集合中，说明是自身操作的回声，跳过 refetch。
    */
-  const suppressRefetchUntil = useRef(0)
+  const pendingOperationIds = useRef<Set<string>>(new Set())
 
   /** 取消指定块的 debounce 保存定时器（split/merge/delete 前调用，防止覆盖新数据） */
   const cancelPendingSave = useCallback((blockId: string) => {
@@ -121,22 +118,19 @@ export function WemEditor({
 
   // ─── refs 同步 ───
 
-  useEffect(() => {
-    blocksRef.current = blocks
-  }, [blocks])
-
   // 仅在 documentId 变化时从 props 同步数据
   useEffect(() => {
-    setTreeState(blocksRef.current)
-    treeRef.current = blocksRef.current
+    treeRef.current = blocks
+    setTreeState(blocks)
     setCollapsedIds(new Set())
     opQueue.current.clear()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentId])
 
   // ─── SSE 实时事件订阅 ───
   //
   // 后端广播所有 mutation。自身操作已通过 OperationQueue 悲观更新 UI，
-  // 同源事件通过 suppressRefetchUntil 抑制，仅外部事件触发 refetch。
+  // 同源事件通过 operation_id 匹配抑制，仅外部事件触发 refetch。
 
   // 结构性变更（创建/删除/移动/恢复）统一 refetch 整个文档
   const refetchDocument = useCallback(() => {
@@ -146,24 +140,30 @@ export function WemEditor({
       .catch((err) => console.error('[SSE] refetch 失败:', err))
   }, [documentId, setTreeSync])
 
-  // SSE 结构性回调包装器：抑制自身操作的回声
-  // 自身 split/delete/merge 完成后 suppressRefetchUntil 设为当前时间 + 1s
-  // 在此窗口内收到 block_created/block_deleted 等事件时跳过 refetch，
-  // 避免 OperationQueue 中的后续操作被全量 refetch 覆盖。
-  const dedupedRefetch = useCallback(() => {
-    if (Date.now() < suppressRefetchUntil.current) {
-      console.log('[SSE] 抑制自身操作回声，跳过 refetch')
-      return
-    }
-    refetchDocument()
-  }, [refetchDocument])
+  /**
+   * SSE 结构性事件处理：基于 operation_id 去重。
+   *
+   * 前端发起结构操作时生成唯一 operation_id 并记录到 pendingOperationIds。
+   * 后端在 SSE 事件中原样回传该 operation_id。
+   * 收到事件时，若 operation_id 在 pending 集合中 → 自身操作回声，跳过 refetch。
+   * 否则 → 外部操作，触发 refetch。
+   */
+  const handleStructuralEvent = useCallback(
+    (event: { operation_id?: string }) => {
+      if (event.operation_id && pendingOperationIds.current.has(event.operation_id)) {
+        console.log(`[SSE] 自身操作回声 (${event.operation_id})，跳过 refetch`)
+        return
+      }
+      refetchDocument()
+    },
+    [refetchDocument],
+  )
 
   useDocumentSSE(documentId, {
     // 块内容更新：增量合并到 tree + 同步 contentEditable DOM
     // 注意：后端 serde(flatten) 将 block 字段展平到事件顶层，直接用 event.id 访问
     onBlockUpdated: useCallback(
       (event) => {
-        // 外部内容更新无需 flushSync（DOM 已通过 syncBlockContent 即时同步）
         setTreeAsync((prev) =>
           updateBlockInTree(prev, event.id, {
             content: event.content,
@@ -174,7 +174,6 @@ export function WemEditor({
           }),
         )
         // 正在编辑的块不覆盖 DOM，避免 SSE 回声重置光标
-        // 树状态仍会更新（版本号等），但 contentEditable 内容由用户控制
         const el = findEditable(event.id)
         if (!el || document.activeElement !== el) {
           syncBlockContent(event.id, event.content)
@@ -182,17 +181,18 @@ export function WemEditor({
       },
       [setTreeAsync],
     ),
-    // 结构性变更：带去重的 refetch
-    onBlockCreated: dedupedRefetch,
-    onBlockDeleted: dedupedRefetch,
-    onBlockMoved: dedupedRefetch,
-    onBlockRestored: dedupedRefetch,
+    // 结构性变更：基于 operation_id 去重
+    onBlockCreated: handleStructuralEvent,
+    onBlockDeleted: handleStructuralEvent,
+    onBlockMoved: handleStructuralEvent,
+    onBlockRestored: handleStructuralEvent,
   })
 
   // ─── Command Context ───
 
-  const makeContext = useCallback((): CommandContext => ({
+  const makeContext = useCallback((operationId?: string): CommandContext => ({
     documentId,
+    operationId,
     getTree: () => treeRef.current,
     setTreeSync,
     cancelPendingSave,
@@ -203,17 +203,18 @@ export function WemEditor({
     },
   }), [documentId, setTreeSync, cancelPendingSave])
 
-  /** 结构操作入队辅助：统一 suppressRefetchUntil + 消除重复的 try/finally 模式 */
+  /** 结构操作入队辅助：生成 operation_id + 追踪 pending 集合，消除重复模式 */
   const enqueueStructuralOp = useCallback(
     (label: string, execute: (ctx: CommandContext) => Promise<void>) => {
       opQueue.current.enqueue({
         label,
         execute: async () => {
-          const ctx = makeContext()
+          const operationId = crypto.randomUUID()
+          pendingOperationIds.current.add(operationId)
           try {
-            await execute(ctx)
+            await execute(makeContext(operationId))
           } finally {
-            suppressRefetchUntil.current = Date.now() + SSE_ECHO_SUPPRESS_MS
+            pendingOperationIds.current.delete(operationId)
           }
         },
       })
@@ -308,11 +309,15 @@ export function WemEditor({
       // 树不为空，忽略
       if (treeRef.current.length > 0) return
 
+      const operationId = crypto.randomUUID()
+      pendingOperationIds.current.add(operationId)
+
       createBlock({
         parent_id: documentId,
         block_type: { type: 'paragraph' },
         content: '',
         content_type: 'markdown',
+        operation_id: operationId,
       })
         .then((created) => {
           const newBlock: BlockNode = { ...created, children: [] }
@@ -321,6 +326,9 @@ export function WemEditor({
           requestAnimationFrame(() => focusBlock(created.id))
         })
         .catch((err) => console.error('[editor] 创建初始段落失败:', err))
+        .finally(() => {
+          pendingOperationIds.current.delete(operationId)
+        })
     },
     [readonly, documentId, setTreeSync],
   )

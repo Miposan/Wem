@@ -9,28 +9,62 @@ import type { BlockNode } from '@/types/api'
 
 // ─── 查找 ───
 
-/** 获取扁平化的深度优先列表 */
+/** 获取扁平化的深度优先列表（累加器模式，O(n)） */
 export function flattenTree(tree: BlockNode[]): BlockNode[] {
   const result: BlockNode[] = []
-  for (const block of tree) {
-    result.push(block)
-    result.push(...flattenTree(block.children))
+  function walk(blocks: BlockNode[]) {
+    for (const block of blocks) {
+      result.push(block)
+      walk(block.children)
+    }
   }
+  walk(tree)
   return result
 }
 
-/** 查找前一个块（深度优先遍历） */
-export function findPrevBlock(tree: BlockNode[], blockId: string): BlockNode | null {
-  const flat = flattenTree(tree)
-  const idx = flat.findIndex((b) => b.id === blockId)
-  return idx > 0 ? flat[idx - 1] : null
+/** 通过 ID 查找块（DFS，提前返回，不创建中间数组） */
+export function findBlockById(tree: BlockNode[], blockId: string): BlockNode | null {
+  for (const block of tree) {
+    if (block.id === blockId) return block
+    const found = findBlockById(block.children, blockId)
+    if (found) return found
+  }
+  return null
 }
 
-/** 查找后一个块（深度优先遍历） */
+/** 查找前一个块（深度优先前序，单趟遍历） */
+export function findPrevBlock(tree: BlockNode[], blockId: string): BlockNode | null {
+  let prev: BlockNode | null = null
+  function walk(blocks: BlockNode[]): boolean {
+    for (const block of blocks) {
+      if (block.id === blockId) return true
+      prev = block
+      if (walk(block.children)) return true
+    }
+    return false
+  }
+  walk(tree)
+  return prev
+}
+
+/** 查找后一个块（深度优先前序，单趟遍历） */
 export function findNextBlock(tree: BlockNode[], blockId: string): BlockNode | null {
-  const flat = flattenTree(tree)
-  const idx = flat.findIndex((b) => b.id === blockId)
-  return idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null
+  let found = false
+  let result: BlockNode | null = null
+  function walk(blocks: BlockNode[]): boolean {
+    for (const block of blocks) {
+      if (result) return true
+      if (found) {
+        result = block
+        return true
+      }
+      if (block.id === blockId) found = true
+      walk(block.children)
+    }
+    return false
+  }
+  walk(tree)
+  return result
 }
 
 // ─── 插入 ───

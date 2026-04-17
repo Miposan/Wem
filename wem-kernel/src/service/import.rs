@@ -155,7 +155,7 @@ mod tests {
         assert!(result.blocks_imported >= 2); // Document + Paragraph
 
         // 验证 DB 中确实存在
-        let loaded = block::get_block(&db, &result.root.id).unwrap();
+        let loaded = block::get_block(&db, &result.root.id, false).unwrap();
         assert_eq!(loaded.id, result.root.id);
         assert_eq!(loaded.parent_id, ROOT_ID);
     }

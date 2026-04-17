@@ -129,13 +129,14 @@ pub fn get_position(
 /// `SELECT * FROM blocks WHERE id = parent_id AND status = 'normal' ORDER BY position ASC`
 /// 查询全局根块的直接子文档（即"根文档"列表）
 ///
-/// 根文档 = parent_id = ROOT_ID 的 Document 类型 Block。
-/// 不包含全局根块自身。
+/// 根文档 = parent_id = ROOT_ID 且 block_type = Document 的 Block。
+/// 不包含全局根块自身，也不包含其他类型的根级块（如段落等）。
 pub fn find_root_documents(conn: &Connection) -> Result<Vec<Block>, rusqlite::Error> {
     let root_id = crate::model::ROOT_ID;
     let mut stmt = conn.prepare(
         "SELECT * FROM blocks
          WHERE parent_id = ?1 AND id != ?1 AND status = 'normal'
+           AND JSON_EXTRACT(block_type, '$.type') = 'document'
          ORDER BY position ASC",
     )?;
     let blocks: Vec<Block> = stmt
@@ -158,7 +159,9 @@ pub fn find_root_documents_paginated(
     let blocks: Vec<Block> = if let Some(cursor) = cursor {
         let mut stmt = conn.prepare(
             "SELECT * FROM blocks
-             WHERE parent_id = ?1 AND id != ?1 AND status = 'normal' AND position > ?2
+             WHERE parent_id = ?1 AND id != ?1 AND status = 'normal'
+               AND JSON_EXTRACT(block_type, '$.type') = 'document'
+               AND position > ?2
              ORDER BY position ASC
              LIMIT ?3",
         )?;
@@ -169,6 +172,7 @@ pub fn find_root_documents_paginated(
         let mut stmt = conn.prepare(
             "SELECT * FROM blocks
              WHERE parent_id = ?1 AND id != ?1 AND status = 'normal'
+               AND JSON_EXTRACT(block_type, '$.type') = 'document'
              ORDER BY position ASC
              LIMIT ?2",
         )?;
@@ -1052,15 +1056,10 @@ mod tests {
         insert_block(&conn, &make_params("para_00000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2")).unwrap();
 
         let docs = find_root_documents(&conn).unwrap();
-        // 只应该返回文档类型（通过 id != parent_id 过滤掉根块自身）
-        // 注意：段落 block_type 不同但 parent_id 也是 ROOT_ID
-        // find_root_documents 没有按 block_type 过滤，只按 id != ROOT_ID 过滤
-        // 所以会返回 3 个（2 个 doc + 1 个 para）
-        assert_eq!(docs.len(), 3);
-        // 按 position 排序
-        assert_eq!(docs[0].position, "a1");
-        assert_eq!(docs[1].position, "a2");
-        assert_eq!(docs[2].position, "a3");
+        // 只返回 Document 类型，段落虽 parent_id 也是 ROOT_ID 但被过滤掉
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].id, "rootdoc_00000001");
+        assert_eq!(docs[1].id, "rootdoc_00000002");
     }
 
     // ── find_descendants（递归 CTE）──────────────────────

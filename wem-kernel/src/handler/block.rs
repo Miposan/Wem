@@ -52,7 +52,7 @@ pub async fn create_document(
     State(db): State<Db>,
     Json(req): Json<CreateDocumentReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
-    // spawn_blocking 将同步的 SQLite 操作移到阻塞线程池
+    let operation_id = req.operation_id.clone();
     let title = req.title;
     let parent_id = req.parent_id;
     let after_id = req.after_id;
@@ -63,9 +63,9 @@ pub async fn create_document(
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: doc.document_id.clone(),
+        operation_id,
         block: doc.clone(),
     });
 
@@ -122,6 +122,7 @@ pub async fn delete_document(
     State(db): State<Db>,
     Json(req): Json<DeleteDocumentReq>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id;
     let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -130,9 +131,9 @@ pub async fn delete_document(
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
         document_id: id_clone,
+        operation_id,
         block_id: result.id.clone(),
         cascade_count: result.cascade_count,
     });
@@ -149,13 +150,14 @@ pub async fn create_block(
     State(db): State<Db>,
     Json(req): Json<CreateBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let blk = tokio::task::spawn_blocking(move || block::create_block(&db, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: blk.document_id.clone(),
+        operation_id,
         block: blk.clone(),
     });
 
@@ -172,7 +174,7 @@ pub async fn get_block(
     let id = req.id;
     let include_deleted = req.include_deleted;
     let blk = tokio::task::spawn_blocking(move || {
-        block::get_block_include_deleted(&db, &id, include_deleted)
+        block::get_block(&db, &id, include_deleted)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
@@ -187,14 +189,15 @@ pub async fn update_block(
     State(db): State<Db>,
     Json(req): Json<UpdateBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || block::update_block(&db, &id, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
         document_id: blk.document_id.clone(),
+        operation_id,
         block: blk.clone(),
     });
 
@@ -208,6 +211,7 @@ pub async fn delete_block(
     State(db): State<Db>,
     Json(req): Json<DeleteBlockReq>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id;
     let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -216,9 +220,9 @@ pub async fn delete_block(
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
         document_id: id_clone,
+        operation_id,
         block_id: result.id.clone(),
         cascade_count: result.cascade_count,
     });
@@ -233,14 +237,15 @@ pub async fn move_block(
     State(db): State<Db>,
     Json(req): Json<MoveBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || block::move_block(&db, &id, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockMoved {
         document_id: blk.document_id.clone(),
+        operation_id,
         block: blk.clone(),
     });
 
@@ -254,6 +259,7 @@ pub async fn restore_block(
     State(db): State<Db>,
     Json(req): Json<RestoreReq>,
 ) -> Result<Json<ApiResponse<RestoreResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id;
     let db2 = db.clone();
     let id2 = id.clone();
@@ -264,13 +270,13 @@ pub async fn restore_block(
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     // 恢复后重新查询 Block 最新状态用于广播
-    let restored = tokio::task::spawn_blocking(move || block::get_block(&db2, &id2))
+    let restored = tokio::task::spawn_blocking(move || block::get_block(&db2, &id2, false))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件
     crate::service::event::EventBus::global().emit(BlockEvent::BlockRestored {
         document_id: restored.document_id.clone(),
+        operation_id,
         block: restored,
     });
 
@@ -286,6 +292,7 @@ pub async fn split_block(
     State(db): State<Db>,
     Json(req): Json<SplitReq>,
 ) -> Result<Json<ApiResponse<SplitResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::split_block(&db, &id, req)
@@ -293,14 +300,15 @@ pub async fn split_block(
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件：原块更新 + 新块创建
     let doc_id = result.updated_block.document_id.clone();
     crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
         document_id: doc_id.clone(),
+        operation_id: operation_id.clone(),
         block: result.updated_block.clone(),
     });
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: doc_id,
+        operation_id,
         block: result.new_block.clone(),
     });
 
@@ -314,6 +322,7 @@ pub async fn merge_block(
     State(db): State<Db>,
     Json(req): Json<MergeReq>,
 ) -> Result<Json<ApiResponse<MergeResult>>, AppError> {
+    let operation_id = req.operation_id.clone();
     let id = req.id.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::merge_block(&db, &id, req)
@@ -321,14 +330,15 @@ pub async fn merge_block(
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播事件：前驱块更新 + 当前块删除
     let doc_id = result.merged_block.document_id.clone();
     crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
         document_id: doc_id.clone(),
+        operation_id: operation_id.clone(),
         block: result.merged_block.clone(),
     });
     crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
         document_id: doc_id,
+        operation_id,
         block_id: result.deleted_block_id.clone(),
         cascade_count: 0,
     });

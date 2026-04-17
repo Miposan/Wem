@@ -27,30 +27,41 @@ pub enum BlockEvent {
     /// Block 创建（create_block / create_document）
     BlockCreated {
         document_id: String,
+        /// 关联的操作 ID：前端生成的 UUID，用于 SSE 回声去重
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
     /// Block 更新（update_block — 内容/属性变更）
     BlockUpdated {
         document_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
     /// Block 删除（软删除，可能级联）
     BlockDeleted {
         document_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
         block_id: String,
         cascade_count: u32,
     },
     /// Block 移动（改变父块和/或位置）
     BlockMoved {
         document_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
     /// Block 恢复（从已删除状态恢复）
     BlockRestored {
         document_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },

@@ -9,9 +9,10 @@
  */
 
 import type { BlockNode, BlockType } from '@/types/api'
-import { deleteBlock, splitBlock, mergeBlock, updateBlock, moveBlock } from '@/api/client'
+import { deleteBlock, splitBlock, mergeBlock, updateBlock } from '@/api/client'
 import {
   flattenTree,
+  findBlockById,
   insertAfter,
   insertAsFirstChild,
   removeBlock,
@@ -26,6 +27,8 @@ import { focusBlock, focusBlockEnd, getCursorPosition, syncBlockContent } from '
 /** Command 执行上下文 */
 export interface CommandContext {
   documentId: string
+  /** 操作 ID（前端生成，用于 SSE 回声去重），仅结构操作需要 */
+  operationId?: string
   /** 获取当前块树快照 */
   getTree: () => BlockNode[]
   /** 同步更新块树（内部用 flushSync，确保 DOM 立即更新） */
@@ -83,7 +86,7 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
   const { blockId: targetId, offset } = cursor
 
   const tree = ctx.getTree()
-  const block = flattenTree(tree).find((b) => b.id === targetId)
+  const block = findBlockById(tree, targetId)
   if (!block) return
 
   const text = block.content ?? ''
@@ -96,22 +99,15 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
   const newBlockType: BlockType =
     isHeading ? { type: 'paragraph' } : { ...block.block_type }
 
-  // ── 原子 API：一次调用完成 split ──
+  // ── 原子 API：一次调用完成 split（含 heading 嵌套） ──
   try {
     const { updated_block, new_block } = await splitBlock(targetId, {
       content_before: contentBefore,
       content_after: contentAfter,
       new_block_type: newBlockType,
+      nest_under_parent: isHeading || undefined,
+      operation_id: ctx.operationId,
     })
-
-    // heading 的 Enter → 新段落作为 heading 的第一个子块（而非兄弟）
-    if (isHeading) {
-      const firstChildId = block.children?.[0]?.id
-      await moveBlock(new_block.id, {
-        target_parent_id: targetId,
-        ...(firstChildId ? { before_id: firstChildId } : {}),
-      })
-    }
 
     // 用后端返回的真实数据更新 UI
     const newBlock: BlockNode = { ...new_block, children: [] }
@@ -150,7 +146,7 @@ export async function executeDelete(ctx: CommandContext, params: DeleteParams): 
 
   // 悲观：先等 API
   try {
-    await deleteBlock(params.blockId)
+    await deleteBlock(params.blockId, ctx.operationId)
   } catch (err) {
     console.error('[delete] 删除块失败:', err)
     return
@@ -169,7 +165,7 @@ export async function executeDelete(ctx: CommandContext, params: DeleteParams): 
  */
 export async function executeMerge(ctx: CommandContext, params: MergeParams): Promise<void> {
   const tree = ctx.getTree()
-  const block = flattenTree(tree).find((b) => b.id === params.blockId)
+  const block = findBlockById(tree, params.blockId)
   if (!block) return
 
   const prev = findPrevBlock(tree, params.blockId)
@@ -185,6 +181,7 @@ export async function executeMerge(ctx: CommandContext, params: MergeParams): Pr
   try {
     const { merged_block } = await mergeBlock(params.blockId, {
       direction: 'previous',
+      operation_id: ctx.operationId,
     })
 
     // 用后端返回的真实数据更新 UI
@@ -232,8 +229,7 @@ export async function executeConvertBlock(
 
   try {
     // 检查旧类型是否为 heading（用于判断是否需要 refetch 整棵树）
-    const allBlocks = flattenTree(ctx.getTree())
-    const oldBlock = allBlocks.find((b) => b.id === params.blockId)
+    const oldBlock = findBlockById(ctx.getTree(), params.blockId)
     const wasHeading = oldBlock?.block_type.type === 'heading'
     const becomesHeading = params.blockType.type === 'heading'
     // heading 相关的类型变化会触发后端自动嵌套（reparent），需要 refetch 整棵树
@@ -242,6 +238,7 @@ export async function executeConvertBlock(
     const updated = await updateBlock(params.blockId, {
       block_type: params.blockType,
       content: params.content,
+      operation_id: ctx.operationId,
     })
 
     if (needsRefetch) {

@@ -11,7 +11,8 @@ use crate::repo::block_repo::InsertBlockParams;
 use crate::repo::Db;
 use crate::error::AppError;
 use crate::model::{generate_block_id, Block, BlockType};
-use crate::service::block::{calculate_insert_position, now_iso};
+use crate::service::block::now_iso;
+use crate::service::position;
 use crate::util::fractional;
 
 use crate::api::response::{BlockNode, DocumentChildrenResult, DocumentContentResult};
@@ -58,7 +59,7 @@ pub fn create_document(
 
     // 2. 计算 position（在同级兄弟文档中的位置）
     let position =
-        calculate_insert_position(&conn, &parent_id_actual, after_id.as_deref())?;
+        position::calculate_insert_position(&conn, &parent_id_actual, after_id.as_deref())?;
 
     // 3. 创建 Document Block
     let mut properties = HashMap::new();

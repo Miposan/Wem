@@ -136,16 +136,16 @@ export function updateBlock(id: string, req: Omit<UpdateBlockReq, 'id'>) {
   return post<Block>('/blocks/update', { id, ...req } as UpdateBlockReq)
 }
 
-export function deleteBlock(id: string) {
-  return post<DeleteResult>('/blocks/delete', { id } as DeleteBlockReq)
+export function deleteBlock(id: string, operation_id?: string) {
+  return post<DeleteResult>('/blocks/delete', { id, operation_id } as DeleteBlockReq)
 }
 
 export function moveBlock(id: string, req: Omit<MoveBlockReq, 'id'>) {
   return post<Block>('/blocks/move', { id, ...req } as MoveBlockReq)
 }
 
-export function restoreBlock(id: string) {
-  return post<RestoreResult>('/blocks/restore', { id } as RestoreReq)
+export function restoreBlock(id: string, operation_id?: string) {
+  return post<RestoreResult>('/blocks/restore', { id, operation_id } as RestoreReq)
 }
 
 // getChildren 已删除：MVP 阶段通过 getDocument 获取完整内容树

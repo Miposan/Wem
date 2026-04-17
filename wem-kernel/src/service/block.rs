@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::request::{BatchOp, BatchReq, CreateBlockReq, MoveBlockReq, UpdateBlockReq};
+use crate::api::request::{BatchOp, BatchReq, CreateBlockReq, MoveBlockReq, PropertiesMode, UpdateBlockReq};
 use crate::api::response::{
     BatchOpResult, BatchResult, DeleteResult, RestoreResult,
 };
@@ -22,6 +22,7 @@ use crate::repo::Db;
 use crate::error::AppError;
 use crate::model::{generate_block_id, Block, BlockType};
 use crate::util::fractional;
+use crate::service::position;
 
 // ─── 辅助函数 ──────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
 
     // 4. 计算 position
     let position =
-        calculate_insert_position(&conn, &req.parent_id, req.after_id.as_deref())?;
+        position::calculate_insert_position(&conn, &req.parent_id, req.after_id.as_deref())?;
 
     // 5. 推断 content_type
     let content_type = req
@@ -123,16 +124,10 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
 // ─── 查询 Block ────────────────────────────────────────────────
 
 /// 获取单个 Block（不包含已删除的）
-pub fn get_block(db: &Db, id: &str) -> Result<Block, AppError> {
-    get_block_impl(db, id, false)
-}
-
-/// 获取单个 Block（可选择是否包含已删除的）
-pub fn get_block_include_deleted(db: &Db, id: &str, include_deleted: bool) -> Result<Block, AppError> {
-    get_block_impl(db, id, include_deleted)
-}
-
-fn get_block_impl(db: &Db, id: &str, include_deleted: bool) -> Result<Block, AppError> {
+/// 获取单个 Block
+///
+/// `include_deleted` 为 true 时也返回已软删除的块，默认只返回正常块。
+pub fn get_block(db: &Db, id: &str, include_deleted: bool) -> Result<Block, AppError> {
     let conn = db.lock().unwrap();
     let result = if include_deleted {
         repo::find_by_id_raw(&conn, id)
@@ -207,7 +202,7 @@ fn update_block_inner(
 
     // 4. 计算新 properties（merge 或 replace）
     let new_properties = match req.properties {
-        Some(ref new_props) if req.properties_mode == "replace" => new_props.clone(),
+        Some(ref new_props) if req.properties_mode == PropertiesMode::Replace => new_props.clone(),
         Some(ref new_props) => {
             let mut merged = current.properties.clone();
             merged.extend(new_props.clone());
@@ -329,7 +324,7 @@ fn promote_children(
 /// 返回逃逸后的有效 (parent_id, position)，供后续吸收逻辑使用。
 fn escape_heading_if_needed(
     conn: &rusqlite::Connection,
-    _block_id: &str,
+    block_id: &str,
     current: &Block,
     new_level: u8,
 ) -> Result<(String, String), AppError> {
@@ -380,7 +375,7 @@ fn escape_heading_if_needed(
 
     // Reparent 当前块到 target_parent
     let now = now_iso();
-    repo::update_parent_position(conn, _block_id, &target_parent_id, &new_position, &now)
+    repo::update_parent_position(conn, block_id, &target_parent_id, &new_position, &now)
         .map_err(|e| AppError::Internal(format!("逃逸 reparent 失败: {}", e)))?;
 
     Ok((target_parent_id, new_position))
@@ -400,7 +395,7 @@ fn absorb_siblings_after(
     let siblings_after = repo::find_siblings_after(conn, parent_id, position)
         .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
 
-    let mut pos = calculate_insert_position(conn, heading_id, None)?;
+    let mut pos = position::calculate_insert_position(conn, heading_id, None)?;
     for sibling in &siblings_after {
         match &sibling.block_type {
             BlockType::Heading { level: sib_level } if *sib_level <= heading_level => {
@@ -583,7 +578,7 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
     }
 
     // 4. 计算新 position
-    let new_position = calculate_move_position(
+    let new_position = position::calculate_move_position(
         &conn,
         &target_parent_id,
         req.before_id.as_deref(),
@@ -804,7 +799,7 @@ fn batch_create_block(
     // 推断 document_id
     let document_id = derive_document_id(&parent);
 
-    let position = calculate_insert_position(conn, parent_id, after_id)?;
+    let position = position::calculate_insert_position(conn, parent_id, after_id)?;
     let ct = content_type
         .map(|ct| ct.as_str().to_string())
         .unwrap_or_else(|| block_type.default_content_type().as_str().to_string());
@@ -841,7 +836,7 @@ fn batch_update_block(
     id: &str,
     content: Option<&str>,
     properties: &Option<HashMap<String, String>>,
-    properties_mode: &str,
+    properties_mode: &PropertiesMode,
 ) -> Result<u64, AppError> {
     let current = repo::find_by_id(conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在", id)))?;
@@ -851,7 +846,7 @@ fn batch_update_block(
         .unwrap_or(current.content);
 
     let new_properties = match properties {
-        Some(new_props) if properties_mode == "replace" => new_props.clone(),
+        Some(new_props) if properties_mode == &PropertiesMode::Replace => new_props.clone(),
         Some(new_props) => {
             let mut merged = current.properties.clone();
             merged.extend(new_props.clone());
@@ -937,7 +932,7 @@ fn batch_move_block(
         }
     }
 
-    let new_position = calculate_move_position(
+    let new_position = position::calculate_move_position(
         conn, &target_parent, before_id, after_id,
     )?;
 
@@ -953,136 +948,6 @@ fn batch_move_block(
 
     repo::get_version(conn, id)
         .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))
-}
-
-// ─── 私有辅助函数 ──────────────────────────────────────────────
-
-/// 计算新 Block 的插入 position
-///
-/// - 有 after_id → 插在 after_id 之后（如有后继兄弟则插入两者之间）
-/// - 无 after_id → 追加到末尾
-pub(crate) fn calculate_insert_position(
-    conn: &rusqlite::Connection,
-    parent_id: &str,
-    after_id: Option<&str>,
-) -> Result<String, AppError> {
-    match after_id {
-        Some(aid) => {
-            // 获取 after_block 的 position
-            let after_pos = repo::get_position(conn, aid, parent_id)
-                .map_err(|_| {
-                    AppError::BadRequest(format!(
-                        "after_id {} 不是 {} 的有效子块",
-                        aid, parent_id
-                    ))
-                })?;
-
-            // 查找 after_pos 之后紧邻的兄弟（用于生成 between）
-            let next_pos = repo::get_next_sibling_position(conn, parent_id, &after_pos)
-                .map_err(|e| AppError::Internal(format!("查询后继兄弟失败: {}", e)))?;
-
-            match next_pos {
-                Some(np) => Ok(fractional::generate_between(&after_pos, &np)),
-                None => Ok(fractional::generate_after(&after_pos)),
-            }
-        }
-        None => {
-            // 追加到末尾
-            let max_pos = repo::get_max_position(conn, parent_id)
-                .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
-
-            match max_pos {
-                Some(mp) => Ok(fractional::generate_after(&mp)),
-                None => Ok(fractional::generate_first()),
-            }
-        }
-    }
-}
-
-/// 计算移动操作的新 position
-///
-/// 支持三种定位方式（优先级从高到低）：
-/// 1. 同时指定 before_id 和 after_id → 插在两者之间
-/// 2. 只指定 after_id → 插在之后
-/// 3. 只指定 before_id → 插在之前
-/// 4. 都不指定 → 追加到末尾
-fn calculate_move_position(
-    conn: &rusqlite::Connection,
-    target_parent_id: &str,
-    before_id: Option<&str>,
-    after_id: Option<&str>,
-) -> Result<String, AppError> {
-    match (before_id, after_id) {
-        // 情况 1：同时指定 → 插在两者之间
-        (Some(bid), Some(aid)) => {
-            let after_pos = get_sibling_position(conn, aid, target_parent_id)?;
-            let before_pos = get_sibling_position(conn, bid, target_parent_id)?;
-
-            if after_pos >= before_pos {
-                return Err(AppError::BadRequest(
-                    "after_id 的位置必须在 before_id 之前".to_string(),
-                ));
-            }
-
-            Ok(fractional::generate_between(&after_pos, &before_pos))
-        }
-
-        // 情况 2：只指定 before_id → 插在之前
-        (Some(bid), None) => {
-            let before_pos = get_sibling_position(conn, bid, target_parent_id)?;
-
-            // 查找 before_pos 之前紧邻的兄弟
-            let prev_pos = repo::get_prev_sibling_position(conn, target_parent_id, &before_pos)
-                .map_err(|e| AppError::Internal(format!("查询前驱兄弟失败: {}", e)))?;
-
-            match prev_pos {
-                Some(pp) => Ok(fractional::generate_between(&pp, &before_pos)),
-                None => Ok(fractional::generate_before(&before_pos)),
-            }
-        }
-
-        // 情况 3：只指定 after_id → 插在之后
-        (None, Some(aid)) => {
-            let after_pos = get_sibling_position(conn, aid, target_parent_id)?;
-
-            // 查找 after_pos 之后紧邻的兄弟
-            let next_pos = repo::get_next_sibling_position(conn, target_parent_id, &after_pos)
-                .map_err(|e| AppError::Internal(format!("查询后继兄弟失败: {}", e)))?;
-
-            match next_pos {
-                Some(np) => Ok(fractional::generate_between(&after_pos, &np)),
-                None => Ok(fractional::generate_after(&after_pos)),
-            }
-        }
-
-        // 情况 4：都不指定 → 追加到末尾
-        (None, None) => {
-            let max_pos = repo::get_max_position(conn, target_parent_id)
-                .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
-
-            match max_pos {
-                Some(mp) => Ok(fractional::generate_after(&mp)),
-                None => Ok(fractional::generate_first()),
-            }
-        }
-    }
-}
-
-/// 获取指定兄弟 Block 的 position
-///
-/// 验证该 Block 是 target_parent 的子块且未删除。
-fn get_sibling_position(
-    conn: &rusqlite::Connection,
-    sibling_id: &str,
-    target_parent_id: &str,
-) -> Result<String, AppError> {
-    repo::get_position(conn, sibling_id, target_parent_id)
-        .map_err(|_| {
-            AppError::BadRequest(format!(
-                "Block {} 不是 {} 的有效子块",
-                sibling_id, target_parent_id
-            ))
-        })
 }
 
 // ─── Split / Merge 意图操作 ──────────────────────────────────
@@ -1151,8 +1016,16 @@ fn split_block_inner(
     let updated_block = repo::find_by_id_raw(&conn, id)
         .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))?;
 
-    // 4. 计算新块的 position（插在当前块之后）
-    let position = calculate_insert_position(&conn, &current.parent_id, Some(id))?;
+    // 4. 计算新块的 position 和 parent_id
+    //    nest_under_parent = true 时，新块作为当前块的第一个子块（heading Enter）
+    //    否则作为当前块的兄弟插入到后面
+    let (new_parent_id, position) = if req.nest_under_parent.unwrap_or(false) {
+        let pos = position::calculate_insert_position(&conn, id, None)?;
+        (id.to_string(), pos)
+    } else {
+        let pos = position::calculate_insert_position(&conn, &current.parent_id, Some(id))?;
+        (current.parent_id.clone(), pos)
+    };
 
     // 5. 确定新块的 block_type
     let new_block_type = req.new_block_type.unwrap_or(BlockType::Paragraph);
@@ -1164,7 +1037,7 @@ fn split_block_inner(
 
     repo::insert_block(&conn, &InsertBlockParams {
         id: new_id.clone(),
-        parent_id: current.parent_id.clone(),
+        parent_id: new_parent_id,
         document_id,
         position,
         block_type: serde_json::to_string(&new_block_type).unwrap_or_default(),
@@ -1344,7 +1217,7 @@ mod tests {
     #[test]
     fn get_root_returns_root_block() {
         let db = init_test_db();
-        let root = get_block(&db, crate::model::ROOT_ID).unwrap();
+        let root = get_block(&db, crate::model::ROOT_ID, false).unwrap();
         assert_eq!(root.id, crate::model::ROOT_ID);
         assert_eq!(root.parent_id, crate::model::ROOT_ID);
     }
@@ -1362,6 +1235,7 @@ mod tests {
             content: "Hello world".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         };
 
         let block = create_block(&db, req).unwrap();
@@ -1384,6 +1258,7 @@ mod tests {
             content: "first".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         };
         let block1 = create_block(&db, req1).unwrap();
 
@@ -1395,6 +1270,7 @@ mod tests {
             content: "second".to_string(),
             properties: HashMap::new(),
             after_id: Some(block1.id.clone()),
+            operation_id: None,
         };
         let block2 = create_block(&db, req2).unwrap();
 
@@ -1412,6 +1288,7 @@ mod tests {
             content: "test".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         };
 
         let result = create_block(&db, req);
@@ -1435,10 +1312,11 @@ mod tests {
             content: "fetch me".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         };
         let created = create_block(&db, req).unwrap();
 
-        let fetched = get_block(&db, &created.id).unwrap();
+        let fetched = get_block(&db, &created.id, false).unwrap();
         assert_eq!(fetched.id, created.id);
         assert_eq!(fetched.content, b"fetch me");
     }
@@ -1447,7 +1325,7 @@ mod tests {
     fn get_block_nonexistent_fails() {
         let db = init_test_db();
 
-        let result = get_block(&db, "nonexistent0000000");
+        let result = get_block(&db, "nonexistent0000000", false);
         assert!(result.is_err());
         match result.unwrap_err() {
             AppError::NotFound(_) => {}
@@ -1523,6 +1401,7 @@ mod tests {
             content: "original".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         let updated = update_block(&db, &created.id, UpdateBlockReq {
@@ -1530,7 +1409,8 @@ mod tests {
             block_type: None,
             content: Some("updated".to_string()),
             properties: None,
-            properties_mode: "merge".to_string(),
+            properties_mode: PropertiesMode::Merge,
+            operation_id: None,
         }).unwrap();
 
         assert_eq!(updated.content, b"updated");
@@ -1550,6 +1430,7 @@ mod tests {
             content: "test".to_string(),
             properties: props,
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         let mut new_props = HashMap::new();
@@ -1559,7 +1440,8 @@ mod tests {
             block_type: None,
             content: None,
             properties: Some(new_props),
-            properties_mode: "merge".to_string(),
+            properties_mode: PropertiesMode::Merge,
+            operation_id: None,
         }).unwrap();
 
         assert_eq!(updated.properties.get("key1").unwrap(), "val1");
@@ -1579,6 +1461,7 @@ mod tests {
             content: "test".to_string(),
             properties: props,
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         let mut new_props = HashMap::new();
@@ -1588,7 +1471,8 @@ mod tests {
             block_type: None,
             content: None,
             properties: Some(new_props),
-            properties_mode: "replace".to_string(),
+            properties_mode: PropertiesMode::Replace,
+            operation_id: None,
         }).unwrap();
 
         assert!(updated.properties.get("key1").is_none()); // 被替换掉
@@ -1608,6 +1492,7 @@ mod tests {
             content: "delete me".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         let result = delete_block(&db, &created.id).unwrap();
@@ -1615,10 +1500,10 @@ mod tests {
         assert_eq!(result.cascade_count, 0); // 叶子块无后代
 
         // get_block 不再能查到
-        assert!(get_block(&db, &created.id).is_err());
+        assert!(get_block(&db, &created.id, false).is_err());
 
         // 但 get_block_include_deleted 可以
-        let deleted = get_block_include_deleted(&db, &created.id, true).unwrap();
+        let deleted = get_block(&db, &created.id, true).unwrap();
         assert_eq!(deleted.status, crate::model::BlockStatus::Deleted);
     }
 
@@ -1632,7 +1517,7 @@ mod tests {
         assert!(result.cascade_count >= 1); // 至少包含默认段落
 
         // 文档和段落都不可查
-        assert!(get_block(&db, &doc.id).is_err());
+        assert!(get_block(&db, &doc.id, false).is_err());
     }
 
     #[test]
@@ -1660,6 +1545,7 @@ mod tests {
             content: "restore me".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         delete_block(&db, &created.id).unwrap();
@@ -1668,7 +1554,7 @@ mod tests {
         assert_eq!(result.id, created.id);
 
         // 恢复后可以正常查询
-        let restored = get_block(&db, &created.id).unwrap();
+        let restored = get_block(&db, &created.id, false).unwrap();
         assert_eq!(restored.status, crate::model::BlockStatus::Normal);
     }
 
@@ -1683,6 +1569,7 @@ mod tests {
             content: "normal".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         let result = restore_block(&db, &created.id);
@@ -1704,6 +1591,7 @@ mod tests {
             target_parent_id: Some(doc1.id.clone()),
             before_id: None,
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         assert_eq!(moved.parent_id, doc1.id);
@@ -1719,6 +1607,7 @@ mod tests {
             target_parent_id: Some("any".to_string()),
             before_id: None,
             after_id: None,
+            operation_id: None,
         });
         assert!(result.is_err());
     }
@@ -1735,6 +1624,7 @@ mod tests {
             target_parent_id: Some(doc.id.clone()),
             before_id: None,
             after_id: None,
+            operation_id: None,
         });
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1776,6 +1666,7 @@ mod tests {
             content: "Section".to_string(),
             properties: HashMap::new(),
             after_id: None,
+            operation_id: None,
         }).unwrap();
 
         let result = document::get_document_content(&db, &doc.id).unwrap();
@@ -1809,6 +1700,7 @@ mod tests {
                 content: format!("para {}", i),
                 properties: HashMap::new(),
                 after_id: None,
+                operation_id: None,
             }).unwrap();
         }
 

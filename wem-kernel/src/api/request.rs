@@ -3,10 +3,24 @@
 //! 所有 RPC 端点的请求体类型（全 POST）。
 //! 这些类型只用于 HTTP 层反序列化，不涉及数据库内部结构。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::model::{BlockType, ContentType};
+
+// ─── 枚举类型 ──────────────────────────────────────────────────
+
+/// 属性更新模式
+///
+/// - `merge`：将新属性合并到已有属性（默认）
+/// - `replace`：用新属性完全替换已有属性
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PropertiesMode {
+    #[default]
+    Merge,
+    Replace,
+}
 
 // ─── Block CRUD 请求 ──────────────────────────────────────────
 
@@ -15,6 +29,8 @@ use crate::model::{BlockType, ContentType};
 /// `POST /api/v1/blocks`
 #[derive(Debug, Deserialize)]
 pub struct CreateBlockReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// 父块 ID（必填）
     pub parent_id: String,
     /// Block 类型（必填）
@@ -36,6 +52,8 @@ pub struct CreateBlockReq {
 /// `POST /api/v1/blocks/update`
 #[derive(Debug, Deserialize)]
 pub struct UpdateBlockReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 新内容（不传则不更新 content）
@@ -47,9 +65,9 @@ pub struct UpdateBlockReq {
     pub block_type: Option<BlockType>,
     /// 新属性（不传则不更新 properties）
     pub properties: Option<HashMap<String, String>>,
-    /// 属性更新模式："merge"（合并，默认）或 "replace"（替换全部）
-    #[serde(default = "default_properties_mode")]
-    pub properties_mode: String,
+    /// 属性更新模式：merge（合并，默认）或 replace（替换全部）
+    #[serde(default)]
+    pub properties_mode: PropertiesMode,
 }
 
 /// 移动 Block 请求
@@ -57,6 +75,8 @@ pub struct UpdateBlockReq {
 /// `POST /api/v1/blocks/move`
 #[derive(Debug, Deserialize)]
 pub struct MoveBlockReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 目标父块 ID（可选，不传则不改变父块）
@@ -65,10 +85,6 @@ pub struct MoveBlockReq {
     pub before_id: Option<String>,
     /// 移到此 Block 之后（可选）
     pub after_id: Option<String>,
-}
-
-fn default_properties_mode() -> String {
-    "merge".to_string()
 }
 
 // ─── Split / Merge 意图 API ──────────────────────────────────
@@ -81,6 +97,8 @@ fn default_properties_mode() -> String {
 /// 后端原子性地完成「更新当前块 + 创建新块」两步操作。
 #[derive(Debug, Deserialize)]
 pub struct SplitReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 光标前的内容（用于更新当前块）
@@ -90,6 +108,9 @@ pub struct SplitReq {
     /// 新块的类型（可选，不传则默认为 paragraph）
     /// 例：在 heading 中 Enter → 新块应为 paragraph
     pub new_block_type: Option<BlockType>,
+    /// 是否将新块嵌套为当前块的子块（而非兄弟）
+    /// heading 的 Enter 需要将新段落作为 heading 的第一个子块
+    pub nest_under_parent: Option<bool>,
 }
 
 /// 合并 Block 请求
@@ -101,6 +122,8 @@ pub struct SplitReq {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // direction / prev_content 预留给未来扩展
 pub struct MergeReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 合并方向（预留扩展，当前仅支持 "previous"）
@@ -121,6 +144,8 @@ fn default_merge_direction() -> String {
 /// `POST /api/v1/documents`
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// 文档标题
     pub title: String,
     /// 父文档 ID（不传 = 根文档）
@@ -160,6 +185,8 @@ pub struct ImportTextReq {
 /// 参考 03-api-rest.md §3 "批量操作"
 #[derive(Debug, Deserialize)]
 pub struct BatchReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     /// 操作列表（上限 50 条）
     pub operations: Vec<BatchOp>,
 }
@@ -196,8 +223,8 @@ pub enum BatchOp {
         /// 新属性（可选）
         properties: Option<HashMap<String, String>>,
         /// 属性更新模式
-        #[serde(default = "default_properties_mode")]
-        properties_mode: String,
+        #[serde(default)]
+        properties_mode: PropertiesMode,
     },
     /// 软删除 Block
     Delete {
@@ -240,6 +267,8 @@ pub struct GetChildrenReq {
 /// `POST /api/v1/documents/delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteDocumentReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     pub id: String,
 }
 
@@ -274,6 +303,8 @@ pub struct GetBlockReq {
 /// `POST /api/v1/blocks/delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteBlockReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     pub id: String,
 }
 
@@ -282,6 +313,8 @@ pub struct DeleteBlockReq {
 /// `POST /api/v1/blocks/restore`
 #[derive(Debug, Deserialize)]
 pub struct RestoreReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
     pub id: String,
 }
 

@@ -5,7 +5,7 @@
  * 同时负责 contentEditable 块的显式 DOM 内容同步。
  *
  * 关键原则：
- * 1. 先立即尝试聚焦，失败则在下一帧通过 requestAnimationFrame 重试
+ * 1. 先立即尝试聚焦；若元素尚未渲染，通过 MutationObserver 等待其出现
  * 2. 聚焦后自动 scrollIntoView，确保光标所在块始终可见
  * 3. 通过 block ID + offset 定位，不依赖 DOM 结构
  */
@@ -58,67 +58,79 @@ export function getCursorPosition(): { blockId: string; offset: number } | null 
   return { blockId, offset }
 }
 
-/** 最大重试次数（每帧一次） */
-const FOCUS_MAX_RETRIES = 5
+/** Observer 超时时间（ms），防止永久等待 */
+const FOCUS_OBSERVER_TIMEOUT_MS = 2_000
+
+/**
+ * 将光标设置到指定元素的目标偏移位置
+ *
+ * 辅助函数：执行 focus + 选区设置 + scrollIntoView。
+ * 返回 true 表示焦点成功设置到目标元素。
+ */
+function placeCursor(el: HTMLElement, offset: number): boolean {
+  // 先 blur 当前焦点元素，避免某些浏览器下 focus() 不生效
+  const prev = document.activeElement as HTMLElement | null
+  if (prev && prev !== el && prev.getAttribute('contenteditable') !== null) {
+    prev.blur()
+  }
+
+  el.focus()
+
+  const sel = window.getSelection()
+  if (!sel) return document.activeElement === el
+
+  const range = document.createRange()
+  const textNode = el.firstChild
+
+  if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+    const len = textNode.textContent?.length ?? 0
+    range.setStart(textNode, Math.min(offset, len))
+  } else {
+    range.setStart(el, 0)
+  }
+  range.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(range)
+
+  // 确保光标所在块滚入视口（避免快速 Enter 时光标"掉出"视口底部）
+  el.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+
+  return document.activeElement === el
+}
 
 /**
  * 聚焦指定块的指定字符偏移位置
  *
- * 立即尝试聚焦；如果失败则在后续帧重试（最多 FOCUS_MAX_RETRIES 次）。
- * 聚焦后自动 scrollIntoView，确保光标所在块始终可见。
- *
- * 多次重试机制确保：
- * - React flushSync 后 DOM 可能需要一帧才能稳定
- * - 快速连续操作时，前一个操作的 flushSync 可能干扰当前焦点
+ * 立即尝试聚焦；若元素尚未渲染，通过 MutationObserver 等待其出现后聚焦。
+ * 比固定次数 rAF 重试更可靠：元素出现即响应，无需猜测渲染时机。
  */
 export function focusBlock(blockId: string, offset: number = 0): void {
-  let attempts = 0
-
-  const tryFocus = (): void => {
-    const el = findEditable(blockId)
-    if (!el) {
-      // 元素尚未渲染，下一帧重试
-      attempts++
-      if (attempts < FOCUS_MAX_RETRIES) requestAnimationFrame(tryFocus)
-      return
-    }
-
-    // 先 blur 当前焦点元素，避免某些浏览器下 focus() 不生效
-    const prev = document.activeElement as HTMLElement | null
-    if (prev && prev !== el && prev.getAttribute('contenteditable') !== null) {
-      prev.blur()
-    }
-
-    el.focus()
-
-    const sel = window.getSelection()
-    if (!sel) return
-
-    const range = document.createRange()
-    const textNode = el.firstChild
-
-    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-      const len = textNode.textContent?.length ?? 0
-      range.setStart(textNode, Math.min(offset, len))
-    } else {
-      range.setStart(el, 0)
-    }
-    range.collapse(true)
-    sel.removeAllRanges()
-    sel.addRange(range)
-
-    // 确保光标所在块滚入视口（避免快速 Enter 时光标"掉出"视口底部）
-    el.scrollIntoView({ block: 'nearest', behavior: 'instant' })
-
-    // 验证焦点是否真的到了目标元素
-    if (document.activeElement !== el) {
-      attempts++
-      if (attempts < FOCUS_MAX_RETRIES) requestAnimationFrame(tryFocus)
-    }
+  // 1. 立即尝试：元素已存在时直接聚焦
+  const el = findEditable(blockId)
+  if (el) {
+    placeCursor(el, offset)
+    return
   }
 
-  // 立即尝试
-  tryFocus()
+  // 2. 元素不存在：通过 MutationObserver 等待其出现
+  const targetSelector = `[data-block-id="${blockId}"] [contenteditable="true"]`
+  const observer = new MutationObserver((mutations, obs) => {
+    const target = document.querySelector(targetSelector) as HTMLElement | null
+    if (target) {
+      obs.disconnect()
+      clearTimeout(timeout)
+      placeCursor(target, offset)
+    }
+  })
+
+  // 超时保护：防止永久等待（元素永远不会出现的情况）
+  const timeout = setTimeout(() => {
+    observer.disconnect()
+    console.warn(`[focusBlock] 等待元素超时: ${blockId}`)
+  }, FOCUS_OBSERVER_TIMEOUT_MS)
+
+  // 观察整个 body 的子树变化（块可能插入到任何位置）
+  observer.observe(document.body, { childList: true, subtree: true })
 }
 
 /** 聚焦指定块的末尾 */
