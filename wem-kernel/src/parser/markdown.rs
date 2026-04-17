@@ -1508,6 +1508,7 @@ Final paragraph.
         let doc = Block {
             id: "doc1".to_string(),
             parent_id: "doc1".to_string(),
+            document_id: "doc1".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
             content_type: ContentType::Markdown,
@@ -1537,6 +1538,7 @@ Final paragraph.
         let h2 = Block {
             id: "h2".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Heading { level: 2 },
             content_type: ContentType::Empty,
@@ -1566,6 +1568,7 @@ Final paragraph.
         let para = Block {
             id: "p1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
             content_type: ContentType::Markdown,
@@ -1591,6 +1594,7 @@ Final paragraph.
         let code = Block {
             id: "c1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::CodeBlock { language: "rust".to_string() },
             content_type: ContentType::Markdown,
@@ -1618,6 +1622,7 @@ Final paragraph.
         let math = Block {
             id: "m1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::MathBlock,
             content_type: ContentType::Markdown,
@@ -1644,6 +1649,7 @@ Final paragraph.
         let tb = Block {
             id: "t1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::ThematicBreak,
             content_type: ContentType::Empty,
@@ -1669,6 +1675,7 @@ Final paragraph.
         let img = Block {
             id: "i1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Image { url: "https://example.com/img.png".to_string() },
             content_type: ContentType::Empty,
@@ -1698,6 +1705,7 @@ Final paragraph.
         let list = Block {
             id: "list1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::List { ordered: false },
             content_type: ContentType::Empty,
@@ -1715,6 +1723,7 @@ Final paragraph.
         let item1 = Block {
             id: "li1".to_string(),
             parent_id: "list1".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::ListItem,
             content_type: ContentType::Empty,
@@ -1732,6 +1741,7 @@ Final paragraph.
         let item1_para = Block {
             id: "p1".to_string(),
             parent_id: "li1".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
             content_type: ContentType::Markdown,
@@ -1757,6 +1767,7 @@ Final paragraph.
         let list = Block {
             id: "list1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::List { ordered: true },
             content_type: ContentType::Empty,
@@ -1774,6 +1785,7 @@ Final paragraph.
         let item1 = Block {
             id: "li1".to_string(),
             parent_id: "list1".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::ListItem,
             content_type: ContentType::Empty,
@@ -1791,6 +1803,7 @@ Final paragraph.
         let item1_para = Block {
             id: "p1".to_string(),
             parent_id: "li1".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
             content_type: ContentType::Markdown,
@@ -1816,6 +1829,7 @@ Final paragraph.
         let bq = Block {
             id: "bq1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Blockquote,
             content_type: ContentType::Empty,
@@ -1833,6 +1847,7 @@ Final paragraph.
         let para = Block {
             id: "p1".to_string(),
             parent_id: "bq1".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
             content_type: ContentType::Markdown,
@@ -1860,6 +1875,7 @@ Final paragraph.
         let audio = Block {
             id: "a1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Audio { url: "https://example.com/audio.mp3".to_string() },
             content_type: ContentType::Empty,
@@ -1892,6 +1908,7 @@ Final paragraph.
         let video = Block {
             id: "v1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Video { url: "https://example.com/video.mp4".to_string() },
             content_type: ContentType::Empty,
@@ -1921,6 +1938,7 @@ Final paragraph.
         let para = Block {
             id: "p1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
             content_type: ContentType::Markdown,
@@ -1946,6 +1964,7 @@ Final paragraph.
         let para = Block {
             id: "p1".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
             content_type: ContentType::Markdown,
@@ -1974,6 +1993,7 @@ Final paragraph.
         let doc = Block {
             id: "root".to_string(),
             parent_id: "root".to_string(),
+            document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
             content_type: ContentType::Markdown,
@@ -2076,6 +2096,7 @@ Final paragraph.
         Block {
             id: id.to_string(),
             parent_id: id.to_string(),
+            document_id: id.to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
             content_type: ContentType::Markdown,

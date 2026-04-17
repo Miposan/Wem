@@ -129,6 +129,7 @@ mod tests {
     use crate::model::ROOT_ID;
     use crate::model::BlockType;
     use crate::service::block;
+    use crate::service::document;
 
     /// 辅助：导入 Markdown 文本
     fn import_md(db: &Db, content: &str) -> Result<ImportResult, AppError> {
@@ -197,7 +198,7 @@ mod tests {
         let db = init_test_db();
 
         // 先创建一个 Document 作为父块
-        let parent = block::create_document(&db, "Parent Doc".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
+        let parent = document::create_document(&db, "Parent Doc".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
 
         let req = ImportTextReq {
             format: "markdown".to_string(),
@@ -216,7 +217,7 @@ mod tests {
         let db = init_test_db();
 
         // 先创建一个 Document
-        let doc1 = block::create_document(&db, "First".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
+        let doc1 = document::create_document(&db, "First".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
 
         // 在 doc1 之后导入
         let req = ImportTextReq {

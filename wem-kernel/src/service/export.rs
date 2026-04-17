@@ -77,6 +77,7 @@ mod tests {
     use crate::repo::tests::init_test_db;
     use crate::model::ROOT_ID;
     use crate::service::block;
+    use crate::service::document;
     use crate::service::import;
 
     /// 辅助：导入 Markdown 并返回 doc_id
@@ -213,7 +214,7 @@ mod tests {
         let db = init_test_db();
 
         // 使用 block::create_document 创建
-        let doc = block::create_document(&db, "Created Doc".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
+        let doc = document::create_document(&db, "Created Doc".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
 
         let result = export_text(&db, &doc.id, "markdown").unwrap();
         assert!(result.content.contains("Created Doc"));

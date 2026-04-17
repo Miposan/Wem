@@ -30,6 +30,31 @@ pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// 推断 document_id：给定父块，返回新建子块应使用的 document_id。
+///
+/// - 如果 parent 是 Document 类型 → document_id = parent.id（文档块自身就是文档根）
+/// - 否则继承 parent.document_id（内容块指向所属文档）
+fn derive_document_id(parent: &Block) -> String {
+    if matches!(parent.block_type, BlockType::Document) {
+        parent.id.clone()
+    } else {
+        parent.document_id.clone()
+    }
+}
+
+/// 校验 heading level 是否在合法范围 1..=6 内
+fn validate_heading_level(block_type: &BlockType) -> Result<(), AppError> {
+    if let BlockType::Heading { level } = block_type {
+        if !(*level >= 1 && *level <= 6) {
+            return Err(AppError::BadRequest(format!(
+                "Heading level 必须在 1-6 之间，实际为 {}",
+                level
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ─── 创建 Block ────────────────────────────────────────────────
 
 /// 创建 Block
@@ -45,35 +70,31 @@ pub(crate) fn now_iso() -> String {
 pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     let conn = db.lock().unwrap();
 
-    // 1. 验证 parent 存在且未删除
+    // 1. 校验 block_type 合法性
+    validate_heading_level(&req.block_type)?;
+
+    // 2. 验证 parent 存在且未删除
     let parent = repo::find_by_id(&conn, &req.parent_id)
         .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", req.parent_id)))?;
 
-    // 1.5 推断 document_id：
-    // - 如果 parent 是 Document 类型 → document_id = parent.id（文档块自身就是文档根）
-    // - 否则继承 parent.document_id（内容块指向所属文档）
-    // 不能无条件继承 parent.document_id，因为旧数据中文档块的 document_id 可能是 ROOT_ID。
-    let document_id = if matches!(parent.block_type, BlockType::Document) {
-        parent.id.clone()
-    } else {
-        parent.document_id.clone()
-    };
+    // 3. 推断 document_id
+    let document_id = derive_document_id(&parent);
 
-    // 2. 计算 position
+    // 4. 计算 position
     let position =
         calculate_insert_position(&conn, &req.parent_id, req.after_id.as_deref())?;
 
-    // 3. 推断 content_type
+    // 5. 推断 content_type
     let content_type = req
         .content_type
         .clone()
         .unwrap_or_else(|| req.block_type.default_content_type());
 
-    // 4. 生成 ID 和时间戳
+    // 6. 生成 ID 和时间戳
     let id = generate_block_id();
     let now = now_iso();
 
-    // 5. INSERT（通过 repository）
+    // 7. INSERT（通过 repository）
     repo::insert_block(&conn, &InsertBlockParams {
         id: id.clone(),
         parent_id: req.parent_id,
@@ -94,7 +115,7 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     })
     .map_err(|e| AppError::Internal(format!("插入 Block 失败: {}", e)))?;
 
-    // 7. 查询并返回完整 Block
+    // 8. 查询并返回完整 Block
     repo::find_by_id_raw(&conn, &id)
         .map_err(|e| AppError::Internal(format!("查询刚创建的 Block 失败: {}", e)))
 }
@@ -134,6 +155,38 @@ fn get_block_impl(db: &Db, id: &str, include_deleted: bool) -> Result<Block, App
 /// 参考 03-api-rest.md §3 "更新 Block"
 pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, AppError> {
     let conn = db.lock().unwrap();
+
+    // 校验 heading level 合法性
+    if let Some(ref bt) = req.block_type {
+        validate_heading_level(bt)?;
+    }
+
+    // 开启事务：update + heading 重组必须原子化
+    conn.execute_batch("BEGIN")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+
+    let result = update_block_inner(&conn, id, req);
+
+    match &result {
+        Ok(_) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| AppError::Internal(format!("提交事务失败: {}", e)))?;
+        }
+        Err(_) => {
+            // ROLLBACK 失败不影响原始错误
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+    }
+
+    result
+}
+
+/// update_block 的核心逻辑（在事务内执行）
+fn update_block_inner(
+    conn: &rusqlite::Connection,
+    id: &str,
+    req: UpdateBlockReq,
+) -> Result<Block, AppError> {
 
     // 1. 查询当前 Block
     let current = repo::find_by_id(&conn, id)
@@ -223,7 +276,7 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
     }
 
     // 7. 查询并返回更新后的 Block
-    repo::find_by_id_raw(&conn, id)
+    repo::find_by_id_raw(conn, id)
         .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))
 }
 
@@ -748,8 +801,8 @@ fn batch_create_block(
     let parent = repo::find_by_id(conn, parent_id)
         .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", parent_id)))?;
 
-    // 推断 document_id：继承父块的 document_id
-    let document_id = parent.document_id.clone();
+    // 推断 document_id
+    let document_id = derive_document_id(&parent);
 
     let position = calculate_insert_position(conn, parent_id, after_id)?;
     let ct = content_type
@@ -1050,6 +1103,32 @@ use crate::api::response::{MergeResult, SplitResult};
 pub fn split_block(db: &Db, id: &str, req: SplitReq) -> Result<SplitResult, AppError> {
     let conn = db.lock().unwrap();
 
+    // 开启事务：更新当前块 + 插入新块必须原子化
+    conn.execute_batch("BEGIN")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+
+    let result = split_block_inner(&conn, id, req);
+
+    match &result {
+        Ok(_) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| AppError::Internal(format!("提交事务失败: {}", e)))?;
+        }
+        Err(_) => {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+    }
+
+    result
+}
+
+/// split_block 的核心逻辑（在事务内执行）
+fn split_block_inner(
+    conn: &rusqlite::Connection,
+    id: &str,
+    req: SplitReq,
+) -> Result<SplitResult, AppError> {
+
     // 1. 查询当前 Block
     let current = repo::find_by_id(&conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
@@ -1081,11 +1160,7 @@ pub fn split_block(db: &Db, id: &str, req: SplitReq) -> Result<SplitResult, AppE
 
     // 6. 创建新块
     let new_id = generate_block_id();
-    let document_id = if matches!(current.block_type, BlockType::Document) {
-        current.id.clone()
-    } else {
-        current.document_id.clone()
-    };
+    let document_id = derive_document_id(&current);
 
     repo::insert_block(&conn, &InsertBlockParams {
         id: new_id.clone(),
@@ -1130,6 +1205,31 @@ pub fn split_block(db: &Db, id: &str, req: SplitReq) -> Result<SplitResult, AppE
 /// 6. 返回合并后的块和被删除的块 ID
 pub fn merge_block(db: &Db, id: &str, _req: MergeReq) -> Result<MergeResult, AppError> {
     let conn = db.lock().unwrap();
+
+    // 开启事务：合并内容 + reparent 子块 + 软删除必须原子化
+    conn.execute_batch("BEGIN")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+
+    let result = merge_block_inner(&conn, id);
+
+    match &result {
+        Ok(_) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| AppError::Internal(format!("提交事务失败: {}", e)))?;
+        }
+        Err(_) => {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+    }
+
+    result
+}
+
+/// merge_block 的核心逻辑（在事务内执行）
+fn merge_block_inner(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<MergeResult, AppError> {
 
     // 1. 查询当前 Block
     let current = repo::find_by_id(&conn, id)
@@ -1237,13 +1337,14 @@ mod tests {
     use super::*;
     use crate::repo::tests::init_test_db;
     use crate::model::BlockType;
+    use crate::service::document;
 
     // ── get_root ─────────────────────────────────────────
 
     #[test]
     fn get_root_returns_root_block() {
         let db = init_test_db();
-        let root = get_root(&db).unwrap();
+        let root = get_block(&db, crate::model::ROOT_ID).unwrap();
         assert_eq!(root.id, crate::model::ROOT_ID);
         assert_eq!(root.parent_id, crate::model::ROOT_ID);
     }
@@ -1360,7 +1461,7 @@ mod tests {
     fn create_root_document() {
         let db = init_test_db();
 
-        let doc = create_document(
+        let doc = document::create_document(
             &db,
             "My First Doc".to_string(),
             None,   // 根文档
@@ -1373,9 +1474,9 @@ mod tests {
         assert_eq!(doc.properties.get("title").unwrap(), "My First Doc");
 
         // 验证同时创建了空段落子块
-        let tree = get_document_tree(&db, &doc.id).unwrap();
-        assert_eq!(tree.blocks.len(), 1); // 一个空段落
-        assert_eq!(tree.blocks[0].block_type, BlockType::Paragraph);
+        let content = document::get_document_content(&db, &doc.id).unwrap();
+        assert_eq!(content.blocks.len(), 1); // 一个空段落
+        assert_eq!(content.blocks[0].block.block_type, BlockType::Paragraph);
     }
 
     #[test]
@@ -1383,12 +1484,12 @@ mod tests {
         let db = init_test_db();
 
         // 先创建根文档
-        let parent = create_document(
+        let parent = document::create_document(
             &db, "Parent Doc".to_string(), None, None,
         ).unwrap();
 
         // 创建子文档
-        let child = create_document(
+        let child = document::create_document(
             &db,
             "Child Doc".to_string(),
             Some(parent.id.clone()),
@@ -1403,8 +1504,8 @@ mod tests {
     fn create_document_with_position() {
         let db = init_test_db();
 
-        let doc1 = create_document(&db, "Doc 1".to_string(), None, None).unwrap();
-        let doc2 = create_document(&db, "Doc 2".to_string(), None, Some(doc1.id.clone())).unwrap();
+        let doc1 = document::create_document(&db, "Doc 1".to_string(), None, None).unwrap();
+        let doc2 = document::create_document(&db, "Doc 2".to_string(), None, Some(doc1.id.clone())).unwrap();
 
         assert!(doc2.position > doc1.position);
     }
@@ -1425,6 +1526,7 @@ mod tests {
         }).unwrap();
 
         let updated = update_block(&db, &created.id, UpdateBlockReq {
+            id: created.id.clone(),
             block_type: None,
             content: Some("updated".to_string()),
             properties: None,
@@ -1453,6 +1555,7 @@ mod tests {
         let mut new_props = HashMap::new();
         new_props.insert("key2".to_string(), "val2".to_string());
         let updated = update_block(&db, &created.id, UpdateBlockReq {
+            id: created.id.clone(),
             block_type: None,
             content: None,
             properties: Some(new_props),
@@ -1481,6 +1584,7 @@ mod tests {
         let mut new_props = HashMap::new();
         new_props.insert("key2".to_string(), "val2".to_string());
         let updated = update_block(&db, &created.id, UpdateBlockReq {
+            id: created.id.clone(),
             block_type: None,
             content: None,
             properties: Some(new_props),
@@ -1522,7 +1626,7 @@ mod tests {
     fn delete_block_cascades_to_children() {
         let db = init_test_db();
 
-        let doc = create_document(&db, "Cascade Doc".to_string(), None, None).unwrap();
+        let doc = document::create_document(&db, "Cascade Doc".to_string(), None, None).unwrap();
 
         let result = delete_block(&db, &doc.id).unwrap();
         assert!(result.cascade_count >= 1); // 至少包含默认段落
@@ -1591,11 +1695,12 @@ mod tests {
     fn move_block_to_new_parent() {
         let db = init_test_db();
 
-        let doc1 = create_document(&db, "Doc 1".to_string(), None, None).unwrap();
-        let doc2 = create_document(&db, "Doc 2".to_string(), None, None).unwrap();
+        let doc1 = document::create_document(&db, "Doc 1".to_string(), None, None).unwrap();
+        let doc2 = document::create_document(&db, "Doc 2".to_string(), None, None).unwrap();
 
         // 将 doc2 移动到 doc1 下
         let moved = move_block(&db, &doc2.id, MoveBlockReq {
+            id: doc2.id.clone(),
             target_parent_id: Some(doc1.id.clone()),
             before_id: None,
             after_id: None,
@@ -1610,6 +1715,7 @@ mod tests {
         let db = init_test_db();
 
         let result = move_block(&db, crate::model::ROOT_ID, MoveBlockReq {
+            id: crate::model::ROOT_ID.to_string(),
             target_parent_id: Some("any".to_string()),
             before_id: None,
             after_id: None,
@@ -1621,10 +1727,11 @@ mod tests {
     fn move_block_cycle_detection() {
         let db = init_test_db();
 
-        let doc = create_document(&db, "Doc".to_string(), None, None).unwrap();
+        let doc = document::create_document(&db, "Doc".to_string(), None, None).unwrap();
 
         // 试图将 doc 移动到自身下
         let result = move_block(&db, &doc.id, MoveBlockReq {
+            id: doc.id.clone(),
             target_parent_id: Some(doc.id.clone()),
             before_id: None,
             after_id: None,
@@ -1643,12 +1750,12 @@ mod tests {
     fn list_root_documents_after_create() {
         let db = init_test_db();
 
-        create_document(&db, "Doc 1".to_string(), None, None).unwrap();
-        create_document(&db, "Doc 2".to_string(), None, None).unwrap();
+        document::create_document(&db, "Doc 1".to_string(), None, None).unwrap();
+        document::create_document(&db, "Doc 2".to_string(), None, None).unwrap();
 
-        let resp = list_root_documents(&db, 50, None).unwrap();
-        assert!(resp.blocks.len() >= 2); // 可能还有其他非文档块
-        let titles: Vec<&str> = resp.blocks.iter()
+        let docs = document::list_root_documents(&db).unwrap();
+        assert!(docs.len() >= 2);
+        let titles: Vec<&str> = docs.iter()
             .filter_map(|d| d.properties.get("title").map(|s: &String| s.as_str()))
             .collect();
         assert!(titles.contains(&"Doc 1"));
@@ -1661,7 +1768,7 @@ mod tests {
     fn get_document_tree_nested() {
         let db = init_test_db();
 
-        let doc = create_document(&db, "Tree Doc".to_string(), None, None).unwrap();
+        let doc = document::create_document(&db, "Tree Doc".to_string(), None, None).unwrap();
         let child = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
@@ -1671,17 +1778,17 @@ mod tests {
             after_id: None,
         }).unwrap();
 
-        let tree = get_document_tree(&db, &doc.id).unwrap();
-        assert_eq!(tree.root.id, doc.id);
-        assert_eq!(tree.blocks.len(), 2); // 默认段落 + heading
-        assert!(tree.blocks.iter().any(|b| b.id == child.id));
+        let result = document::get_document_content(&db, &doc.id).unwrap();
+        assert_eq!(result.document.id, doc.id);
+        assert_eq!(result.blocks.len(), 2); // 默认段落 + heading
+        assert!(result.blocks.iter().any(|n| n.block.id == child.id));
     }
 
     #[test]
     fn get_document_tree_nonexistent_fails() {
         let db = init_test_db();
 
-        let result = get_document_tree(&db, "nonexistent0000000");
+        let result = document::get_document_content(&db, "nonexistent0000000");
         assert!(result.is_err());
     }
 
@@ -1691,7 +1798,7 @@ mod tests {
     fn get_children_with_pagination() {
         let db = init_test_db();
 
-        let doc = create_document(&db, "Pagination Doc".to_string(), None, None).unwrap();
+        let doc = document::create_document(&db, "Pagination Doc".to_string(), None, None).unwrap();
 
         // 创建 3 个额外子块（已有 1 个默认段落）
         for i in 0..3 {
@@ -1705,24 +1812,25 @@ mod tests {
             }).unwrap();
         }
 
-        // 限制每页 2 条（总共 4 个子块 = 1 默认段落 + 3 新增）
-        let result = get_children(&db, &doc.id, 2, None).unwrap();
-        assert_eq!(result.blocks.len(), 2);
-        assert!(result.has_more);
-        assert!(result.next_cursor.is_some());
+        // 通过 repo 层测试分页：限制每页 2 条（总共 4 个子块 = 1 默认段落 + 3 新增）
+        let db_conn = db.lock().unwrap();
+        let page1 = crate::repo::block_repo::find_children_paginated(&db_conn, &doc.id, None, 2).unwrap();
+        drop(db_conn);
+        assert_eq!(page1.len(), 2);
 
-        // 翻页：最后 2 条
-        let page2 = get_children(&db, &doc.id, 2, result.next_cursor.as_deref()).unwrap();
-        assert_eq!(page2.blocks.len(), 2);
-        assert!(!page2.has_more); // 4 项 / 2 = 恰好 2 页
-        assert!(page2.next_cursor.is_none());
+        // 翻页：取剩下的 2 条
+        let db_conn = db.lock().unwrap();
+        let page2 = crate::repo::block_repo::find_children_paginated(&db_conn, &doc.id, Some(&page1[1].position), 2).unwrap();
+        drop(db_conn);
+        assert_eq!(page2.len(), 2);
     }
 
     #[test]
     fn get_children_nonexistent_parent_fails() {
         let db = init_test_db();
 
-        let result = get_children(&db, "nonexistent0000000", 10, None);
+        // get_document_children 对不存在的文档应返回错误
+        let result = document::get_document_children(&db, "nonexistent0000000");
         assert!(result.is_err());
     }
 }
