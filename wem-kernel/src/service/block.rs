@@ -542,12 +542,33 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
     let current = repo::find_by_id(&conn, id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
 
-    // 2. 确定目标父块（未传则保持当前父块）
-    let target_parent_id = req
-        .target_parent_id
-        .as_deref()
-        .unwrap_or(&current.parent_id)
-        .to_string();
+    // 2. 确定目标父块
+    //
+    //    优先级：
+    //    a) 显式传入 target_parent_id → 使用它
+    //    b) 传了 before_id/after_id → 从 sibling 的 parent_id 推导
+    //    c) 都没传 → 保持当前父块
+    let target_parent_id = match req.target_parent_id.as_deref() {
+        Some(pid) => pid.to_string(),
+        None => {
+            // 尝试从 sibling 推导 parent
+            let sibling_id = req
+                .before_id
+                .as_deref()
+                .or(req.after_id.as_deref());
+
+            match sibling_id {
+                Some(sid) => {
+                    let sibling = repo::find_by_id(&conn, sid)
+                        .map_err(|_| AppError::NotFound(format!(
+                            "定位块 {} 不存在或已删除", sid
+                        )))?;
+                    sibling.parent_id.clone()
+                }
+                None => current.parent_id.clone(),
+            }
+        }
+    };
 
     // 3. 循环引用检测 + 父块验证（仅当父块改变时）
     let parent_changed = target_parent_id != current.parent_id;

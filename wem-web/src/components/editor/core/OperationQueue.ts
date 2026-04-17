@@ -52,6 +52,11 @@ export class OperationQueue {
     return this.queue.length
   }
 
+  /** 是否正在执行操作 */
+  isRunning(): boolean {
+    return this.running
+  }
+
   /** 清空队列中未执行的操作 */
   clear(): void {
     this.queue = []

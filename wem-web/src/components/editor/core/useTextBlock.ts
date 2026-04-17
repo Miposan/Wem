@@ -10,7 +10,7 @@ import type { TextBlockProps } from './types'
  * - input → onContentChange
  * - 键盘操作 → onAction（Enter/Backspace/ArrowUp/ArrowDown）
  */
-export function useTextBlock({ block, onContentChange, onAction }: TextBlockProps) {
+export function useTextBlock({ block, onContentChange, onAction, selectedBlockIds }: TextBlockProps) {
   const ref = useRef<HTMLElement>(null)
 
   // ── IME 组合输入守卫 ──
@@ -56,6 +56,13 @@ export function useTextBlock({ block, onContentChange, onAction }: TextBlockProp
 
       // IME 组合输入中，跳过所有键处理（等 compositionend）
       if (isComposing.current) return
+
+      // ── 跨块选区 Backspace / Delete → delete-range ──
+      if ((e.key === 'Backspace' || e.key === 'Delete') && selectedBlockIds.size > 1) {
+        e.preventDefault()
+        onAction({ type: 'delete-range', blockIds: Array.from(selectedBlockIds) })
+        return
+      }
 
       const sel = window.getSelection()
       if (!sel || !sel.rangeCount) return
@@ -128,7 +135,7 @@ export function useTextBlock({ block, onContentChange, onAction }: TextBlockProp
         return
       }
     },
-    [block.id, onAction],
+    [block.id, onAction, selectedBlockIds],
   )
 
   return { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd }

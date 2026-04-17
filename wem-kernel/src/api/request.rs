@@ -79,7 +79,11 @@ pub struct MoveBlockReq {
     pub operation_id: Option<String>,
     /// Block ID
     pub id: String,
-    /// 目标父块 ID（可选，不传则不改变父块）
+    /// 目标父块 ID（可选）
+    ///
+    /// 不传时后端按优先级推导：
+    /// 1. 若有 before_id/after_id → 从该兄弟块的 parent_id 推导
+    /// 2. 否则保持当前父块不变
     pub target_parent_id: Option<String>,
     /// 移到此 Block 之前（可选）
     pub before_id: Option<String>,

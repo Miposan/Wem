@@ -217,3 +217,108 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ─── 跨块选中高亮 ─── */
+
+.wem-block-selected > .wem-block-content {
+  background: var(--color-primary-light-1, rgba(22, 119, 255, 0.08));
+  border-radius: 3px;
+}
+
+/* 选中期间禁止 contentEditable 的光标闪烁 */
+.wem-block-selected .wem-block-editable [contenteditable] {
+  caret-color: transparent;
+}
+
+/* ─── 拖拽手柄（Gutter 内） ─── */
+
+.wem-drag-handle {
+  cursor: grab;
+  user-select: none;
+  letter-spacing: -1px;
+}
+
+.wem-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ─── 拖拽中状态 ─── */
+
+.wem-block-dragging {
+  opacity: 0.35;
+}
+
+/* ─── 放置目标高亮 ─── */
+
+.wem-block-drop-target {
+  /* 占位：未来可加额外视觉反馈 */
+}
+
+/* ─── 放置指示线（before / after） ─── */
+
+.wem-drop-indicator {
+  position: relative;
+  height: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.wem-drop-indicator::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--primary-6, #1890ff);
+}
+
+.wem-drop-indicator::after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary-6, #1890ff);
+}
+
+/* before: 线条在块的上方 */
+.wem-drop-indicator-before::before {
+  top: -1px;
+}
+.wem-drop-indicator-before::after {
+  top: -4px;
+}
+
+/* after: 线条在块的下方 */
+.wem-drop-indicator-after::before {
+  bottom: -1px;
+}
+.wem-drop-indicator-after::after {
+  bottom: -4px;
+}
+
+/* ─── 放置指示区（child — 嵌套容器） ─── */
+
+.wem-drop-indicator-child {
+  position: relative;
+  height: 4px;
+  margin-left: 24px;
+  background: var(--primary-6, #1890ff);
+  border-radius: 2px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* 嵌套容器拖入指示（左侧竖线） */
+.wem-drop-indicator-nest {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--primary-6, #1890ff);
+  pointer-events: none;
+  z-index: 10;
+}

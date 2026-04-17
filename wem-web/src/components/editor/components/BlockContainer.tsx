@@ -1,5 +1,5 @@
 import type { BlockNode } from '@/types/api'
-import type { BlockRendererProps } from '../core/types'
+import type { BlockRendererProps, DropPosition } from '../core/types'
 import { ParagraphBlock } from '../blocks/ParagraphBlock'
 import { HeadingBlock } from '../blocks/HeadingBlock'
 import { ThematicBreakBlock } from '../blocks/ThematicBreakBlock'
@@ -39,6 +39,18 @@ function BlockContentRouter({ block, ...props }: ContentRouterProps) {
   }
 }
 
+// ─── Drop Indicator ───
+
+/** 拖拽放置指示器 — 在块之间显示蓝色线条 */
+function DropIndicator({ position }: { position: DropPosition }) {
+  if (position === 'child') {
+    // child 模式：在块下方显示缩进的蓝色指示区
+    return <div className="wem-drop-indicator-child" />
+  }
+  // before/after：在块的顶/底边缘显示蓝色线
+  return <div className={`wem-drop-indicator wem-drop-indicator-${position}`} />
+}
+
 // ─── BlockContainer ───
 
 interface BlockContainerProps extends BlockRendererProps {
@@ -50,16 +62,40 @@ function isCollapsible(block: BlockNode): boolean {
   return block.block_type.type === 'heading' && block.children.length > 0
 }
 
-export function BlockContainer({ block, collapsedIds, onToggleCollapse, ...props }: BlockContainerProps) {
+/** 判断一个块是否为容器（可接收子块） */
+function isContainerBlock(block: BlockNode): boolean {
+  return block.block_type.type === 'heading'
+}
+
+export function BlockContainer({
+  block,
+  collapsedIds,
+  selectedBlockIds,
+  dragState,
+  dragHandlers,
+  onToggleCollapse,
+  ...props
+}: BlockContainerProps) {
   const collapsible = isCollapsible(block)
   const collapsed = collapsedIds.has(block.id)
+  const selected = selectedBlockIds.has(block.id)
+  const isDragging = dragState.draggingBlockId === block.id
+  const isDropTarget = dragState.dropTarget?.blockId === block.id
 
   return (
     <div
-      className={`wem-block-container ${collapsible ? 'wem-block-collapsible' : ''} ${collapsed ? 'wem-block-collapsed' : ''}`}
+      className={`wem-block-container ${collapsible ? 'wem-block-collapsible' : ''} ${collapsed ? 'wem-block-collapsed' : ''} ${selected ? 'wem-block-selected' : ''} ${isDragging ? 'wem-block-dragging' : ''} ${isDropTarget ? 'wem-block-drop-target' : ''}`}
       data-block-id={block.id}
       data-block-type={block.block_type.type}
+      onDragOver={(e) => dragHandlers.onDragOver(e, block.id)}
+      onDragLeave={(e) => dragHandlers.onDragLeave(e, block.id)}
+      onDrop={(e) => dragHandlers.onDrop(e, block.id)}
     >
+      {/* 放置指示器 — before 位置 */}
+      {isDropTarget && dragState.dropTarget?.position === 'before' && (
+        <DropIndicator position="before" />
+      )}
+
       <div className="wem-block-content">
         {/* 块左侧操作区（折叠、拖拽等） — 在 content 内部以正确对齐 */}
         <div className="wem-block-gutter" contentEditable={false}>
@@ -72,11 +108,34 @@ export function BlockContainer({ block, collapsedIds, onToggleCollapse, ...props
               <span className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''}`}>▶</span>
             </button>
           )}
+          {/* 拖拽手柄 */}
+          {!props.readonly && (
+            <button
+              className="wem-gutter-btn wem-drag-handle"
+              draggable
+              onDragStart={(e) => dragHandlers.onDragStart(e, block.id)}
+              onDragEnd={dragHandlers.onDragEnd}
+              title="拖拽移动块"
+              tabIndex={-1}
+            >
+              ⋮⋮
+            </button>
+          )}
         </div>
         <div className="wem-block-editable">
           <BlockContentRouter block={block} {...props} />
         </div>
       </div>
+
+      {/* 放置指示器 — after 位置 */}
+      {isDropTarget && dragState.dropTarget?.position === 'after' && (
+        <DropIndicator position="after" />
+      )}
+
+      {/* 放置指示器 — child 位置（在 children 区域显示） */}
+      {isDropTarget && dragState.dropTarget?.position === 'child' && (
+        <DropIndicator position="child" />
+      )}
 
       {/* 子块（折叠时隐藏） */}
       {block.children.length > 0 && !collapsed && (
@@ -86,6 +145,9 @@ export function BlockContainer({ block, collapsedIds, onToggleCollapse, ...props
               key={child.id}
               block={child}
               collapsedIds={collapsedIds}
+              selectedBlockIds={selectedBlockIds}
+              dragState={dragState}
+              dragHandlers={dragHandlers}
               onToggleCollapse={onToggleCollapse}
               {...props}
             />

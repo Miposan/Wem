@@ -9,7 +9,7 @@
  */
 
 import type { BlockNode, BlockType } from '@/types/api'
-import { deleteBlock, splitBlock, mergeBlock, updateBlock } from '@/api/client'
+import { deleteBlock, splitBlock, mergeBlock, updateBlock, moveBlock } from '@/api/client'
 import {
   flattenTree,
   findBlockById,
@@ -64,6 +64,17 @@ export interface ConvertParams {
   blockId: string
   content: string
   blockType: BlockType
+}
+
+/** Move 参数（块拖拽移动） */
+export interface MoveParams {
+  /** 被移动的块 ID */
+  blockId: string
+  /** 放置目标 */
+  target: {
+    blockId: string
+    position: 'before' | 'after' | 'child'
+  }
 }
 
 // ─── Commands ───
@@ -260,5 +271,64 @@ export async function executeConvertBlock(
     requestAnimationFrame(() => focusBlock(params.blockId, params.content.length))
   } catch (err) {
     console.error('[convert] 转换块类型失败:', err)
+  }
+}
+
+/**
+ * Move — 块拖拽移动
+ *
+ * 支持三种放置位置：
+ * - before: 放在目标块之前（同级）
+ * - after: 放在目标块之后（同级）
+ * - child: 作为目标块的第一个子块（嵌套容器）
+ *
+ * 悲观更新：先调 moveBlock API，成功后用 refetch 刷新整棵树。
+ * 拖拽可能导致复杂的父子关系变化（进入/离开 heading 容器），
+ * refetch 整棵树是最安全的做法。
+ */
+export async function executeMove(ctx: CommandContext, params: MoveParams): Promise<void> {
+  const { blockId, target } = params
+  const tree = ctx.getTree()
+
+  // 安全校验：块存在性
+  const movingBlock = findBlockById(tree, blockId)
+  if (!movingBlock) return
+
+  const targetBlock = findBlockById(tree, target.blockId)
+  if (!targetBlock) return
+
+  // 安全校验：不能移动到自己内部
+  if (blockId === target.blockId) return
+
+  ctx.cancelPendingSave(blockId)
+
+  // 构建 moveBlock API 请求参数
+  const moveReq: Record<string, string> = { operation_id: ctx.operationId ?? '' }
+
+  switch (target.position) {
+    case 'before':
+    case 'after': {
+      // target_parent_id 由后端从 before_id/after_id 对应的兄弟块自动推导
+      if (target.position === 'before') {
+        moveReq.before_id = target.blockId
+      } else {
+        moveReq.after_id = target.blockId
+      }
+      break
+    }
+    case 'child':
+      // 作为目标块的第一个子块
+      moveReq.target_parent_id = target.blockId
+      break
+  }
+
+  try {
+    await moveBlock(blockId, moveReq)
+    // 拖拽可能导致 reparent（进入/离开 heading），refetch 最安全
+    await ctx.refetchDocument()
+    // 聚焦到移动后的块
+    focusBlock(blockId)
+  } catch (err) {
+    console.error('[move] 移动块失败:', err)
   }
 }
