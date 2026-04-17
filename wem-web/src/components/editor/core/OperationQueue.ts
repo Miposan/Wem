@@ -20,11 +20,11 @@ export interface QueueEntry {
  * - enqueue() 将操作加入队列末尾，如果队列空闲则立即执行
  * - 队列严格串行：每个操作完成后才执行下一个
  * - 操作失败不影响后续操作（catch 后继续）
- * - 超过 MAX_PENDING 积压时丢弃新操作，防止快速操作无限堆积
+ * - 不设容量上限：每个操作都是用户的明确意图，不应丢弃
  */
 
-/** 队列允许的最大积压操作数 */
-const MAX_PENDING = 3
+/** 单个操作的超时时间（ms），防止异常操作永久阻塞队列 */
+const OP_TIMEOUT_MS = 3_000
 
 export class OperationQueue {
   private queue: QueueEntry[] = []
@@ -37,14 +37,9 @@ export class OperationQueue {
 
   /**
    * 将操作加入队列
-   * @returns true 表示入队成功，false 表示队列积压已满被丢弃
+   * @returns true（始终入队成功）
    */
   enqueue(entry: QueueEntry): boolean {
-    if (this.queue.length >= MAX_PENDING) {
-      // 队列积压过多，丢弃（避免快速操作无限堆积）
-      console.warn(`[OperationQueue] 丢弃操作 "${entry.label}"，积压 ${this.queue.length}/${MAX_PENDING}`)
-      return false
-    }
     this.queue.push(entry)
     if (!this.running) {
       this.runNext()
@@ -72,7 +67,12 @@ export class OperationQueue {
     const entry = this.queue.shift()!
 
     try {
-      await entry.execute()
+      await Promise.race([
+        entry.execute(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`操作 "${entry.label}" 超时`)), OP_TIMEOUT_MS),
+        ),
+      ])
     } catch (err) {
       this.onError?.(err, entry.label)
     }

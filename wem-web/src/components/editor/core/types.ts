@@ -1,14 +1,16 @@
-import type { BlockNode } from '@/types/api'
+import type { BlockNode, BlockType } from '@/types/api'
 
 // ─── Block Actions ───
 
 /** 文本块键盘/交互操作 */
 export type BlockAction =
-  | { type: 'split'; blockId: string; offset: number }
+  | { type: 'split' }
   | { type: 'delete'; blockId: string }
   | { type: 'merge-with-previous'; blockId: string }
   | { type: 'focus-previous'; blockId: string }
   | { type: 'focus-next'; blockId: string }
+  /** Markdown 快捷键转换块类型（如 `## ` → heading），同时更新内容 */
+  | { type: 'convert-block'; blockId: string; content: string; blockType: BlockType }
 
 // ─── Component Props ───
 

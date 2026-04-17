@@ -13,17 +13,20 @@ use std::convert::Infallible;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     Json,
 };
 
-use crate::api::request::{BatchReq, CreateBlockReq, CreateDocumentReq, ImportTextReq, MergeReq, MoveBlockReq, SplitReq, UpdateBlockReq};
+use crate::api::request::{
+    BatchReq, CreateBlockReq, CreateDocumentReq, DeleteBlockReq, DeleteDocumentReq,
+    ExportReq, GetBlockReq, GetChildrenReq, GetDocumentReq, ImportTextReq,
+    MergeReq, MoveBlockReq, RestoreReq, SplitReq, UpdateBlockReq,
+};
 use crate::api::response::{
     BatchResult, DeleteResult, DocumentChildrenResult,
     DocumentContentResult, ExportResult, ImportResult, MergeResult,
     RestoreResult, SplitResult,
 };
-use crate::api::query::{ExportQuery, GetBlockQuery};
 use crate::model::event::BlockEvent;
 use crate::repo::Db;
 use crate::error::{AppError, ApiResponse};
@@ -69,7 +72,7 @@ pub async fn create_document(
     Ok(Json(ApiResponse::ok(Some(doc))))
 }
 
-/// GET /api/v1/documents
+/// POST /api/v1/documents/list
 ///
 /// 列出所有根文档（不分页）
 pub async fn list_documents(
@@ -82,14 +85,14 @@ pub async fn list_documents(
     Ok(Json(ApiResponse::ok(Some(docs))))
 }
 
-/// GET /api/v1/documents/{id}
+/// POST /api/v1/documents/get
 ///
 /// 获取文档内容（编辑器渲染用）：文档块 + 所有非 document 类型的内容块
 pub async fn get_document(
     State(db): State<Db>,
-    Path(id): Path<String>,
+    Json(req): Json<GetDocumentReq>,
 ) -> Result<Json<ApiResponse<DocumentContentResult>>, AppError> {
-    let doc_id = id;
+    let doc_id = req.id;
     let result = tokio::task::spawn_blocking(move || document::get_document_content(&db, &doc_id))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
@@ -97,13 +100,14 @@ pub async fn get_document(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// GET /api/v1/documents/{id}/children
+/// POST /api/v1/documents/children
 ///
 /// 获取文档直系子文档列表（侧边栏导航用）
 pub async fn get_document_children(
     State(db): State<Db>,
-    Path(id): Path<String>,
+    Json(req): Json<GetChildrenReq>,
 ) -> Result<Json<ApiResponse<DocumentChildrenResult>>, AppError> {
+    let id = req.id;
     let result = tokio::task::spawn_blocking(move || document::get_document_children(&db, &id))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
@@ -111,13 +115,14 @@ pub async fn get_document_children(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// DELETE /api/v1/documents/{id}
+/// POST /api/v1/documents/delete
 ///
 /// 删除文档（级联软删除所有子块）
 pub async fn delete_document(
     State(db): State<Db>,
-    Path(id): Path<String>,
+    Json(req): Json<DeleteDocumentReq>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
+    let id = req.id;
     let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::delete_block(&db, &id)
@@ -157,16 +162,17 @@ pub async fn create_block(
     Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
-/// GET /api/v1/blocks/{id}
+/// POST /api/v1/blocks/get
 ///
 /// 获取单个 Block
 pub async fn get_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
-    Query(params): Query<GetBlockQuery>,
+    Json(req): Json<GetBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    let id = req.id;
+    let include_deleted = req.include_deleted;
     let blk = tokio::task::spawn_blocking(move || {
-        block::get_block_include_deleted(&db, &id, params.include_deleted)
+        block::get_block_include_deleted(&db, &id, include_deleted)
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
@@ -174,14 +180,14 @@ pub async fn get_block(
     Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
-/// PUT /api/v1/blocks/{id}
+/// POST /api/v1/blocks/update
 ///
 /// 更新 Block 内容和/或属性
 pub async fn update_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
     Json(req): Json<UpdateBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || block::update_block(&db, &id, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
@@ -195,13 +201,14 @@ pub async fn update_block(
     Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
-/// DELETE /api/v1/blocks/{id}
+/// POST /api/v1/blocks/delete
 ///
 /// 软删除 Block（级联删除子块）
 pub async fn delete_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
+    Json(req): Json<DeleteBlockReq>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
+    let id = req.id;
     let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::delete_block(&db, &id)
@@ -219,14 +226,14 @@ pub async fn delete_block(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// POST /api/v1/blocks/{id}/move
+/// POST /api/v1/blocks/move
 ///
 /// 移动 Block（改变父块和/或位置）
 pub async fn move_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
     Json(req): Json<MoveBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
+    let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || block::move_block(&db, &id, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
@@ -240,13 +247,14 @@ pub async fn move_block(
     Ok(Json(ApiResponse::ok(Some(blk))))
 }
 
-/// POST /api/v1/blocks/{id}/restore
+/// POST /api/v1/blocks/restore
 ///
 /// 恢复已软删除的 Block
 pub async fn restore_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
+    Json(req): Json<RestoreReq>,
 ) -> Result<Json<ApiResponse<RestoreResult>>, AppError> {
+    let id = req.id;
     let db2 = db.clone();
     let id2 = id.clone();
     let _result = tokio::task::spawn_blocking(move || {
@@ -271,14 +279,14 @@ pub async fn restore_block(
 
 // ─── Split / Merge 意图 API ──────────────────────────────────
 
-/// POST /api/v1/blocks/{id}/split
+/// POST /api/v1/blocks/split
 ///
 /// 原子拆分：更新当前块内容 + 创建新块
 pub async fn split_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
     Json(req): Json<SplitReq>,
 ) -> Result<Json<ApiResponse<SplitResult>>, AppError> {
+    let id = req.id.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::split_block(&db, &id, req)
     })
@@ -299,14 +307,14 @@ pub async fn split_block(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// POST /api/v1/blocks/{id}/merge
+/// POST /api/v1/blocks/merge
 ///
 /// 原子合并：当前块内容追加到前一个兄弟 + 删除当前块
 pub async fn merge_block(
     State(db): State<Db>,
-    Path(id): Path<String>,
     Json(req): Json<MergeReq>,
 ) -> Result<Json<ApiResponse<MergeResult>>, AppError> {
+    let id = req.id.clone();
     let result = tokio::task::spawn_blocking(move || {
         block::merge_block(&db, &id, req)
     })
@@ -384,15 +392,15 @@ pub async fn import_text(
     Ok(Json(ApiResponse::ok(Some(result))))
 }
 
-/// GET /api/v1/documents/{id}/export?format=markdown
+/// POST /api/v1/documents/export
 ///
 /// 导出文档为 Markdown 等格式文本
 pub async fn export_text(
     State(db): State<Db>,
-    Path(id): Path<String>,
-    Query(params): Query<ExportQuery>,
+    Json(req): Json<ExportReq>,
 ) -> Result<Json<ApiResponse<ExportResult>>, AppError> {
-    let format = params.format;
+    let id = req.id;
+    let format = req.format;
     let result = tokio::task::spawn_blocking(move || {
         crate::service::export::export_text(&db, &id, &format)
     })

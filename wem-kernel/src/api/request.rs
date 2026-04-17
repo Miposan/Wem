@@ -1,6 +1,6 @@
 //! 请求体 DTO
 //!
-//! 所有写操作（POST/PUT/DELETE）的请求体类型。
+//! 所有 RPC 端点的请求体类型（全 POST）。
 //! 这些类型只用于 HTTP 层反序列化，不涉及数据库内部结构。
 
 use serde::Deserialize;
@@ -33,9 +33,11 @@ pub struct CreateBlockReq {
 
 /// 更新 Block 请求
 ///
-/// `PUT /api/v1/blocks/{id}`
+/// `POST /api/v1/blocks/update`
 #[derive(Debug, Deserialize)]
 pub struct UpdateBlockReq {
+    /// Block ID
+    pub id: String,
     /// 新内容（不传则不更新 content）
     pub content: Option<String>,
     /// 新 Block 类型（不传则不更新 block_type）
@@ -52,9 +54,11 @@ pub struct UpdateBlockReq {
 
 /// 移动 Block 请求
 ///
-/// `POST /api/v1/blocks/{id}/move`
+/// `POST /api/v1/blocks/move`
 #[derive(Debug, Deserialize)]
 pub struct MoveBlockReq {
+    /// Block ID
+    pub id: String,
     /// 目标父块 ID（可选，不传则不改变父块）
     pub target_parent_id: Option<String>,
     /// 移到此 Block 之前（可选）
@@ -71,12 +75,14 @@ fn default_properties_mode() -> String {
 
 /// 拆分 Block 请求
 ///
-/// `POST /api/v1/blocks/{id}/split`
+/// `POST /api/v1/blocks/split`
 ///
 /// 前端在光标处切割文本后，将 `content_before` 和 `content_after` 发送给后端，
 /// 后端原子性地完成「更新当前块 + 创建新块」两步操作。
 #[derive(Debug, Deserialize)]
 pub struct SplitReq {
+    /// Block ID
+    pub id: String,
     /// 光标前的内容（用于更新当前块）
     pub content_before: String,
     /// 光标后的内容（用于创建新块）
@@ -88,13 +94,15 @@ pub struct SplitReq {
 
 /// 合并 Block 请求
 ///
-/// `POST /api/v1/blocks/{id}/merge`
+/// `POST /api/v1/blocks/merge`
 ///
 /// 将当前块的内容追加到前一个兄弟块末尾，然后删除当前块。
 /// 原子操作，无需前端分别调用 update + delete。
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // direction / prev_content 预留给未来扩展
 pub struct MergeReq {
+    /// Block ID
+    pub id: String,
     /// 合并方向（预留扩展，当前仅支持 "previous"）
     #[serde(default = "default_merge_direction")]
     pub direction: String,
@@ -207,4 +215,114 @@ pub enum BatchOp {
         /// 移到此 Block 之后（可选）
         after_id: Option<String>,
     },
+}
+
+// ─── RPC 查询/只读请求（GET → POST） ─────────────────────────
+
+/// 获取文档请求
+///
+/// `POST /api/v1/documents/get`
+#[derive(Debug, Deserialize)]
+pub struct GetDocumentReq {
+    pub id: String,
+}
+
+/// 获取文档子文档请求
+///
+/// `POST /api/v1/documents/children`
+#[derive(Debug, Deserialize)]
+pub struct GetChildrenReq {
+    pub id: String,
+}
+
+/// 删除文档请求
+///
+/// `POST /api/v1/documents/delete`
+#[derive(Debug, Deserialize)]
+pub struct DeleteDocumentReq {
+    pub id: String,
+}
+
+/// 导出文档请求
+///
+/// `POST /api/v1/documents/export`
+#[derive(Debug, Deserialize)]
+pub struct ExportReq {
+    pub id: String,
+    /// 目标格式（默认 "markdown"）
+    #[serde(default = "default_export_format")]
+    pub format: String,
+}
+
+fn default_export_format() -> String {
+    "markdown".to_string()
+}
+
+/// 获取 Block 请求
+///
+/// `POST /api/v1/blocks/get`
+#[derive(Debug, Deserialize)]
+pub struct GetBlockReq {
+    pub id: String,
+    /// 是否包含已删除的 Block
+    #[serde(default)]
+    pub include_deleted: bool,
+}
+
+/// 删除 Block 请求
+///
+/// `POST /api/v1/blocks/delete`
+#[derive(Debug, Deserialize)]
+pub struct DeleteBlockReq {
+    pub id: String,
+}
+
+/// 恢复 Block 请求
+///
+/// `POST /api/v1/blocks/restore`
+#[derive(Debug, Deserialize)]
+pub struct RestoreReq {
+    pub id: String,
+}
+
+/// 获取历史记录请求
+///
+/// `POST /api/v1/blocks/history`
+#[derive(Debug, Deserialize)]
+pub struct GetHistoryReq {
+    pub id: String,
+    /// 返回条数（默认 50，最大 500）
+    #[serde(default = "default_history_limit")]
+    pub limit: u32,
+}
+
+fn default_history_limit() -> u32 {
+    50
+}
+
+/// 获取指定版本请求
+///
+/// `POST /api/v1/blocks/version`
+#[derive(Debug, Deserialize)]
+pub struct GetVersionReq {
+    pub id: String,
+    pub version: u64,
+}
+
+/// 回滚 Block 请求
+///
+/// `POST /api/v1/blocks/rollback`
+#[derive(Debug, Deserialize)]
+pub struct RollbackReq {
+    pub id: String,
+    /// 回滚到的目标版本号
+    pub target_version: u64,
+}
+
+/// 创建快照请求
+///
+/// `POST /api/v1/blocks/snapshot`
+#[derive(Debug, Deserialize)]
+pub struct SnapshotReq {
+    pub id: String,
 }

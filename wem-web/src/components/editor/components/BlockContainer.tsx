@@ -61,17 +61,18 @@ export function BlockContainer({ block, collapsedIds, onToggleCollapse, ...props
       data-block-type={block.block_type.type}
     >
       <div className="wem-block-content">
-        {/* 折叠箭头（仅 heading 有子块时显示） */}
-        {collapsible && (
-          <button
-            className="wem-collapse-toggle"
-            onClick={() => onToggleCollapse(block.id)}
-            title={collapsed ? '展开子块' : '折叠子块'}
-            contentEditable={false}
-          >
-            <span className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''}`}>▶</span>
-          </button>
-        )}
+        {/* 块左侧操作区（折叠、拖拽等） — 在 content 内部以正确对齐 */}
+        <div className="wem-block-gutter" contentEditable={false}>
+          {collapsible && (
+            <button
+              className="wem-gutter-btn"
+              onClick={() => onToggleCollapse(block.id)}
+              title={collapsed ? '展开子块' : '折叠子块'}
+            >
+              <span className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''}`}>▶</span>
+            </button>
+          )}
+        </div>
         <div className="wem-block-editable">
           <BlockContentRouter block={block} {...props} />
         </div>

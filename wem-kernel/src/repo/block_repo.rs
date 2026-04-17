@@ -319,6 +319,45 @@ pub fn find_prev_sibling(
     }
 }
 
+/// 查找同 parent 下 position 大于指定值的所有兄弟块（按 position ASC）
+///
+/// 用于 heading 层级自动嵌套：将 heading 之后的所有低级别块 reparent 为其子块。
+pub fn find_siblings_after(
+    conn: &Connection,
+    parent_id: &str,
+    after_pos: &str,
+) -> Result<Vec<Block>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM blocks
+         WHERE parent_id = ?1 AND status != 'deleted' AND position > ?2
+         ORDER BY position ASC",
+    )?;
+    let blocks: Vec<Block> = stmt
+        .query_map(params![parent_id, after_pos], Block::from_row)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(blocks)
+}
+
+/// 查找指定块的所有直系子块（按 position ASC，不分页）
+///
+/// 用于 heading 降级时将子块提升为兄弟。
+pub fn find_children(
+    conn: &Connection,
+    parent_id: &str,
+) -> Result<Vec<Block>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM blocks
+         WHERE parent_id = ?1 AND status != 'deleted'
+         ORDER BY position ASC",
+    )?;
+    let blocks: Vec<Block> = stmt
+        .query_map(params![parent_id], Block::from_row)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(blocks)
+}
+
 // ─── 写入（Write）────────────────────────────────────────────
 
 /// 插入一条 Block 记录

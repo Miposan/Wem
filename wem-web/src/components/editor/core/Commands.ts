@@ -9,16 +9,17 @@
  */
 
 import type { BlockNode, BlockType } from '@/types/api'
-import { deleteBlock, splitBlock, mergeBlock } from '@/api/client'
+import { deleteBlock, splitBlock, mergeBlock, updateBlock, moveBlock } from '@/api/client'
 import {
   flattenTree,
   insertAfter,
+  insertAsFirstChild,
   removeBlock,
   updateBlockInTree,
   findPrevBlock,
   findNextBlock,
 } from './BlockOperations'
-import { focusBlock, focusBlockEnd, syncBlockContent } from './SelectionManager'
+import { focusBlock, focusBlockEnd, getCursorPosition, syncBlockContent } from './SelectionManager'
 
 // ─── Types ───
 
@@ -30,32 +31,19 @@ export interface CommandContext {
   /** 同步更新块树（内部用 flushSync，确保 DOM 立即更新） */
   setTreeSync: (updater: (prev: BlockNode[]) => BlockNode[]) => void
   /**
-   * 获取最新创建的块 ID（消费式：读取后应立即 setLatestBlockId(null) 清除）
-   *
-   * 快速连续按 Enter 时，keydown 捕获的 blockId 是过期的（UI 还没更新），
-   * 用此方法获取上一个 split 创建的块 ID。
-   * 读取后必须清除，防止残留到后续无关操作导致 offset 被错误置零。
-   */
-  getLatestBlockId: () => string | null
-  /**
-   * 设置最新创建的块 ID
-   *
-   * split 完成后调用。被下一次 executeSplit 消费后自动清除。
-   */
-  setLatestBlockId: (id: string | null) => void
-  /**
    * 取消指定块的待处理内容保存（debounce 定时器）
    *
    * 结构变更（split/merge/delete）前调用，防止旧的 debounce 定时器
    * 在操作完成后触发，覆盖服务端已更新的内容。
    */
   cancelPendingSave: (blockId: string) => void
-}
-
-/** Split 参数 */
-export interface SplitParams {
-  blockId: string
-  offset: number
+  /**
+   * 从服务端重新拉取整棵块树并同步到 UI
+   *
+   * 用于结构变更（如 heading 自动嵌套导致多块 reparent），
+   * 局部 updateBlockInTree 无法反映父级变化的情况。
+   */
+  refetchDocument: () => Promise<void>
 }
 
 /** Delete 参数 */
@@ -68,6 +56,13 @@ export interface MergeParams {
   blockId: string
 }
 
+/** Convert 参数（Markdown 快捷键转换块类型） */
+export interface ConvertParams {
+  blockId: string
+  content: string
+  blockType: BlockType
+}
+
 // ─── Commands ───
 
 /**
@@ -76,35 +71,30 @@ export interface MergeParams {
  * 原子意图 API：前端做文本切割，后端一次性完成 update+create。
  * 悲观更新：等 API 返回真实数据后再刷新 UI。
  *
- * 连续 split 处理：
- *   当队列中有多个 split 排队时，通过 latestBlockId 跟踪上一个 split 创建的块，
- *   后续 split 自动指向新块（而不是使用 keydown 时捕获的过期 blockId）。
+ * 直接从 DOM 读取当前光标位置，不依赖 keydown 时捕获的参数。
+ * OperationQueue 保证串行执行：上一个 split 完成后 flushSync + focusBlock
+ * 已将 DOM 更新到最新状态，此时读到的光标位置就是准确的。
  */
-export async function executeSplit(ctx: CommandContext, params: SplitParams): Promise<void> {
-  // ── 解析目标块 ──
-  const latestId = ctx.getLatestBlockId()
-  ctx.setLatestBlockId(null)
+export async function executeSplit(ctx: CommandContext): Promise<void> {
+  // ── 从 DOM 读取真实光标位置 ──
+  const cursor = getCursorPosition()
+  if (!cursor) return
+
+  const { blockId: targetId, offset } = cursor
 
   const tree = ctx.getTree()
-  const flat = flattenTree(tree)
-
-  // latestBlockId 可能已被 delete/merge 消灭，验证是否仍在树中
-  const targetId = (latestId && flat.some((b) => b.id === latestId))
-    ? latestId
-    : params.blockId
-  const block = flat.find((b) => b.id === targetId)
+  const block = flattenTree(tree).find((b) => b.id === targetId)
   if (!block) return
 
-  const effectiveOffset = targetId !== params.blockId ? 0 : params.offset
-
   const text = block.content ?? ''
-  const contentBefore = text.slice(0, effectiveOffset)
-  const contentAfter = text.slice(effectiveOffset)
+  const contentBefore = text.slice(0, offset)
+  const contentAfter = text.slice(offset)
 
   ctx.cancelPendingSave(targetId)
 
+  const isHeading = block.block_type.type === 'heading'
   const newBlockType: BlockType =
-    block.block_type.type === 'heading' ? { type: 'paragraph' } : { ...block.block_type }
+    isHeading ? { type: 'paragraph' } : { ...block.block_type }
 
   // ── 原子 API：一次调用完成 split ──
   try {
@@ -114,15 +104,26 @@ export async function executeSplit(ctx: CommandContext, params: SplitParams): Pr
       new_block_type: newBlockType,
     })
 
+    // heading 的 Enter → 新段落作为 heading 的第一个子块（而非兄弟）
+    if (isHeading) {
+      const firstChildId = block.children?.[0]?.id
+      await moveBlock(new_block.id, {
+        target_parent_id: targetId,
+        ...(firstChildId ? { before_id: firstChildId } : {}),
+      })
+    }
+
     // 用后端返回的真实数据更新 UI
     const newBlock: BlockNode = { ...new_block, children: [] }
     ctx.setTreeSync((prev) => {
       const updated = updateBlockInTree(prev, targetId, { content: updated_block.content })
+      if (isHeading) {
+        return insertAsFirstChild(updated, targetId, newBlock)
+      }
       return insertAfter(updated, targetId, newBlock)
     })
 
     syncBlockContent(targetId, updated_block.content ?? contentBefore)
-    ctx.setLatestBlockId(new_block.id)
     focusBlock(new_block.id)
   } catch (err) {
     console.error('[split] 拆分块失败:', err)
@@ -155,9 +156,6 @@ export async function executeDelete(ctx: CommandContext, params: DeleteParams): 
     return
   }
 
-  // 清除 latestBlockId（目标块可能已被删除）
-  ctx.setLatestBlockId(null)
-
   // API 成功 → 更新 UI
   ctx.setTreeSync((prevTree) => removeBlock(prevTree, params.blockId))
   if (prev) focusBlockEnd(prev.id)
@@ -189,8 +187,6 @@ export async function executeMerge(ctx: CommandContext, params: MergeParams): Pr
       direction: 'previous',
     })
 
-    ctx.setLatestBlockId(null)
-
     // 用后端返回的真实数据更新 UI
     ctx.setTreeSync((prevTree) => {
       const updated = updateBlockInTree(prevTree, merged_block.id, {
@@ -220,4 +216,52 @@ export function executeFocusPrevious(ctx: CommandContext, blockId: string): void
 export function executeFocusNext(ctx: CommandContext, blockId: string): void {
   const next = findNextBlock(ctx.getTree(), blockId)
   if (next) focusBlock(next.id, 0)
+}
+
+/**
+ * Convert — Markdown 快捷键转换块类型
+ *
+ * 悲观更新：调 updateBlock API 同时更新 block_type + content，
+ * 成功后用真实数据刷新 UI（触发组件重路由，如 paragraph → heading）。
+ */
+export async function executeConvertBlock(
+  ctx: CommandContext,
+  params: ConvertParams,
+): Promise<void> {
+  ctx.cancelPendingSave(params.blockId)
+
+  try {
+    // 检查旧类型是否为 heading（用于判断是否需要 refetch 整棵树）
+    const allBlocks = flattenTree(ctx.getTree())
+    const oldBlock = allBlocks.find((b) => b.id === params.blockId)
+    const wasHeading = oldBlock?.block_type.type === 'heading'
+    const becomesHeading = params.blockType.type === 'heading'
+    // heading 相关的类型变化会触发后端自动嵌套（reparent），需要 refetch 整棵树
+    const needsRefetch = wasHeading || becomesHeading
+
+    const updated = await updateBlock(params.blockId, {
+      block_type: params.blockType,
+      content: params.content,
+    })
+
+    if (needsRefetch) {
+      await ctx.refetchDocument()
+    } else {
+      ctx.setTreeSync((prev) =>
+        updateBlockInTree(prev, params.blockId, {
+          content: updated.content,
+          block_type: updated.block_type,
+          version: updated.version,
+          modified: updated.modified,
+        }),
+      )
+    }
+
+    // 块类型变更后 React 会卸载旧组件、挂载新组件，
+    // 新组件的 mount effect 会同步 contentEditable 内容，无需手动 syncBlockContent。
+    // 但需要重新聚焦以确保光标不丢失。
+    requestAnimationFrame(() => focusBlock(params.blockId, params.content.length))
+  } catch (err) {
+    console.error('[convert] 转换块类型失败:', err)
+  }
 }

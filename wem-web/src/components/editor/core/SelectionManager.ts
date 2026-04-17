@@ -10,10 +10,10 @@
  * 3. 通过 block ID + offset 定位，不依赖 DOM 结构
  */
 
-/** 查找 block 对应的 contentEditable 元素 */
+/** 查找 block 对应的 contentEditable 元素（排除 contenteditable="false" 的折叠按钮等） */
 export function findEditable(blockId: string): HTMLElement | null {
   return document.querySelector(
-    `[data-block-id="${blockId}"] [contenteditable]`,
+    `[data-block-id="${blockId}"] [contenteditable="true"]`,
   ) as HTMLElement | null
 }
 
@@ -29,6 +29,33 @@ export function syncBlockContent(blockId: string, content: string): void {
   // 内容一致时跳过，避免无谓地重写 textContent 导致光标重置
   if (el.textContent === content) return
   el.textContent = content
+}
+
+/**
+ * 从 DOM 读取当前光标位置
+ *
+ * 返回当前聚焦的 contentEditable 块的 blockId 和字符偏移量。
+ * 用于 Command 在执行时获取真实光标位置（而非 keydown 时捕获的过期值）。
+ */
+export function getCursorPosition(): { blockId: string; offset: number } | null {
+  const active = document.activeElement as HTMLElement | null
+  if (!active || !active.isContentEditable) return null
+
+  const blockEl = active.closest('[data-block-id]')
+  if (!blockEl) return null
+
+  const blockId = blockEl.getAttribute('data-block-id')!
+
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return null
+
+  const range = sel.getRangeAt(0)
+  const preRange = range.cloneRange()
+  preRange.selectNodeContents(active)
+  preRange.setEnd(range.startContainer, range.startOffset)
+  const offset = preRange.toString().length
+
+  return { blockId, offset }
 }
 
 /** 最大重试次数（每帧一次） */

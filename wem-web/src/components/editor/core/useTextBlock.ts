@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import type { BlockType } from '@/types/api'
 import type { TextBlockProps } from './types'
 
 /**
@@ -53,6 +54,9 @@ export function useTextBlock({ block, onContentChange, onAction }: TextBlockProp
       const el = ref.current
       if (!el) return
 
+      // IME 组合输入中，跳过所有键处理（等 compositionend）
+      if (isComposing.current) return
+
       const sel = window.getSelection()
       if (!sel || !sel.rangeCount) return
 
@@ -69,10 +73,30 @@ export function useTextBlock({ block, onContentChange, onAction }: TextBlockProp
       const atEnd = offset === text.length
       const isEmpty = text.length === 0
 
+      // ── Markdown 快捷键：# + Space → Heading ──
+      // 仅对 paragraph 块生效；光标前文本恰好为 1-6 个 #，Space 触发转换
+      if (e.key === ' ' && block.block_type.type === 'paragraph') {
+        const beforeCursor = text.slice(0, offset)
+        const match = beforeCursor.match(/^(#{1,6})$/)
+        if (match) {
+          e.preventDefault()
+          const level = match[1].length
+          const rest = text.slice(offset).replace(/^\s+/, '') // 去除后续前导空白
+          el.textContent = rest
+          onAction({
+            type: 'convert-block',
+            blockId: block.id,
+            content: rest,
+            blockType: { type: 'heading', level } as BlockType,
+          })
+          return
+        }
+      }
+
       // Enter → 拆分
       if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
-        onAction({ type: 'split', blockId: block.id, offset })
+        onAction({ type: 'split' })
         return
       }
 

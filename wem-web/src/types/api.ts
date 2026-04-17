@@ -102,6 +102,7 @@ export interface CreateBlockReq {
 }
 
 export interface UpdateBlockReq {
+  id: string
   content?: string
   block_type?: BlockType
   properties?: Record<string, string>
@@ -109,6 +110,7 @@ export interface UpdateBlockReq {
 }
 
 export interface MoveBlockReq {
+  id: string
   target_parent_id?: string
   before_id?: string
   after_id?: string
@@ -217,6 +219,7 @@ export interface HistoryEntry {
 }
 
 export interface RollbackReq {
+  id: string
   target_version: number
   current_version: number
 }
@@ -224,6 +227,8 @@ export interface RollbackReq {
 // ---- Split / Merge 意图 API ----
 
 export interface SplitReq {
+  /** Block ID */
+  id: string
   /** 光标前的内容（更新当前块） */
   content_before: string
   /** 光标后的内容（创建新块） */
@@ -240,6 +245,8 @@ export interface SplitResult {
 }
 
 export interface MergeReq {
+  /** Block ID */
+  id: string
   /** 合并方向（默认 "previous"） */
   direction?: string
   /** 前一个兄弟块的当前内容（校验用，可选） */
@@ -251,4 +258,50 @@ export interface MergeResult {
   merged_block: Block
   /** 被删除的块 ID */
   deleted_block_id: string
+}
+
+// ---- RPC 请求类型（全 POST） ----
+
+export interface GetDocumentReq {
+  id: string
+}
+
+export interface GetChildrenReq {
+  id: string
+}
+
+export interface DeleteDocumentReq {
+  id: string
+}
+
+export interface ExportReq {
+  id: string
+  format?: string
+}
+
+export interface GetBlockReq {
+  id: string
+  include_deleted?: boolean
+}
+
+export interface DeleteBlockReq {
+  id: string
+}
+
+export interface RestoreReq {
+  id: string
+}
+
+export interface GetHistoryReq {
+  id: string
+  limit?: number
+}
+
+export interface GetVersionReq {
+  id: string
+  version: number
+}
+
+export interface SnapshotReq {
+  id: string
 }

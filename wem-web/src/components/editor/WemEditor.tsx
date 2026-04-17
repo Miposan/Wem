@@ -4,14 +4,14 @@
  * 架构：
  *   用户操作 → useTextBlock → handleAction → OperationQueue → Command
  *                                                        ↓
- *                                               API 同步 (await createBlock/...)
+ *                                               API 同步 (await splitBlock/...)
  *                                               更新 UI (flushSync + 真实数据)
- *                                               latestBlockId 跟踪（解决连续 Enter）
+ *                                               光标从 DOM 读取 (getCursorPosition)
  *                                               DOM 光标 (SelectionManager)
  *
  * 核心设计：
  * - 悲观更新：结构操作先等 API 返回，再用真实数据更新 UI
- * - latestBlockId：快速连续 Enter 时，后续 split 自动指向新块
+ * - Command 从 DOM 读取光标：OperationQueue 串行保证 DOM 始终最新
  * - OperationQueue 串行化所有结构变更操作，保证有序
  */
 
@@ -19,6 +19,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
 import { getDocument, updateBlock, createBlock } from '@/api/client'
+
+/** 自身操作完成后抑制 SSE 回声的时间窗口（ms） */
+const SSE_ECHO_SUPPRESS_MS = 1_000
 import { BlockTreeRenderer } from './components/BlockTreeRenderer'
 import { updateBlockInTree } from './core/BlockOperations'
 import { OperationQueue } from './core/OperationQueue'
@@ -28,6 +31,7 @@ import {
   executeMerge,
   executeFocusPrevious,
   executeFocusNext,
+  executeConvertBlock,
 } from './core/Commands'
 import type { CommandContext } from './core/Commands'
 import type { BlockAction } from './core/types'
@@ -72,20 +76,6 @@ export function WemEditor({
     }
   }, [])
 
-  /**
-   * 最新创建的块 ID — 解决快速连续 Enter 的过期 blockId 问题
-   *
-   * 快速连按时，keydown 捕获的 blockId 是 UI 更新前的旧值。
-   * 每个 split 完成后把新块 ID 写入此 ref，后续 split 优先使用它。
-   */
-  const latestBlockIdRef = useRef<string | null>(null)
-
-  /**
-   * 操作队列 — 序列化所有结构变更操作
-   *
-   * 保证快速连续操作（如快速 Enter）时，每个操作等上一个完成后再执行，
-   * 避免并发修改导致数据不一致。
-   */
   const opQueue = useRef(
     new OperationQueue((err, label) => {
       console.error(`[opQueue] ${label} 失败:`, err)
@@ -141,7 +131,6 @@ export function WemEditor({
     treeRef.current = blocksRef.current
     setCollapsedIds(new Set())
     opQueue.current.clear()
-    latestBlockIdRef.current = null
   }, [documentId])
 
   // ─── SSE 实时事件订阅 ───
@@ -206,9 +195,12 @@ export function WemEditor({
     documentId,
     getTree: () => treeRef.current,
     setTreeSync,
-    getLatestBlockId: () => latestBlockIdRef.current,
-    setLatestBlockId: (id: string | null) => { latestBlockIdRef.current = id },
     cancelPendingSave,
+    refetchDocument: async () => {
+      if (!documentId) return
+      const res = await getDocument(documentId)
+      setTreeSync(() => res.blocks)
+    },
   }), [documentId, setTreeSync, cancelPendingSave])
 
   /** 结构操作入队辅助：统一 suppressRefetchUntil + 消除重复的 try/finally 模式 */
@@ -221,7 +213,7 @@ export function WemEditor({
           try {
             await execute(ctx)
           } finally {
-            suppressRefetchUntil.current = Date.now() + 1000
+            suppressRefetchUntil.current = Date.now() + SSE_ECHO_SUPPRESS_MS
           }
         },
       })
@@ -265,13 +257,11 @@ export function WemEditor({
     (action: BlockAction) => {
       switch (action.type) {
         // 结构操作 → 入队串行执行 + 抑制 SSE 回声
-        case 'split': {
-          const { blockId, offset } = action
-          enqueueStructuralOp(`split:${blockId}@${offset}`, (ctx) =>
-            executeSplit(ctx, { blockId, offset }),
+        case 'split':
+          enqueueStructuralOp('split', (ctx) =>
+            executeSplit(ctx),
           )
           break
-        }
         case 'delete': {
           const { blockId } = action
           enqueueStructuralOp(`delete:${blockId}`, (ctx) =>
@@ -283,6 +273,13 @@ export function WemEditor({
           const { blockId } = action
           enqueueStructuralOp(`merge:${blockId}`, (ctx) =>
             executeMerge(ctx, { blockId }),
+          )
+          break
+        }
+        case 'convert-block': {
+          const { blockId, content, blockType } = action
+          enqueueStructuralOp(`convert:${blockId}`, (ctx) =>
+            executeConvertBlock(ctx, { blockId, content, blockType }),
           )
           break
         }

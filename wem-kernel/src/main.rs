@@ -31,69 +31,36 @@ async fn main() {
 
     // 创建 Axum 路由器，注册所有 API 路由
     let app = Router::new()
-        // ─── 健康检查 ────────────────────────
+        // ─── 健康检查（唯一保留 GET 的非 SSE 端点） ──────
         .route("/api/v1/health", get(handler::health))
 
-        // ─── Document API ─────────────────────
-        // 列出根文档 / 创建文档
-        .route("/api/v1/documents",
-            get(handler::list_documents).post(handler::create_document))
-        // 获取文档 / 删除文档
-        .route("/api/v1/documents/{id}",
-            get(handler::get_document).delete(handler::delete_document))
-        // 获取文档直系子文档（侧边栏导航用）
-        .route("/api/v1/documents/{id}/children",
-            get(handler::get_document_children))
+        // ─── Document RPC ─────────────────────────────
+        .route("/api/v1/documents", post(handler::create_document))
+        .route("/api/v1/documents/list", post(handler::list_documents))
+        .route("/api/v1/documents/get", post(handler::get_document))
+        .route("/api/v1/documents/children", post(handler::get_document_children))
+        .route("/api/v1/documents/delete", post(handler::delete_document))
+        .route("/api/v1/documents/export", post(handler::export_text))
+        // SSE（EventSource 只支持 GET，保留路径参数）
+        .route("/api/v1/documents/{id}/events", get(handler::document_events))
 
-        // ─── Block API ────────────────────────
-        // 批量操作（必须在 /blocks/{id} 之前注册，避免路径冲突）
-        .route("/api/v1/blocks/batch",
-            post(handler::batch_blocks))
-        // 创建 Block
-        .route("/api/v1/blocks",
-            post(handler::create_block))
-        // 获取 / 更新 / 删除 Block
-        .route("/api/v1/blocks/{id}",
-            get(handler::get_block).put(handler::update_block).delete(handler::delete_block))
-        // 移动 Block
-        .route("/api/v1/blocks/{id}/move",
-            post(handler::move_block))
-        // 恢复 Block
-        .route("/api/v1/blocks/{id}/restore",
-            post(handler::restore_block))
-        // 拆分 Block（原子操作：更新当前块 + 创建新块）
-        .route("/api/v1/blocks/{id}/split",
-            post(handler::split_block))
-        // 合并 Block（原子操作：合并到前驱兄弟 + 删除当前块）
-        .route("/api/v1/blocks/{id}/merge",
-            post(handler::merge_block))
+        // ─── Block RPC ────────────────────────────────
+        .route("/api/v1/blocks", post(handler::create_block))
+        .route("/api/v1/blocks/get", post(handler::get_block))
+        .route("/api/v1/blocks/update", post(handler::update_block))
+        .route("/api/v1/blocks/delete", post(handler::delete_block))
+        .route("/api/v1/blocks/move", post(handler::move_block))
+        .route("/api/v1/blocks/restore", post(handler::restore_block))
+        .route("/api/v1/blocks/split", post(handler::split_block))
+        .route("/api/v1/blocks/merge", post(handler::merge_block))
+        .route("/api/v1/blocks/batch", post(handler::batch_blocks))
+        .route("/api/v1/blocks/import", post(handler::import_text))
 
-        // ─── 文本导入/导出 API ────────────
-        // 导入文本（Markdown → Block 树）
-        .route("/api/v1/blocks/import",
-            post(handler::import_text))
-        // 导出文档（Block 树 → Markdown）
-        .route("/api/v1/documents/{id}/export",
-            get(handler::export_text))
-
-        // ─── SSE 实时事件 ─────────────────
-        // 前端 EventSource 连接，接收文档变更推送
-        .route("/api/v1/documents/{id}/events",
-            get(handler::document_events))
-
-        // ─── Oplog / 历史版本 API ─────────
-        // 获取 Block 变更历史
-        .route("/api/v1/blocks/{id}/history",
-            get(handler::get_block_history))
-        // 获取 Block 指定版本内容
-        .route("/api/v1/blocks/{id}/versions/{version}",
-            get(handler::get_block_version))
-        // 回滚 Block 到指定版本
-        .route("/api/v1/blocks/{id}/rollback",
-            post(handler::rollback_block))
-        // 手动创建快照
-        .route("/api/v1/blocks/{id}/snapshot",
-            post(handler::create_block_snapshot))
+        // ─── Oplog / 历史版本 RPC ────────────────────
+        .route("/api/v1/blocks/history", post(handler::get_block_history))
+        .route("/api/v1/blocks/version", post(handler::get_block_version))
+        .route("/api/v1/blocks/rollback", post(handler::rollback_block))
+        .route("/api/v1/blocks/snapshot", post(handler::create_block_snapshot))
 
         // 注入数据库 State
         .with_state(db)

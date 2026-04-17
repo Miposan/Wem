@@ -143,7 +143,7 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
     let new_content: Vec<u8> = req
         .content
         .map(|c| c.into_bytes())
-        .unwrap_or(current.content);
+        .unwrap_or_else(|| current.content.clone());
 
     // 3. 计算新 block_type 和 content_type
     let new_block_type = req.block_type.clone().unwrap_or(current.block_type.clone());
@@ -186,9 +186,186 @@ pub fn update_block(db: &Db, id: &str, req: UpdateBlockReq) -> Result<Block, App
         return Err(AppError::NotFound(format!("Block {} 不存在", id)));
     }
 
-    // 6. 查询并返回更新后的 Block
+    // 6. Heading 层级自动重组
+    //
+    // 不变量：heading(N) 只能嵌套在 heading(M) 内，且 M < N。
+    // 当 block_type 变化时，通过三步操作维护此不变量：
+    //   6a. 提升子块（如果曾经是 heading）
+    //   6b. 逃逸校验（如果变为 heading，确保不被 ≥ 同级的 heading 包裹）
+    //   6c. 吸收兄弟（以新 heading level 吸收后续低级别块）
+    if block_type_changed {
+        let old_type = &current.block_type;
+        let new_type = &new_block_type;
+
+        let was_heading = matches!(old_type, BlockType::Heading { .. });
+        let now_heading = matches!(new_type, BlockType::Heading { .. });
+
+        // 6a. 如果曾经是 heading，先将所有子块提升到当前 parent
+        if was_heading {
+            promote_children(&conn, id, &current.parent_id, &current.position)?;
+        }
+
+        if now_heading {
+            // 提取新的 heading level
+            let new_level = match new_type {
+                BlockType::Heading { level } => *level,
+                _ => unreachable!(),
+            };
+
+            // 6b. 逃逸：如果父链中存在 heading(level >= new_level)，
+            // 将当前块 reparent 到正确的祖先下
+            let (effective_parent_id, effective_position) =
+                escape_heading_if_needed(&conn, id, &current, new_level)?;
+
+            // 6c. 吸收：在正确层级下，将后续低级别块变为子块
+            absorb_siblings_after(&conn, id, &effective_parent_id, &effective_position, new_level)?;
+        }
+    }
+
+    // 7. 查询并返回更新后的 Block
     repo::find_by_id_raw(&conn, id)
         .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))
+}
+
+// ─── Heading 层级重组辅助 ──────────────────────────────────────
+
+/// 6a. 提升子块：将 heading 的所有直系子块 reparent 到 heading 的 parent
+///
+/// 子块按原顺序插入到 heading 之后、heading 原后续兄弟之前。
+fn promote_children(
+    conn: &rusqlite::Connection,
+    heading_id: &str,
+    heading_parent_id: &str,
+    heading_position: &str,
+) -> Result<(), AppError> {
+    let children = repo::find_children(conn, heading_id)
+        .map_err(|e| AppError::Internal(format!("查询子块失败: {}", e)))?;
+
+    if children.is_empty() {
+        return Ok(());
+    }
+
+    // 计算提升后的起始 position：紧接在 heading 之后
+    let siblings_after_heading = repo::find_siblings_after(
+        conn, heading_parent_id, heading_position,
+    )
+    .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
+
+    let mut pos = if let Some(first_after) = siblings_after_heading.first() {
+        fractional::generate_between(heading_position, &first_after.position)
+    } else {
+        fractional::generate_after(heading_position)
+    };
+
+    for child in &children {
+        let now = now_iso();
+        repo::update_parent_position(conn, &child.id, heading_parent_id, &pos, &now)
+            .map_err(|e| AppError::Internal(format!("提升子块失败: {}", e)))?;
+        pos = fractional::generate_after(&pos);
+    }
+
+    Ok(())
+}
+
+/// 6b. Heading 逃逸校验
+///
+/// 检查 heading(N) 的父链是否存在 heading(M >= N)。
+/// 如果存在，将当前块 reparent 到最近的合法祖先（heading(level < N) 或非 heading 根），
+/// 定位在"逃逸链"中最外层 heading 之后。
+///
+/// 返回逃逸后的有效 (parent_id, position)，供后续吸收逻辑使用。
+fn escape_heading_if_needed(
+    conn: &rusqlite::Connection,
+    _block_id: &str,
+    current: &Block,
+    new_level: u8,
+) -> Result<(String, String), AppError> {
+    let mut check_id = current.parent_id.clone();
+    let mut escape_from_id = None; // 最外层需要逃逸的 heading ID
+
+    // 沿父链向上走，找到第一个 level < N 的 heading 或非 heading 节点
+    loop {
+        let parent = repo::find_by_id(conn, &check_id)
+            .map_err(|e| AppError::Internal(format!("查询祖先 {} 失败: {}", check_id, e)))?;
+
+        match &parent.block_type {
+            BlockType::Heading { level } if *level >= new_level => {
+                // 此 heading 的 level >= 新 level，需要继续逃逸
+                escape_from_id = Some(parent.id.clone());
+                check_id = parent.parent_id.clone();
+            }
+            _ => {
+                // 找到合法祖先：level < N 的 heading 或非 heading（文档根等）
+                break;
+            }
+        }
+    }
+
+    // 无需逃逸
+    let Some(escape_id) = escape_from_id else {
+        return Ok((current.parent_id.clone(), current.position.clone()));
+    };
+
+    // 需要逃逸：target_parent 是 check_id（第一个合法祖先）
+    let target_parent_id = check_id;
+
+    // 读取逃逸点的 position（用于计算插入位置）
+    let escape_block = repo::find_by_id(conn, &escape_id)
+        .map_err(|e| AppError::Internal(format!("查询逃逸点 {} 失败: {}", escape_id, e)))?;
+
+    // 在 target_parent 下，定位在 escape_block 之后
+    let siblings_after_escape = repo::find_siblings_after(
+        conn, &target_parent_id, &escape_block.position,
+    )
+    .map_err(|e| AppError::Internal(format!("查询逃逸点后续兄弟失败: {}", e)))?;
+
+    let new_position = if let Some(first_after) = siblings_after_escape.first() {
+        fractional::generate_between(&escape_block.position, &first_after.position)
+    } else {
+        fractional::generate_after(&escape_block.position)
+    };
+
+    // Reparent 当前块到 target_parent
+    let now = now_iso();
+    repo::update_parent_position(conn, _block_id, &target_parent_id, &new_position, &now)
+        .map_err(|e| AppError::Internal(format!("逃逸 reparent 失败: {}", e)))?;
+
+    Ok((target_parent_id, new_position))
+}
+
+/// 6c. 吸收后续兄弟
+///
+/// 在 (parent_id, position) 对应的层级下，将 heading 之后的所有低级别块
+/// reparent 为 heading 的子块，直到遇到 heading(level <= new_level) 为止。
+fn absorb_siblings_after(
+    conn: &rusqlite::Connection,
+    heading_id: &str,
+    parent_id: &str,
+    position: &str,
+    heading_level: u8,
+) -> Result<(), AppError> {
+    let siblings_after = repo::find_siblings_after(conn, parent_id, position)
+        .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
+
+    let mut pos = calculate_insert_position(conn, heading_id, None)?;
+    for sibling in &siblings_after {
+        match &sibling.block_type {
+            BlockType::Heading { level: sib_level } if *sib_level <= heading_level => {
+                // 同级或更高级 heading → 停止吸收
+                break;
+            }
+            _ => {
+                let now = now_iso();
+                repo::update_parent_position(
+                    conn, &sibling.id, heading_id, &pos, &now,
+                )
+                .map_err(|e| AppError::Internal(format!("reparent 失败: {}", e)))?;
+                pos = fractional::generate_after(&pos);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // ─── 删除 Block（软删除）───────────────────────────────────────
@@ -963,42 +1140,88 @@ pub fn merge_block(db: &Db, id: &str, _req: MergeReq) -> Result<MergeResult, App
         return Err(AppError::BadRequest("全局根块不可合并".to_string()));
     }
 
-    // 2. 查找前一个兄弟 Block
-    let prev = repo::find_prev_sibling(&conn, &current.parent_id, &current.position)
+    // 2. 确定合并目标：优先前驱兄弟，回退到父块
+    //
+    // 在 DFS 顺序中，一个块的"前一个"有两种情况：
+    //   a) 有前驱兄弟 → 合并到前驱兄弟（同父同级）
+    //   b) 无前驱兄弟 → 合并到父块（DFS 中父块就是前一个）
+    let prev_sibling = repo::find_prev_sibling(&conn, &current.parent_id, &current.position)
         .map_err(|e| AppError::Internal(format!("查询前驱兄弟失败: {}", e)))?;
 
-    let prev = prev.ok_or_else(|| {
-        AppError::BadRequest(format!("Block {} 没有前驱兄弟，无法合并", id))
-    })?;
+    let (target, merge_into_parent) = match prev_sibling {
+        Some(s) => (s, false),
+        None => {
+            // 无前驱兄弟 → 回退到父块
+            if current.parent_id == crate::model::ROOT_ID {
+                return Err(AppError::BadRequest(format!(
+                    "Block {} 是根块的第一个子块，无法合并",
+                    id
+                )));
+            }
+            let parent = repo::find_by_id(&conn, &current.parent_id).map_err(|_| {
+                AppError::NotFound(format!("父块 {} 不存在", current.parent_id))
+            })?;
+            (parent, true)
+        }
+    };
 
     // 3. 合并内容
-    let prev_text = String::from_utf8_lossy(&prev.content);
+    let target_text = String::from_utf8_lossy(&target.content);
     let current_text = String::from_utf8_lossy(&current.content);
-    let merged_content = format!("{}{}", prev_text, current_text);
+    let merged_content = format!("{}{}", target_text, current_text);
 
-    // 4. 更新前一个兄弟块
+    // 4. 更新合并目标块
     let now = now_iso();
-    let properties_json = serde_json::to_string(&prev.properties).unwrap_or_default();
+    let properties_json = serde_json::to_string(&target.properties).unwrap_or_default();
 
     let rows = repo::update_content_and_props(
         &conn,
-        &prev.id,
+        &target.id,
         merged_content.as_bytes(),
         &properties_json,
         &now,
     )
-    .map_err(|e| AppError::Internal(format!("更新前驱兄弟失败: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("更新合并目标块失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("前驱兄弟 Block {} 不存在", prev.id)));
+        return Err(AppError::NotFound(format!(
+            "合并目标 Block {} 不存在",
+            target.id
+        )));
     }
 
-    // 5. 软删除当前块（不含级联，因为 merge 只删除叶子块）
+    // 5. 如果合并到父块，将当前块的子块 reparent 到父块
+    if merge_into_parent {
+        let children = repo::find_children(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询子块失败: {}", e)))?;
+
+        if !children.is_empty() {
+            // 子块按原顺序插入到当前块之后的位置
+            let siblings_after =
+                repo::find_siblings_after(&conn, &current.parent_id, &current.position)
+                    .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
+
+            let mut pos = if let Some(first_after) = siblings_after.first() {
+                fractional::generate_between(&current.position, &first_after.position)
+            } else {
+                fractional::generate_after(&current.position)
+            };
+
+            for child in &children {
+                let t = now_iso();
+                repo::update_parent_position(&conn, &child.id, &target.id, &pos, &t)
+                    .map_err(|e| AppError::Internal(format!("Reparent 子块失败: {}", e)))?;
+                pos = fractional::generate_after(&pos);
+            }
+        }
+    }
+
+    // 6. 软删除当前块
     repo::update_status(&conn, id, "deleted", &now)
         .map_err(|e| AppError::Internal(format!("软删除当前块失败: {}", e)))?;
 
-    // 6. 查询合并后的块
-    let merged_block = repo::find_by_id_raw(&conn, &prev.id)
+    // 7. 查询合并后的块
+    let merged_block = repo::find_by_id_raw(&conn, &target.id)
         .map_err(|e| AppError::Internal(format!("查询合并后的 Block 失败: {}", e)))?;
 
     Ok(MergeResult {

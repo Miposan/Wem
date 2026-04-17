@@ -21,6 +21,7 @@
   display: flex;
   align-items: flex-start;
   padding: 1px 0;
+  position: relative;               /* gutter 和 ::before 的定位锚点 */
 }
 
 /* ─── contentEditable 通用 ─── */
@@ -72,15 +73,60 @@
   cursor: default;
 }
 
-/* ─── 折叠控制 ─── */
+/* ─── 块左侧操作区（Gutter） ───
+ *
+ * 统一的块级操作入口，承载：折叠箭头、拖拽手柄等。
+ * 位于 .wem-block-content 内部，绝对定位于左侧，仅跨内容区高度。
+ * 默认隐藏，hover 块或 gutter 内有操作状态时显示。
+ */
 
-.wem-collapse-toggle {
-  display: none;                    /* 默认隐藏 */
-  flex-shrink: 0;
+/* 扩展 hover 检测区到左侧 gutter 位置 */
+.wem-block-content::before {
+  content: '';
+  position: absolute;
+  left: -24px;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+}
+
+.wem-block-gutter {
+  position: absolute;
+  left: -24px;
+  top: 0;
+  bottom: 0;                       /* 仅跨 .wem-block-content 高度 */
+  width: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;          /* 垂直居中 */
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;            /* 隐藏时不拦截点击 */
+}
+
+/* 块内容区 hover 或 gutter 内按钮获焦时显示 */
+.wem-block-content:hover > .wem-block-gutter,
+.wem-block-gutter:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 已折叠的块始终显示 gutter（折叠箭头需要可见） */
+.wem-block-collapsed > .wem-block-content > .wem-block-gutter {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ─── Gutter 通用按钮 ─── */
+
+.wem-gutter-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   height: 20px;
-  margin-right: 2px;
-  margin-top: 4px;
   padding: 0;
   border: none;
   background: none;
@@ -92,16 +138,12 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.wem-block-collapsible > .wem-block-content > .wem-collapse-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.wem-collapse-toggle:hover {
+.wem-gutter-btn:hover {
   background: var(--color-fill-3, #f0f0f0);
   color: var(--color-text-1, #333);
 }
+
+/* ─── 折叠箭头（Gutter 内） ─── */
 
 .wem-collapse-arrow {
   display: inline-block;
@@ -122,6 +164,11 @@
 
 .wem-block-children {
   padding-left: 24px;
+}
+
+/* heading 子块不缩进：heading 是语义容器而非视觉层级 */
+.wem-block-container[data-block-type="heading"] > .wem-block-children {
+  padding-left: 0;
 }
 
 /* ─── 未知块 ─── */

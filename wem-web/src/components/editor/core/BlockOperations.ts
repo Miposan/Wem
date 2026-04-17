@@ -35,6 +35,20 @@ export function findNextBlock(tree: BlockNode[], blockId: string): BlockNode | n
 
 // ─── 插入 ───
 
+/** 在指定父块下插入为第一个子块 */
+export function insertAsFirstChild(tree: BlockNode[], parentId: string, newBlock: BlockNode): BlockNode[] {
+  return tree.map((block) => {
+    if (block.id === parentId) {
+      return { ...block, children: [newBlock, ...block.children] }
+    }
+    const updated = insertAsFirstChild(block.children, parentId, newBlock)
+    if (updated !== block.children) {
+      return { ...block, children: updated }
+    }
+    return block
+  })
+}
+
 /** 在指定块之后插入新块（顶层或嵌套） */
 export function insertAfter(tree: BlockNode[], afterId: string | null, newBlock: BlockNode): BlockNode[] {
   if (afterId === null) {
