@@ -1,55 +1,68 @@
-//! 操作日志（Oplog）与快照（Snapshot）数据模型
+//! 操作日志（Oplog）数据模型
 //!
-//! Oplog 是 source of truth。每次 Block 操作都记录一条 Operation。
-//! Snapshot 是某个版本的全量内容，减少回放步数。
+//! 基于 batch-based 操作日志，为文档提供 undo/redo 能力。
 //!
-//! 简化版（单用户，无协同）：
-//! - 去掉 author / batch_id / doc_id（单用户场景可从 block 推导）
-//! - 只保留核心：谁在什么时候对哪个 Block 做了什么
+//! ## 双层存档架构
 //!
-//! 参考 05-oplog.md §1~§6
+//! | 层级 | 粒度 | 用途 | 生命周期 |
+//! |------|------|------|----------|
+//! | **Batch + Change** | 细粒度（单次操作） | undo/redo | 短期，被快照压缩后可清理 |
+//! | **Snapshot** | 粗粒度（整篇文档） | 版本存档、恢复 | 长期，用户手动管理 |
+//!
+//! ### Batch（细粒度）
+//! - 每次用户操作产生一个 Batch（全局唯一 batch_id）
+//! - Batch 内记录所有受影响 Block 的 before/after 快照
+//! - undo = 恢复 before 快照；redo = 恢复 after 快照
+//!
+//! ### Snapshot（粗粒度）
+//! - 某一时刻整篇文档所有 Block 的完整状态
+//! - 触发方式：手动保存 / 每 N 个 Batch 自动 / 导入前自动
+//! - 恢复 = 将文档内所有 Block 回滚到快照时的状态
+//! - 快照之间的 Batch 可用于 undo/redo；快照之前的 Batch 可被 GC 清理
 
 use serde::{Deserialize, Serialize};
 
-// ─── 解析警告 ─────────────────────────────────────────────────
+// ─── Batch ─────────────────────────────────────────────────────
 
-/// 解析过程中产生的警告
+/// 一次用户操作产生的一个变更批次
 ///
-/// 定义在 model 层，供 parser 产出、api 层引用，避免 api→parser 层级依赖。
-#[derive(Debug, Clone, Serialize)]
-pub struct ParseWarning {
-    /// 行号（1-based，0 表示未知）
-    pub line: usize,
-    /// 警告类型标识
-    pub warning_type: String,
-    /// 人类可读描述
-    pub message: String,
-    /// 采取的操作（如 `"auto_fixed"`）
-    pub action: String,
+/// 对应 `batches` 表的一行。batch_id 由客户端生成或服务端生成。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Batch {
+    /// 批次 ID（UUID v7，时间有序）
+    pub id: String,
+    /// 所属文档 ID（undo/redo 按文档作用域隔离）
+    pub document_id: String,
+    /// 操作类型
+    pub action: Action,
+    /// 操作描述（可选，如 "split paragraph"）
+    pub description: Option<String>,
+    /// 操作时间（ISO 8601）
+    pub timestamp: String,
+    /// 是否已被撤销
+    pub undone: bool,
 }
 
-// ─── Action 枚举 ──────────────────────────────────────────────
+// ─── Action ────────────────────────────────────────────────────
 
 /// 操作类型
 ///
-/// 每种 Action 对应一个 Block 操作端点。
+/// 与 Block CRUD 端点一一对应，加上组合操作。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
-    /// 新建 Block
     Create,
-    /// 更新 Block 内容或属性
     Update,
-    /// 软删除 Block（含级联）
     Delete,
-    /// 移动 Block（改变 parent_id 或 position）
     Move,
-    /// 恢复已删除的 Block
     Restore,
+    Split,
+    Merge,
+    BatchOps,
+    Import,
 }
 
 impl Action {
-    /// 转为数据库存储的字符串
     pub fn as_str(&self) -> &'static str {
         match self {
             Action::Create => "create",
@@ -57,10 +70,13 @@ impl Action {
             Action::Delete => "delete",
             Action::Move => "move",
             Action::Restore => "restore",
+            Action::Split => "split",
+            Action::Merge => "merge",
+            Action::BatchOps => "batch_ops",
+            Action::Import => "import",
         }
     }
 
-    /// 从数据库字符串解析
     pub fn from_str_lossy(s: &str) -> Option<Self> {
         match s {
             "create" => Some(Action::Create),
@@ -68,179 +84,146 @@ impl Action {
             "delete" => Some(Action::Delete),
             "move" => Some(Action::Move),
             "restore" => Some(Action::Restore),
+            "split" => Some(Action::Split),
+            "merge" => Some(Action::Merge),
+            "batch_ops" => Some(Action::BatchOps),
+            "import" => Some(Action::Import),
             _ => None,
         }
     }
 }
 
-// ─── Operation 数据结构 ───────────────────────────────────────
+// ─── Change ────────────────────────────────────────────────────
 
-/// 一条操作日志
+/// 一个 Block 在某次 Batch 中的变更记录
 ///
-/// 对应 oplog 表的一行。op_id 由 SQLite AUTOINCREMENT 自动分配。
+/// 对应 `changes` 表的一行。before/after 存储 Block 的完整快照。
+/// - create: before = None, after = 完整 Block
+/// - delete: before = 完整 Block, after = None
+/// - update/move: before = 变更前, after = 变更后
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Operation {
-    /// 全局单调递增 ID（SQLite AUTOINCREMENT）
-    pub op_id: i64,
-    /// 操作目标 Block ID
+pub struct Change {
+    /// 自增 ID
+    pub id: i64,
+    /// 所属批次 ID
+    pub batch_id: String,
+    /// 受影响的 Block ID
     pub block_id: String,
-    /// 操作类型
-    pub action: Action,
-    /// 操作数据（JSON，格式取决于 action）
-    pub data: String,
-    /// 操作前的 block version
-    pub prev_version: u64,
-    /// 操作后的 block version
-    pub new_version: u64,
-    /// 操作时间（ISO 8601）
-    pub timestamp: String,
+    /// 变更类型（create / update / delete / reparent）
+    pub change_type: ChangeType,
+    /// 变更前的 Block 快照（JSON，create 时为 None）
+    pub before: Option<BlockSnapshot>,
+    /// 变更后的 Block 快照（JSON，delete 时为 None）
+    pub after: Option<BlockSnapshot>,
 }
 
-// ─── OperationData 各 Action 的 JSON 结构 ─────────────────────
+/// 变更类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeType {
+    /// 新建 Block
+    Created,
+    /// 修改 Block 内容/属性
+    Updated,
+    /// 软删除 Block
+    Deleted,
+    /// 移动 Block（改变 parent_id / position）
+    Moved,
+    /// 恢复 Block
+    Restored,
+    /// Block 被重新挂载（merge 时子块 reparent）
+    Reparented,
+}
 
-/// Create 操作的数据
+impl ChangeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChangeType::Created => "created",
+            ChangeType::Updated => "updated",
+            ChangeType::Deleted => "deleted",
+            ChangeType::Moved => "moved",
+            ChangeType::Restored => "restored",
+            ChangeType::Reparented => "reparented",
+        }
+    }
+
+    pub fn from_str_lossy(s: &str) -> Option<Self> {
+        match s {
+            "created" => Some(ChangeType::Created),
+            "updated" => Some(ChangeType::Updated),
+            "deleted" => Some(ChangeType::Deleted),
+            "moved" => Some(ChangeType::Moved),
+            "restored" => Some(ChangeType::Restored),
+            "reparented" => Some(ChangeType::Reparented),
+            _ => None,
+        }
+    }
+}
+
+// ─── BlockSnapshot ─────────────────────────────────────────────
+
+/// Block 快照（用于 before/after 记录）
+///
+/// 只存储 undo/redo 必要的字段，不含 id（id 在 Change 层面）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateOpData {
-    pub block_type: String,
-    pub content_type: String,
-    pub content: String,
-    pub properties: String,
+pub struct BlockSnapshot {
     pub parent_id: String,
+    pub document_id: String,
     pub position: String,
-}
-
-/// Update 操作的数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateOpData {
-    /// 更新后的完整 Block 内容（冗余但可靠，保证回放链不断裂）
-    pub content: String,
-    pub properties: String,
-    /// 是否为回滚操作
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_rollback: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rollback_to: Option<u64>,
-}
-
-/// Delete 操作的数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteOpData {
-    /// 级联删除的子块数量（不含自身）
-    pub cascade_count: u32,
-    /// 被删除 Block 的内容快照摘要
-    pub snapshot: DeleteSnapshot,
-}
-
-/// Delete 操作中附带的快照摘要
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteSnapshot {
-    pub block_type: String,
-    pub content: String,
-    pub properties: String,
-}
-
-/// Move 操作的数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MoveOpData {
-    pub old_parent_id: String,
-    pub old_position: String,
-    pub new_parent_id: String,
-    pub new_position: String,
-}
-
-/// Restore 操作的数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RestoreOpData {
-    /// 级联恢复的子块数量（含自身）
-    pub cascade_count: u32,
-}
-
-// ─── Snapshot 数据结构 ────────────────────────────────────────
-
-/// Block 快照
-///
-/// 记录某个 Block 在某个 version 的完整内容。
-/// 配合 oplog 实现高效的历史回溯。
-///
-/// 对应 snapshots 表的一行。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Snapshot {
-    pub block_id: String,
-    pub version: u64,
     pub block_type: String,
     pub content_type: String,
     pub content: Vec<u8>,
     pub properties: String,
-    pub parent_id: String,
-    pub position: String,
-    pub timestamp: String,
+    pub status: String,
 }
 
-/// 快照触发原因
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotReason {
-    /// 距上次快照的操作数达到阈值
-    OpCountThreshold,
-    /// 距上次快照的时间达到阈值
-    TimeThreshold,
-    /// 用户手动创建
-    Manual,
-}
-
-impl SnapshotReason {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SnapshotReason::OpCountThreshold => "op_count_threshold",
-            SnapshotReason::TimeThreshold => "time_threshold",
-            SnapshotReason::Manual => "manual",
+impl BlockSnapshot {
+    /// 从 Block 模型创建快照
+    pub fn from_block(block: &super::Block) -> Self {
+        Self {
+            parent_id: block.parent_id.clone(),
+            document_id: block.document_id.clone(),
+            position: block.position.clone(),
+            block_type: serde_json::to_string(&block.block_type).unwrap_or_default(),
+            content_type: block.content_type.as_str().to_string(),
+            content: block.content.clone(),
+            properties: serde_json::to_string(&block.properties).unwrap_or_default(),
+            status: block.status.as_str().to_string(),
         }
     }
 }
 
 // ─── API 响应类型 ──────────────────────────────────────────────
-// 这些类型被 service 层构造、被 api/response.rs 引用，
-// 放在 model 层确保依赖方向正确：api → model ← service
 
-/// Block 变更历史条目（API 返回用）
+/// Undo/Redo 结果
+#[derive(Debug, Clone, Serialize)]
+pub struct UndoRedoResult {
+    /// 恢复的批次 ID
+    pub batch_id: String,
+    /// 受影响的 Block ID 列表
+    pub affected_block_ids: Vec<String>,
+    /// 受影响的 document_id 集合（用于 SSE 广播）
+    pub affected_document_ids: Vec<String>,
+    /// 对应的操作类型
+    pub action: String,
+}
+
+/// 历史条目（API 返回）
 #[derive(Debug, Clone, Serialize)]
 pub struct HistoryEntry {
-    pub op_id: i64,
-    pub block_id: String,
+    pub batch_id: String,
     pub action: String,
-    pub data: serde_json::Value,
-    pub prev_version: u64,
-    pub new_version: u64,
+    pub description: Option<String>,
     pub timestamp: String,
+    pub undone: bool,
+    pub changes: Vec<ChangeSummary>,
 }
 
-/// 版本内容（API 返回用）
+/// 变更摘要（API 返回）
 #[derive(Debug, Clone, Serialize)]
-pub struct VersionContent {
-    /// 目标版本号
-    pub version: u64,
-    /// 该版本的完整 Block 内容
-    pub block: super::Block,
-    /// 重建来源（快照 + 回放了 N 步 oplog）
-    pub source: String,
-}
-
-/// 回滚结果（API 返回用）
-#[derive(Debug, Clone, Serialize)]
-pub struct RollbackResult {
-    pub id: String,
-    /// 回滚前的版本号
-    pub prev_version: u64,
-    /// 回滚后的新版本号
-    pub new_version: u64,
-    /// 回滚到哪个版本的内容
-    pub rollback_to_version: u64,
-}
-
-/// 快照创建结果（API 返回用）
-#[derive(Debug, Clone, Serialize)]
-pub struct SnapshotResult {
+pub struct ChangeSummary {
     pub block_id: String,
-    pub version: u64,
-    pub reason: String,
+    pub change_type: String,
 }
+
+

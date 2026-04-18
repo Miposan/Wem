@@ -14,8 +14,6 @@
 //! [database]
 //! path = "wem-data/wem.db"
 //!
-//! [oplog]
-//! snapshot_threshold = 50
 //! ```
 
 use serde::Deserialize;
@@ -34,7 +32,6 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
-    pub oplog: OplogConfig,
 }
 
 /// 服务器配置
@@ -57,13 +54,7 @@ pub struct DatabaseConfig {
     pub path: String,
 }
 
-/// 操作日志配置
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-pub struct OplogConfig {
-    /// 自动创建快照的操作数阈值（距上次快照多少次操作后触发）
-    pub snapshot_threshold: i64,
-}
+
 
 // ─── 默认值实现 ────────────────────────────────────────────────
 
@@ -72,7 +63,6 @@ impl Default for Config {
         Self {
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),
-            oplog: OplogConfig::default(),
         }
     }
 }
@@ -95,13 +85,6 @@ impl Default for DatabaseConfig {
     }
 }
 
-impl Default for OplogConfig {
-    fn default() -> Self {
-        Self {
-            snapshot_threshold: 50,
-        }
-    }
-}
 
 // ─── 配置加载 ──────────────────────────────────────────────────
 
@@ -160,20 +143,8 @@ pub fn load() -> &'static Config {
         if let Ok(path) = std::env::var("WEM_DB_PATH") {
             config.database.path = path;
         }
-        if let Ok(threshold) = std::env::var("WEM_SNAPSHOT_THRESHOLD") {
-            if let Ok(t) = threshold.parse::<i64>() {
-                config.oplog.snapshot_threshold = t;
-            }
-        }
-
         config
     })
 }
 
-/// 获取全局配置（只读引用）
-///
-/// 如果 `load()` 尚未调用，会自动用默认值初始化。
-/// 正常流程中 `main()` 已调用 `load()`，此处不会重复解析。
-pub fn get() -> &'static Config {
-    CONFIG.get_or_init(Config::default)
-}
+

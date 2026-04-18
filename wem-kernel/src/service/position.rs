@@ -1,18 +1,158 @@
-//! Position 计算辅助函数
+//! Fractional Index 位置计算
 //!
-//! 集中管理 Fractional Indexing 相关的位置计算逻辑：
-//! - 新建 Block 时的插入位置
-//! - 移动 Block 时的目标位置
-//! - 兄弟 Block 的位置查询
+//! 基于 base-62 字符集的分数索引算法 + 数据库感知的位置计算。
 //!
-//! 核心函数 `calculate_position` 统一处理所有场景，
-//! `calculate_insert_position` / `calculate_move_position` 是它的语义化封装。
+//! 分两层：
+//! - **纯算法层**：`generate_first/after/before/between` — 零依赖的字符串位置生成
+//! - **DB 感知层**：`calculate_insert_position/calculate_move_position` — 查询兄弟节点后调用纯算法
+//!
+//! 核心思想：
+//! - 每个 Block 有一个 position 字符串，按字典序决定兄弟节点间的顺序
+//! - 插入新 Block 时，生成一个介于目标位置之间的字符串
+//! - 不需要重新编号其他节点（和 f64 相比的核心优势）
+//!
+//! 示例排序：
+//! ```
+//! "a0" < "a1" < "a1V" < "a2" < "b0"
+//! ```
 
 use crate::repo::block_repo as repo;
 use crate::error::AppError;
-use crate::util::fractional;
 
-// ─── 核心计算 ──────────────────────────────────────────────────
+// ─── Base-62 字符集 ─────────────────────────────────────────────
+
+/// Base-62 字符集（按 ASCII 码排列，自然字典序）
+const CHARS: [char; 62] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+    'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r',
+    's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+];
+
+/// 中间字符（索引 30，约在 base-62 的正中间）
+const MID_CHAR: char = 'U';
+
+fn char_index(c: char) -> Option<usize> {
+    CHARS.iter().position(|&x| x == c)
+}
+
+fn char_at(i: usize) -> char {
+    CHARS[i]
+}
+
+// ─── 纯算法：位置生成 ──────────────────────────────────────────
+
+/// 生成第一个 position（`"a0"`）
+pub fn generate_first() -> String {
+    "a0".to_string()
+}
+
+/// 生成在指定 position **之后** 的 position
+///
+/// 从右向左找第一个可以递增的字符，递增它并截断后续。
+/// 如果所有字符都是 'z'（最大值），则追加中间字符。
+pub fn generate_after(after: &str) -> String {
+    let chars: Vec<char> = after.chars().collect();
+
+    for i in (0..chars.len()).rev() {
+        if let Some(idx) = char_index(chars[i]) {
+            if idx < CHARS.len() - 1 {
+                let mut result: Vec<char> = chars[..=i].to_vec();
+                result[i] = char_at(idx + 1);
+                return result.into_iter().collect();
+            }
+        }
+    }
+
+    format!("{}{}", after, MID_CHAR)
+}
+
+/// 生成在指定 position **之前** 的 position
+///
+/// 从右向左找第一个可以递减的字符，递减它并将后续填充为 'z'。
+/// 如果所有字符都是 '0'（最小值），则在前面插入 '0'。
+pub fn generate_before(before: &str) -> String {
+    let chars: Vec<char> = before.chars().collect();
+
+    for i in (0..chars.len()).rev() {
+        if let Some(idx) = char_index(chars[i]) {
+            if idx > 0 {
+                let mut result: Vec<char> = chars[..=i].to_vec();
+                result[i] = char_at(idx - 1);
+                for _ in (i + 1)..chars.len() {
+                    result.push('z');
+                }
+                return result.into_iter().collect();
+            }
+        }
+    }
+
+    format!("0{}", before)
+}
+
+/// 生成在两个 position **之间** 的 position（要求 `a < b`）
+pub fn generate_between(a: &str, b: &str) -> String {
+    assert!(a < b, "generate_between 要求 a < b，收到 a={}, b={}", a, b);
+
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let min_len = a_chars.len().min(b_chars.len());
+
+    let mut i = 0;
+    while i < min_len && a_chars[i] == b_chars[i] {
+        i += 1;
+    }
+
+    if i < min_len {
+        let a_idx = char_index(a_chars[i]).unwrap_or(0);
+        let b_idx = char_index(b_chars[i]).unwrap_or(0);
+
+        if b_idx - a_idx > 1 {
+            let mid_idx = (a_idx + b_idx) / 2;
+            let mut result: Vec<char> = a_chars[..i].to_vec();
+            result.push(char_at(mid_idx));
+            return result.into_iter().collect();
+        }
+
+        let prefix: String = a_chars[..=i].iter().collect();
+        let suffix: String = a_chars[i + 1..].iter().collect();
+
+        if suffix.is_empty() {
+            let candidate = format!("{}{}", prefix, MID_CHAR);
+            assert!(a < candidate.as_str() && candidate.as_str() < b,
+                "生成的 position {} 不在 {} 和 {} 之间", candidate, a, b);
+            return candidate;
+        } else {
+            let new_suffix = generate_after(&suffix);
+            let candidate = format!("{}{}", prefix, new_suffix);
+            if candidate.as_str() < b {
+                assert!(a < candidate.as_str(), "递增后应大于 a");
+                return candidate;
+            }
+            let candidate = format!("{}{}", a, MID_CHAR);
+            assert!(a < candidate.as_str() && candidate.as_str() < b,
+                "无法在 {} 和 {} 之间生成 position", a, b);
+            return candidate;
+        }
+    }
+
+    if a_chars.len() < b_chars.len() {
+        let rest: String = b_chars[a_chars.len()..].iter().collect();
+        let x = generate_before(&rest);
+        let candidate = format!("{}{}", a, x);
+        if a < candidate.as_str() && candidate.as_str() < b {
+            return candidate;
+        }
+        let candidate = format!("{}{}", a, MID_CHAR);
+        assert!(a < candidate.as_str() && candidate.as_str() < b,
+            "无法在 {} 和 {} 之间生成 position", a, b);
+        return candidate;
+    }
+
+    unreachable!("generate_between: a ({}) < b ({}) 但未找到插入点", a, b)
+}
+
+// ─── DB 感知层：位置计算 ───────────────────────────────────────
 
 /// 在指定父块内，根据前后邻居计算新的 fractional index position。
 ///
@@ -23,7 +163,7 @@ use crate::util::fractional;
 ///
 /// `after` / `before` 是兄弟块的 position 值（已验证属于 target_parent）。
 fn calculate_position(
-    parent_id: &str,
+    _parent_id: &str,
     after: Option<&str>,
     before: Option<&str>,
 ) -> Result<String, AppError> {
@@ -34,21 +174,21 @@ fn calculate_position(
                     "after 位置必须在 before 位置之前".to_string(),
                 ));
             }
-            Ok(fractional::generate_between(ap, bp))
+            Ok(generate_between(ap, bp))
         }
         (Some(ap), None) => {
             // 理论上应该查 after 的下一个兄弟来 generate_between，
             // 但调用方已处理了 sibling 查询，这里不可能走到。
             // 此分支保留作为安全兜底。
-            Ok(fractional::generate_after(ap))
+            Ok(generate_after(ap))
         }
         (None, Some(bp)) => {
-            Ok(fractional::generate_before(bp))
+            Ok(generate_before(bp))
         }
         (None, None) => {
             // 调用方已处理了空列表 → generate_first 的场景
             // 此处为兜底，不应走到
-            Ok(fractional::generate_first())
+            Ok(generate_first())
         }
     }
 }
@@ -82,8 +222,8 @@ pub(crate) fn calculate_insert_position(
                 .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
 
             match max_pos {
-                Some(mp) => Ok(fractional::generate_after(&mp)),
-                None => Ok(fractional::generate_first()),
+                Some(mp) => Ok(generate_after(&mp)),
+                None => Ok(generate_first()),
             }
         }
     }
@@ -137,8 +277,8 @@ pub(crate) fn calculate_move_position(
                 .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
 
             match max_pos {
-                Some(mp) => Ok(fractional::generate_after(&mp)),
-                None => Ok(fractional::generate_first()),
+                Some(mp) => Ok(generate_after(&mp)),
+                None => Ok(generate_first()),
             }
         }
     }
@@ -161,4 +301,94 @@ fn resolve_sibling_position(
                 sibling_id, target_parent_id
             ))
         })
+}
+
+// ─── 单元测试（纯算法） ──────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_first() {
+        assert_eq!(generate_first(), "a0");
+    }
+
+    #[test]
+    fn test_generate_after_increment() {
+        assert_eq!(generate_after("a0"), "a1");
+        assert_eq!(generate_after("a5"), "a6");
+        assert_eq!(generate_after("b"), "c");
+    }
+
+    #[test]
+    fn test_generate_after_overflow() {
+        assert_eq!(generate_after("a9"), "aA");
+        assert_eq!(generate_after("aZ"), "aa");
+    }
+
+    #[test]
+    fn test_generate_after_max_char() {
+        assert_eq!(generate_after("az"), "b");
+    }
+
+    #[test]
+    fn test_generate_after_all_max() {
+        assert_eq!(generate_after("z"), "zU");
+    }
+
+    #[test]
+    fn test_generate_before_decrement() {
+        assert_eq!(generate_before("a1"), "a0");
+        assert_eq!(generate_before("b"), "a");
+    }
+
+    #[test]
+    fn test_generate_before_with_fill() {
+        assert_eq!(generate_before("b0"), "az");
+        assert_eq!(generate_before("a2"), "a1");
+    }
+
+    #[test]
+    fn test_generate_before_min() {
+        assert_eq!(generate_before("0"), "00");
+    }
+
+    #[test]
+    fn test_generate_between_midpoint() {
+        assert_eq!(generate_between("a0", "a2"), "a1");
+    }
+
+    #[test]
+    fn test_generate_between_adjacent() {
+        let result = generate_between("a0", "a1");
+        assert!("a0" < result.as_str());
+        assert!(result.as_str() < "a1");
+    }
+
+    #[test]
+    fn test_generate_between_prefix() {
+        let result = generate_between("a0", "a0U");
+        assert!("a0" < result.as_str());
+        assert!(result.as_str() < "a0U");
+    }
+
+    #[test]
+    fn test_ordering_consistency() {
+        let mut positions = vec![generate_first()];
+
+        for _ in 0..10 {
+            let last = positions.last().unwrap().clone();
+            positions.push(generate_after(&last));
+        }
+
+        for i in 0..positions.len() - 1 {
+            assert!(positions[i].as_str() < positions[i + 1].as_str(),
+                "排序错误: {} >= {}", positions[i], positions[i + 1]);
+        }
+
+        let mid = generate_between(&positions[2], &positions[3]);
+        assert!(positions[2].as_str() < mid.as_str());
+        assert!(mid.as_str() < positions[3].as_str());
+    }
 }

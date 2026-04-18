@@ -17,19 +17,18 @@ import type {
   GetChildrenReq,
   GetDocumentReq,
   GetHistoryReq,
-  GetVersionReq,
   HistoryEntry,
   ImportTextReq,
   ImportResult,
   MergeReq,
   MergeResult,
   MoveBlockReq,
+  MoveTreeReq,
   RestoreReq,
   RestoreResult,
-  RollbackReq,
-  SnapshotReq,
   SplitReq,
   SplitResult,
+  UndoRedoResult,
   UpdateBlockReq,
 } from '@/types/api'
 
@@ -144,6 +143,10 @@ export function moveBlock(id: string, req: Omit<MoveBlockReq, 'id'>) {
   return post<Block>('/blocks/move', { id, ...req } as MoveBlockReq)
 }
 
+export function moveDocumentTree(id: string, req: Omit<MoveTreeReq, 'id'>) {
+  return post<Block>('/documents/move-document-tree', { id, ...req } as MoveTreeReq)
+}
+
 export function restoreBlock(id: string, operation_id?: string) {
   return post<RestoreResult>('/blocks/restore', { id, operation_id } as RestoreReq)
 }
@@ -159,25 +162,23 @@ export function batchBlocks(req: BatchReq) {
 // ---------- Import ----------
 
 export function importText(req: ImportTextReq) {
-  return post<ImportResult>('/blocks/import', req)
+  return post<ImportResult>('/documents/import', req)
 }
 
 // ---------- History / Version ----------
 
-export function getBlockHistory(id: string, limit = 50) {
-  return post<HistoryEntry[]>('/blocks/history', { id, limit } as GetHistoryReq)
+export function getDocumentHistory(id: string, limit = 50) {
+  return post<HistoryEntry[]>('/documents/history', { id, limit } as GetHistoryReq)
 }
 
-export function getBlockVersion(id: string, version: number) {
-  return post<unknown>('/blocks/version', { id, version } as GetVersionReq)
+// ---------- Undo / Redo ----------
+
+export function undoDocument(documentId: string) {
+  return post<UndoRedoResult>('/documents/undo', { document_id: documentId })
 }
 
-export function rollbackBlock(id: string, req: Omit<RollbackReq, 'id'>) {
-  return post<unknown>('/blocks/rollback', { id, ...req } as RollbackReq)
-}
-
-export function createSnapshot(id: string) {
-  return post<unknown>('/blocks/snapshot', { id } as SnapshotReq)
+export function redoDocument(documentId: string) {
+  return post<UndoRedoResult>('/documents/redo', { document_id: documentId })
 }
 
 // ---------- Split / Merge 意图 API ----------

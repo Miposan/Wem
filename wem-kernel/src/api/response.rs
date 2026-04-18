@@ -72,10 +72,6 @@ pub struct DocumentChildrenResult {
     pub children: Vec<Block>,
 }
 
-// ─── 子块查询响应 ─────────────────────────────────────────────
-
-// ChildrenResult 已删除：MVP 阶段不需要单独的子块列表接口
-
 // ─── 导入/导出响应 ────────────────────────────────────────────
 
 /// 批量操作响应
@@ -164,32 +160,16 @@ pub struct MergeResult {
 
 /// Block 变更历史响应
 ///
-/// `GET /api/v1/blocks/{id}/history`
+/// `POST /api/v1/documents/history`
 #[derive(Debug, Serialize)]
 pub struct HistoryResponse {
     pub entries: Vec<crate::model::oplog::HistoryEntry>,
 }
 
-/// 版本内容响应
+/// Undo/Redo 响应
 ///
-/// `GET /api/v1/blocks/{id}/versions/{version}`
+/// `POST /api/v1/undo` / `POST /api/v1/redo`
 #[derive(Debug, Serialize)]
-pub struct VersionResponse {
-    pub version: crate::model::oplog::VersionContent,
-}
-
-/// 回滚响应
-///
-/// `POST /api/v1/blocks/{id}/rollback`
-#[derive(Debug, Serialize)]
-pub struct RollbackResponse {
-    pub result: crate::model::oplog::RollbackResult,
-}
-
-/// 快照创建响应
-///
-/// `POST /api/v1/blocks/{id}/snapshot`
-#[derive(Debug, Serialize)]
-pub struct SnapshotResponse {
-    pub result: crate::model::oplog::SnapshotResult,
+pub struct UndoRedoResponse {
+    pub result: crate::model::oplog::UndoRedoResult,
 }

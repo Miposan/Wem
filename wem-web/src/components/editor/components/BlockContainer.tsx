@@ -70,12 +70,12 @@ function isContainerBlock(block: BlockNode): boolean {
 export function BlockContainer({
   block,
   collapsedIds,
-  selectedBlockIds,
   dragState,
   dragHandlers,
   onToggleCollapse,
   ...props
 }: BlockContainerProps) {
+  const { selectedBlockIds } = props
   const collapsible = isCollapsible(block)
   const collapsed = collapsedIds.has(block.id)
   const selected = selectedBlockIds.has(block.id)
@@ -87,6 +87,7 @@ export function BlockContainer({
       className={`wem-block-container ${collapsible ? 'wem-block-collapsible' : ''} ${collapsed ? 'wem-block-collapsed' : ''} ${selected ? 'wem-block-selected' : ''} ${isDragging ? 'wem-block-dragging' : ''} ${isDropTarget ? 'wem-block-drop-target' : ''}`}
       data-block-id={block.id}
       data-block-type={block.block_type.type}
+      data-heading-level={block.block_type.type === 'heading' ? (block.block_type as { level: number }).level : undefined}
       onDragOver={(e) => dragHandlers.onDragOver(e, block.id)}
       onDragLeave={(e) => dragHandlers.onDragLeave(e, block.id)}
       onDrop={(e) => dragHandlers.onDrop(e, block.id)}
@@ -97,32 +98,32 @@ export function BlockContainer({
       )}
 
       <div className="wem-block-content">
-        {/* 块左侧操作区（折叠、拖拽等） — 在 content 内部以正确对齐 */}
-        <div className="wem-block-gutter" contentEditable={false}>
-          {collapsible && (
-            <button
-              className="wem-gutter-btn"
-              onClick={() => onToggleCollapse(block.id)}
-              title={collapsed ? '展开子块' : '折叠子块'}
-            >
-              <span className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''}`}>▶</span>
-            </button>
-          )}
-          {/* 拖拽手柄 */}
-          {!props.readonly && (
-            <button
-              className="wem-gutter-btn wem-drag-handle"
-              draggable
-              onDragStart={(e) => dragHandlers.onDragStart(e, block.id)}
-              onDragEnd={dragHandlers.onDragEnd}
-              title="拖拽移动块"
-              tabIndex={-1}
-            >
-              ⋮⋮
-            </button>
-          )}
-        </div>
         <div className="wem-block-editable">
+          {/* 块左侧操作区（折叠、拖拽等） — 绝对定位于 editable 左侧，紧贴文字 */}
+          <div className="wem-block-gutter" contentEditable={false}>
+            {collapsible && (
+              <button
+                className="wem-gutter-btn"
+                onClick={() => onToggleCollapse(block.id)}
+                title={collapsed ? '展开子块' : '折叠子块'}
+              >
+                <span className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''}`}>▶</span>
+              </button>
+            )}
+            {/* 拖拽手柄 */}
+            {!props.readonly && (
+              <button
+                className="wem-gutter-btn wem-drag-handle"
+                draggable
+                onDragStart={(e) => dragHandlers.onDragStart(e, block.id)}
+                onDragEnd={dragHandlers.onDragEnd}
+                title="拖拽移动块"
+                tabIndex={-1}
+              >
+                ⋮⋮
+              </button>
+            )}
+          </div>
           <BlockContentRouter block={block} {...props} />
         </div>
       </div>

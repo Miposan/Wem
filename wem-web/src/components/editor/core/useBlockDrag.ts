@@ -17,11 +17,7 @@ import type { DragHandlers, DragState, DropPosition, DropTarget } from './types'
 import { findBlockById, flattenTree } from './BlockOperations'
 
 // ─── 配置常量 ───
-
-/** 距离块底部多少像素内视为"after"位置 */
-const AFTER_THRESHOLD = 20
-/** 距离块左侧缩进多少像素内视为"child"位置（针对容器块） */
-const CHILD_INDENT_THRESHOLD = 40
+// （无需阈值常量：基于 .wem-block-content rect 的简单上下半区判定）
 
 // ─── Hook 参数 ───
 
@@ -95,25 +91,28 @@ export function useBlockDrag(options: UseBlockDragOptions) {
       const blockHeight = rect.height
       const midPoint = blockHeight / 2
 
+      const relativeX = e.clientX - rect.left
+      const distToBottom = blockHeight - relativeY
+
+      // 鼠标在块最底部 AFTER_THRESHOLD 内 → after（作为兄弟放在块之后）
+      // 这优先级最高，确保即使在容器块底部也能放置到容器后面
+      if (distToBottom <= AFTER_THRESHOLD) {
+        return 'after'
+      }
+
       // 上半部分 → before
       if (relativeY < midPoint - AFTER_THRESHOLD) {
         return 'before'
       }
 
-      // 下半部分 + 容器块 + 有缩进 → child
-      if (
-        isContainerBlock(targetBlock) &&
-        relativeY >= midPoint - AFTER_THRESHOLD
-      ) {
-        // 检查鼠标是否偏右（表示想拖入容器）
-        const relativeX = e.clientX - rect.left
+      // 下半部分 + 容器块 → child（拖入容器作为子块）
+      if (isContainerBlock(targetBlock)) {
         if (relativeX > CHILD_INDENT_THRESHOLD || targetBlock.children.length > 0) {
-          // 如果容器已有子块，或者鼠标偏右，视为 child
           return 'child'
         }
       }
 
-      // 下半部分 → after
+      // 其余 → after
       return 'after'
     },
     [getTree],

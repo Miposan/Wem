@@ -91,6 +91,48 @@ pub struct MoveBlockReq {
     pub after_id: Option<String>,
 }
 
+/// 移动 Heading 子树请求
+///
+/// `POST /api/v1/blocks/move-heading-tree`
+///
+/// 拖动折叠的 heading 时，heading 及其下属所有内容块作为一个整体移动。
+/// 同文档内移动为主，移动后自动触发 heading 层级重组。
+#[derive(Debug, Deserialize)]
+pub struct MoveHeadingTreeReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
+    /// Block ID（heading 子树根节点）
+    pub id: String,
+    /// 移到此 Block 之前（可选）
+    pub before_id: Option<String>,
+    /// 移到此 Block 之后（可选）
+    pub after_id: Option<String>,
+}
+
+/// 移动 Document 子树请求
+///
+/// `POST /api/v1/documents/move-document-tree`
+///
+/// 将一个 Document（及其全部后代）嫁接到另一个 Document 下，
+/// 本质是树的重排序 / 跨文档嫁接。需要批量更新后代的 document_id。
+#[derive(Debug, Deserialize)]
+pub struct MoveDocumentTreeReq {
+    /// 操作 ID（前端生成，用于 SSE 回声去重）
+    pub operation_id: Option<String>,
+    /// Block ID（document 子树根节点）
+    pub id: String,
+    /// 目标父块 ID（可选）
+    ///
+    /// 不传时后端按优先级推导：
+    /// 1. 若有 before_id/after_id → 从该兄弟块的 parent_id 推导
+    /// 2. 否则保持当前父块不变
+    pub target_parent_id: Option<String>,
+    /// 移到此 Block 之前（可选）
+    pub before_id: Option<String>,
+    /// 移到此 Block 之后（可选）
+    pub after_id: Option<String>,
+}
+
 // ─── Split / Merge 意图 API ──────────────────────────────────
 
 /// 拆分 Block 请求
@@ -124,21 +166,11 @@ pub struct SplitReq {
 /// 将当前块的内容追加到前一个兄弟块末尾，然后删除当前块。
 /// 原子操作，无需前端分别调用 update + delete。
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // direction / prev_content 预留给未来扩展
 pub struct MergeReq {
     /// 操作 ID（前端生成，用于 SSE 回声去重）
     pub operation_id: Option<String>,
     /// Block ID
     pub id: String,
-    /// 合并方向（预留扩展，当前仅支持 "previous"）
-    #[serde(default = "default_merge_direction")]
-    pub direction: String,
-    /// 前一个兄弟块的当前内容（前端提供，用于校验）
-    pub prev_content: Option<String>,
-}
-
-fn default_merge_direction() -> String {
-    "previous".to_string()
 }
 
 // ─── Document 请求 ────────────────────────────────────────────
@@ -162,7 +194,7 @@ pub struct CreateDocumentReq {
 
 /// 导入文本请求
 ///
-/// `POST /api/v1/blocks/import`
+/// `POST /api/v1/documents/import`
 #[derive(Debug, Deserialize)]
 pub struct ImportTextReq {
     /// 操作 ID（前端生成，用于 SSE 回声去重）
@@ -326,42 +358,37 @@ pub struct RestoreReq {
 
 /// 获取历史记录请求
 ///
-/// `POST /api/v1/blocks/history`
+/// `POST /api/v1/documents/history`
 #[derive(Debug, Deserialize)]
 pub struct GetHistoryReq {
-    pub id: String,
+    /// Block ID（可选，不传则返回全局操作历史）
+    pub id: Option<String>,
+    /// 文档 ID（可选，按文档过滤操作历史）
+    pub document_id: Option<String>,
     /// 返回条数（默认 50，最大 500）
     #[serde(default = "default_history_limit")]
     pub limit: u32,
+    /// 分页偏移（默认 0）
+    #[serde(default)]
+    pub offset: u32,
 }
 
 fn default_history_limit() -> u32 {
     50
 }
 
-/// 获取指定版本请求
+/// Undo 请求
 ///
-/// `POST /api/v1/blocks/version`
+/// `POST /api/v1/documents/undo`
 #[derive(Debug, Deserialize)]
-pub struct GetVersionReq {
-    pub id: String,
-    pub version: u64,
+pub struct UndoReq {
+    pub document_id: String,
 }
 
-/// 回滚 Block 请求
+/// Redo 请求
 ///
-/// `POST /api/v1/blocks/rollback`
+/// `POST /api/v1/documents/redo`
 #[derive(Debug, Deserialize)]
-pub struct RollbackReq {
-    pub id: String,
-    /// 回滚到的目标版本号
-    pub target_version: u64,
-}
-
-/// 创建快照请求
-///
-/// `POST /api/v1/blocks/snapshot`
-#[derive(Debug, Deserialize)]
-pub struct SnapshotReq {
-    pub id: String,
+pub struct RedoReq {
+    pub document_id: String,
 }

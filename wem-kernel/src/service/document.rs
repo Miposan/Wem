@@ -1,8 +1,8 @@
-//! 文档级业务逻辑
+﻿//! 文档级业务逻辑
 //!
 //! 文档 = Document Block + 内容 Block 的编排。
 //! 本模块负责文档粒度的操作（创建文档、获取文档内容、列出子文档等），
-//! 底层 Block 原子操作由 `service::block` 提供。
+//! 底层内容块原子操作由 `service::content` 提供。
 
 use std::collections::HashMap;
 
@@ -11,11 +11,13 @@ use crate::repo::block_repo::InsertBlockParams;
 use crate::repo::Db;
 use crate::error::AppError;
 use crate::model::{generate_block_id, Block, BlockType};
-use crate::service::block::now_iso;
 use crate::service::position;
-use crate::util::fractional;
+use crate::util::now_iso;
 
+use crate::api::request::MoveDocumentTreeReq;
 use crate::api::response::{BlockNode, DocumentChildrenResult, DocumentContentResult};
+use crate::model::oplog::{Action, ChangeType};
+use crate::service::{oplog, content};
 
 // ─── 创建文档 ──────────────────────────────────────────────────
 
@@ -24,7 +26,6 @@ use crate::api::response::{BlockNode, DocumentChildrenResult, DocumentContentRes
 /// 创建一个 Document Block + 一个空 Paragraph 子块。
 /// 根文档（无 parent_id）挂到全局根块 "/" 下。
 ///
-/// 参考 03-api-rest.md §2 "创建文档"
 pub fn create_document(
     db: &Db,
     title: String,
@@ -89,7 +90,7 @@ pub fn create_document(
 
     // 4. 创建空段落子块（段落是文档的子块，与文档不在同一 parent 下）
     let para_id = generate_block_id();
-    let para_position = fractional::generate_first();
+    let para_position = position::generate_first();
     let para_block_type = serde_json::to_string(&BlockType::Paragraph).unwrap();
 
     repo::insert_block(&conn, &InsertBlockParams {
@@ -213,4 +214,103 @@ fn build_block_tree(parent_id: &str, blocks: &[Block]) -> Vec<BlockNode> {
     // 按 position 排序（确保顺序正确）
     children.sort_by(|a, b| a.block.position.cmp(&b.block.position));
     children
+}
+
+// ─── 移动文档子树 ──────────────────────────────────────────────
+
+/// 移动 Document 子树（文档嫁接场景）
+///
+/// 将一个 Document 及其全部后代嫁接到另一个 Document 下（或根目录），
+/// 本质是树的重排序。Document 的 document_id 始终是自身 id，嫁接后不变，
+/// 因此后代的 document_id 也完全不需要更新。
+///
+/// 流程：
+/// 1. 验证根块是 Document 且非全局根
+/// 2. 验证目标父块是 ROOT 或另一个 Document
+/// 3. 循环引用检测
+/// 4. 计算新 position → 只更新 parent_id + position（不改 document_id）
+/// 5. 记录历史
+pub fn move_document_tree(db: &Db, req: MoveDocumentTreeReq) -> Result<Block, AppError> {
+    let id = &req.id;
+
+    if id == crate::model::ROOT_ID {
+        return Err(AppError::BadRequest("全局根块不可移动".to_string()));
+    }
+
+    let conn = crate::repo::lock_db(db);
+
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+
+    let result = (|| -> Result<Block, AppError> {
+        // 1. 验证根块是 Document
+        let current = repo::find_by_id(&conn, id)
+            .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
+
+        if !matches!(current.block_type, BlockType::Document) {
+            return Err(AppError::BadRequest(
+                "move_document_tree 只能移动 Document 类型".to_string(),
+            ));
+        }
+
+        // 2. 确定目标父块
+        let target_parent_id = match req.target_parent_id.as_deref() {
+            Some(pid) => pid.to_string(),
+            None => content::resolve_target_parent(
+                &conn, &req.before_id, &req.after_id, &current.parent_id,
+            )?,
+        };
+
+        // 3. 验证目标父块：必须是 ROOT 或另一个 Document
+        if target_parent_id != crate::model::ROOT_ID {
+            let target_parent = repo::find_by_id(&conn, &target_parent_id)
+                .map_err(|_| AppError::NotFound(format!(
+                    "目标父块 {} 不存在或已删除", target_parent_id
+                )))?;
+
+            if !matches!(target_parent.block_type, BlockType::Document) {
+                return Err(AppError::BadRequest(
+                    "Document 只能移动到根目录或另一个 Document 下".to_string(),
+                ));
+            }
+        }
+
+        // 4. 循环引用检测
+        content::validate_no_cycle(&conn, id, &target_parent_id, &current.parent_id)?;
+
+        // 5. 计算新 position（在目标父块的子列表中重排序）
+        let new_position = position::calculate_move_position(
+            &conn, &target_parent_id,
+            req.before_id.as_deref(), req.after_id.as_deref(),
+        )?;
+
+        // 6. 移动根块：只更新 parent_id + position
+        //    Document 始终拥有自身子树，document_id = 自身 id 不随父块变化
+        let now = now_iso();
+        let rows = repo::update_parent_position(
+            &conn, id, &target_parent_id, &new_position, &now,
+        )
+        .map_err(|e| AppError::Internal(format!("移动 Document 失败: {}", e)))?;
+
+        if rows == 0 {
+            return Err(AppError::NotFound(format!("Block {} 不存在", id)));
+        }
+
+        // 7. 后代完全不变：document_id 不动，内部结构不动
+
+        // 8. 记录历史
+        let after = repo::find_by_id_raw(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))?;
+
+        let batch = oplog::new_batch(Action::Move, req.operation_id.clone(), &current.document_id);
+        let change = oplog::block_change_pair(
+            &batch.id, id, ChangeType::Moved, &current, &after,
+        );
+        oplog::record_batch(&conn, &batch, &[change])?;
+
+        Ok(after)
+    })();
+
+    content::finish_tx(&conn, &result)?;
+    result
 }

@@ -146,43 +146,6 @@ pub fn find_root_documents(conn: &Connection) -> Result<Vec<Block>, rusqlite::Er
     Ok(blocks)
 }
 
-/// 分页列出根文档
-///
-/// cursor 基于 position（游标分页），传入 None 从头开始。
-/// 调用方应传入 `limit + 1` 来判断是否还有更多数据。
-pub fn find_root_documents_paginated(
-    conn: &Connection,
-    cursor: Option<&str>,
-    fetch_limit: u32,
-) -> Result<Vec<Block>, rusqlite::Error> {
-    let root_id = crate::model::ROOT_ID;
-    let blocks: Vec<Block> = if let Some(cursor) = cursor {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM blocks
-             WHERE parent_id = ?1 AND id != ?1 AND status = 'normal'
-               AND JSON_EXTRACT(block_type, '$.type') = 'document'
-               AND position > ?2
-             ORDER BY position ASC
-             LIMIT ?3",
-        )?;
-        stmt.query_map(params![root_id, cursor, fetch_limit], Block::from_row)?
-            .filter_map(|r| r.ok())
-            .collect()
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM blocks
-             WHERE parent_id = ?1 AND id != ?1 AND status = 'normal'
-               AND JSON_EXTRACT(block_type, '$.type') = 'document'
-             ORDER BY position ASC
-             LIMIT ?2",
-        )?;
-        stmt.query_map(params![root_id, fetch_limit], Block::from_row)?
-            .filter_map(|r| r.ok())
-            .collect()
-    };
-    Ok(blocks)
-}
-
 /// 查询 Block 的所有后代（不含自身，排除已删除）
 ///
 /// 使用 document_id 等值查询替代递归 CTE，性能从 O(n·log n) 降为 O(n)。
@@ -472,6 +435,7 @@ pub fn update_status(
 /// `UPDATE blocks SET status=?, modified=?, version=version+1 WHERE id=? AND status != ?`
 ///
 /// 返回受影响行数
+#[cfg(test)]
 pub fn update_status_if_not(
     conn: &Connection,
     id: &str,
@@ -593,6 +557,35 @@ pub fn batch_update_status_if_not(
         params_vec.push(Box::new(id.clone()));
     }
     params_vec.push(Box::new(not_status.to_string()));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let rows = conn.execute(&sql, param_refs.as_slice())?;
+    Ok(rows as u64)
+}
+
+/// 批量更新 document_id（跨文档移动子树时同步后代）
+///
+/// `UPDATE blocks SET document_id=?, modified=?, version=version+1 WHERE id IN (...)`
+pub fn batch_update_document_id(
+    conn: &Connection,
+    ids: &[String],
+    document_id: &str,
+    modified: &str,
+) -> Result<u64, rusqlite::Error> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders: Vec<&str> = (1..=ids.len()).map(|_| "?").collect();
+    let sql = format!(
+        "UPDATE blocks SET document_id = ?1, modified = ?2, version = version + 1 \
+         WHERE id IN ({})",
+        placeholders.join(", "),
+    );
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(ids.len() + 2);
+    params_vec.push(Box::new(document_id.to_string()));
+    params_vec.push(Box::new(modified.to_string()));
+    for id in ids {
+        params_vec.push(Box::new(id.clone()));
+    }
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
     let rows = conn.execute(&sql, param_refs.as_slice())?;
     Ok(rows as u64)

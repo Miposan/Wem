@@ -76,7 +76,7 @@ mod tests {
     use crate::api::request::ImportTextReq;
     use crate::repo::tests::init_test_db;
     use crate::model::ROOT_ID;
-    use crate::service::block;
+    use crate::service::content;
     use crate::service::document;
     use crate::service::import;
 
@@ -214,7 +214,7 @@ mod tests {
     fn export_created_document() {
         let db = init_test_db();
 
-        // 使用 block::create_document 创建
+        // 使用 content::create_document 创建
         let doc = document::create_document(&db, "Created Doc".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
 
         let result = export_text(&db, &doc.id, "markdown").unwrap();

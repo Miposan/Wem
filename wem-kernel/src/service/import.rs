@@ -128,7 +128,7 @@ mod tests {
     use crate::repo::tests::init_test_db;
     use crate::model::ROOT_ID;
     use crate::model::BlockType;
-    use crate::service::block;
+    use crate::service::content;
     use crate::service::document;
 
     /// 辅助：导入 Markdown 文本
@@ -156,7 +156,7 @@ mod tests {
         assert!(result.blocks_imported >= 2); // Document + Paragraph
 
         // 验证 DB 中确实存在
-        let loaded = block::get_block(&db, &result.root.id, false).unwrap();
+        let loaded = content::get_block(&db, &result.root.id, false).unwrap();
         assert_eq!(loaded.id, result.root.id);
         assert_eq!(loaded.parent_id, ROOT_ID);
     }

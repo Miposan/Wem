@@ -1,18 +1,18 @@
-//! Block 原子操作
+﻿//! 内容块编辑操作
 //!
-//! 提供 Block 的完整生命周期管理：创建、查询、更新、软删除/恢复、移动。
+//! 提供文档内容 Block 的完整生命周期管理：创建、查询、更新、软删除/恢复、移动。
 //! 所有函数接收 `&Db`（即 `Arc<Mutex<Connection>>`），内部自动加锁。
 //! 文档级编排见 `service::document`。
 //!
 //! **架构分层**：
-//! - 本文件（service/block）负责 Block 原子操作
+//! - 本文件（service::content）负责 Block 原子操作
 //! - `service::document` 负责文档级编排（创建文档、获取文档树等）
 //! - `repo::block_repo` 负责所有 SQL 操作
-//! - `util::fractional` 负责 Fractional Index 位置计算
+//! - `position` 模块负责 Fractional Index 位置计算
 
 use std::collections::HashMap;
 
-use crate::api::request::{BatchOp, BatchReq, CreateBlockReq, MoveBlockReq, PropertiesMode, UpdateBlockReq};
+use crate::api::request::{BatchOp, BatchReq, CreateBlockReq, MoveBlockReq, MoveHeadingTreeReq, MoveDocumentTreeReq, PropertiesMode, UpdateBlockReq};
 use crate::api::response::{
     BatchOpResult, BatchResult, DeleteResult, RestoreResult,
 };
@@ -20,16 +20,13 @@ use crate::repo::block_repo as repo;
 use crate::repo::block_repo::InsertBlockParams;
 use crate::repo::Db;
 use crate::error::AppError;
+use crate::model::oplog::{Action, BlockSnapshot, ChangeType};
 use crate::model::{generate_block_id, Block, BlockType};
-use crate::util::fractional;
-use crate::service::position;
+use crate::service::{oplog, position};
+use crate::util;
+use util::now_iso;
 
 // ─── 辅助函数 ──────────────────────────────────────────────────
-
-/// 生成当前时间的 ISO 8601 字符串（毫秒精度）
-pub(crate) fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
 
 /// 推断 document_id：给定父块，返回新建子块应使用的 document_id。
 ///
@@ -82,54 +79,78 @@ fn validate_heading_level(block_type: &BlockType) -> Result<(), AppError> {
 pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     let conn = crate::repo::lock_db(db);
 
-    // 1. 校验 block_type 合法性
-    validate_heading_level(&req.block_type)?;
+    // 事务保护：插入 Block + 记录历史必须原子化
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
-    // 2. 验证 parent 存在且未删除
-    let parent = repo::find_by_id(&conn, &req.parent_id)
-        .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", req.parent_id)))?;
+    let result = (|| -> Result<Block, AppError> {
+        // 1. 校验 block_type 合法性
+        validate_heading_level(&req.block_type)?;
 
-    // 3. 推断 document_id
-    let document_id = derive_document_id(&parent);
+        // 2. 验证 parent 存在且未删除
+        let parent = repo::find_by_id(&conn, &req.parent_id)
+            .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", req.parent_id)))?;
 
-    // 4. 计算 position
-    let position =
-        position::calculate_insert_position(&conn, &req.parent_id, req.after_id.as_deref())?;
+        // 3. 推断 document_id
+        let document_id = derive_document_id(&parent);
 
-    // 5. 推断 content_type
-    let content_type = req
-        .content_type
-        .clone()
-        .unwrap_or_else(|| req.block_type.default_content_type());
+        // 4. 计算 position
+        let position =
+            position::calculate_insert_position(&conn, &req.parent_id, req.after_id.as_deref())?;
 
-    // 6. 生成 ID 和时间戳
-    let id = generate_block_id();
-    let now = now_iso();
+        // 5. 推断 content_type
+        let content_type = req
+            .content_type
+            .clone()
+            .unwrap_or_else(|| req.block_type.default_content_type());
 
-    // 7. INSERT（通过 repository）
-    repo::insert_block(&conn, &InsertBlockParams {
-        id: id.clone(),
-        parent_id: req.parent_id,
-        document_id,
-        position,
-        block_type: serde_json::to_string(&req.block_type).unwrap_or_default(),
-        content_type: content_type.as_str().to_string(),
-        content: req.content.into_bytes(),
-        properties: serde_json::to_string(&req.properties).unwrap_or_default(),
-        version: 1,
-        status: "normal".to_string(),
-        schema_version: 1,
-        author: "system".to_string(),
-        owner_id: None,
-        encrypted: false,
-        created: now.clone(),
-        modified: now,
-    })
-    .map_err(|e| AppError::Internal(format!("插入 Block 失败: {}", e)))?;
+        // 6. 生成 ID 和时间戳
+        let id = generate_block_id();
+        let now = now_iso();
 
-    // 8. 查询并返回完整 Block
-    repo::find_by_id_raw(&conn, &id)
-        .map_err(|e| AppError::Internal(format!("查询刚创建的 Block 失败: {}", e)))
+        // 7. INSERT（通过 repository）
+        repo::insert_block(&conn, &InsertBlockParams {
+            id: id.clone(),
+            parent_id: req.parent_id,
+            document_id: document_id.clone(),
+            position,
+            block_type: serde_json::to_string(&req.block_type).unwrap_or_default(),
+            content_type: content_type.as_str().to_string(),
+            content: req.content.into_bytes(),
+            properties: serde_json::to_string(&req.properties).unwrap_or_default(),
+            version: 1,
+            status: "normal".to_string(),
+            schema_version: 1,
+            author: "system".to_string(),
+            owner_id: None,
+            encrypted: false,
+            created: now.clone(),
+            modified: now,
+        })
+        .map_err(|e| AppError::Internal(format!("插入 Block 失败: {}", e)))?;
+
+        // 8. 查询完整 Block
+        let block = repo::find_by_id_raw(&conn, &id)
+            .map_err(|e| AppError::Internal(format!("查询刚创建的 Block 失败: {}", e)))?;
+
+        // 9. 记录操作历史
+        let batch = oplog::new_batch(Action::Create, None, &document_id);
+        let change = oplog::new_change(
+            &batch.id, &id, ChangeType::Created,
+            None,
+            Some(BlockSnapshot::from_block(&block)),
+        );
+        oplog::record_batch(&conn, &batch, &[change])?;
+
+        Ok(block)
+    })();
+
+    match &result {
+        Ok(_) => { let _ = conn.execute_batch("COMMIT"); }
+        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
+    }
+
+    result
 }
 
 // ─── 查询 Block ────────────────────────────────────────────────
@@ -235,8 +256,17 @@ fn update_block_inner(
     }
 
     // 7. 查询并返回更新后的 Block
-    repo::find_by_id_raw(conn, id)
-        .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))
+    let new_block = repo::find_by_id_raw(conn, id)
+        .map_err(|e| AppError::Internal(format!("查询更新后的 Block 失败: {}", e)))?;
+
+    // 8. 记录操作历史
+    let batch = oplog::new_batch(Action::Update, None, &current.document_id);
+    let change = oplog::block_change_pair(
+        &batch.id, id, ChangeType::Updated, &current, &new_block,
+    );
+    oplog::record_batch(conn, &batch, &[change])?;
+
+    Ok(new_block)
 }
 
 // ─── update_block_inner 子步骤 ─────────────────────────────────
@@ -340,9 +370,9 @@ fn promote_children(
     .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
 
     let mut pos = if let Some(first_after) = siblings_after_heading.first() {
-        fractional::generate_between(heading_position, &first_after.position)
+        position::generate_between(heading_position, &first_after.position)
     } else {
-        fractional::generate_after(heading_position)
+        position::generate_after(heading_position)
     };
 
     for child in &children {
@@ -351,7 +381,7 @@ fn promote_children(
             conn, &child.id, heading_parent_id, &pos, &new_document_id, &now,
         )
         .map_err(|e| AppError::Internal(format!("提升子块失败: {}", e)))?;
-        pos = fractional::generate_after(&pos);
+        pos = position::generate_after(&pos);
     }
 
     Ok(())
@@ -410,9 +440,9 @@ fn escape_heading_if_needed(
     .map_err(|e| AppError::Internal(format!("查询逃逸点后续兄弟失败: {}", e)))?;
 
     let new_position = if let Some(first_after) = siblings_after_escape.first() {
-        fractional::generate_between(&escape_block.position, &first_after.position)
+        position::generate_between(&escape_block.position, &first_after.position)
     } else {
-        fractional::generate_after(&escape_block.position)
+        position::generate_after(&escape_block.position)
     };
 
     // Reparent 当前块到 target_parent
@@ -456,7 +486,7 @@ fn absorb_siblings_after(
                     conn, &sibling.id, heading_id, &pos, &new_document_id, &now,
                 )
                 .map_err(|e| AppError::Internal(format!("reparent 失败: {}", e)))?;
-                pos = fractional::generate_after(&pos);
+                pos = position::generate_after(&pos);
             }
         }
     }
@@ -485,31 +515,61 @@ pub fn delete_block(db: &Db, id: &str) -> Result<DeleteResult, AppError> {
 
     let conn = crate::repo::lock_db(db);
 
-    // 1. 确认 Block 存在
-    let _current = repo::find_by_id(&conn, id)
-        .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
+    // 事务保护：删除 Block + 记录历史必须原子化
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
-    // 2. 递归 CTE 查所有后代（含自身）
-    let descendant_ids = repo::find_descendant_ids_include_self(&conn, id)
-        .map_err(|e| AppError::Internal(format!("查询后代失败: {}", e)))?;
+    let result = (|| -> Result<DeleteResult, AppError> {
+        // 1. 确认 Block 存在
+        let _current = repo::find_by_id(&conn, id)
+            .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
 
-    // cascade_count 不含自身
-    let cascade_count = descendant_ids.len().saturating_sub(1) as u32;
+        // 2. 递归 CTE 查所有后代（含自身）
+        let descendant_ids = repo::find_descendant_ids_include_self(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询后代失败: {}", e)))?;
 
-    // 3. 批量软删除（单条 WHERE IN，替代 N 次循环）
-    let now = now_iso();
-    repo::batch_update_status_if_not(&conn, &descendant_ids, "deleted", &now, "deleted")
-        .map_err(|e| AppError::Internal(format!("批量软删除失败: {}", e)))?;
+        // cascade_count 不含自身
+        let cascade_count = descendant_ids.len().saturating_sub(1) as u32;
 
-    // 4. 获取更新后的 version
-    let new_version = repo::get_version(&conn, id)
-        .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))?;
+        // 3. 删除前捕获所有受影响块的快照
+        let before_blocks: Vec<Block> = descendant_ids.iter()
+            .filter_map(|did| repo::find_by_id_raw(&conn, did).ok())
+            .collect();
 
-    Ok(DeleteResult {
-        id: id.to_string(),
-        version: new_version,
-        cascade_count,
-    })
+        // 4. 批量软删除
+        let now = now_iso();
+        repo::batch_update_status_if_not(&conn, &descendant_ids, "deleted", &now, "deleted")
+            .map_err(|e| AppError::Internal(format!("批量软删除失败: {}", e)))?;
+
+        // 5. 获取更新后的 version
+        let new_version = repo::get_version(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))?;
+
+        // 6. 记录操作历史（每个受影响的块一条 Change）
+        let document_id = before_blocks.first().map(|b| b.document_id.clone()).unwrap_or_default();
+        let batch = oplog::new_batch(Action::Delete, None, &document_id);
+        let changes: Vec<_> = before_blocks.iter().map(|b| {
+            oplog::new_change(
+                &batch.id, &b.id, ChangeType::Deleted,
+                Some(BlockSnapshot::from_block(b)),
+                None,
+            )
+        }).collect();
+        oplog::record_batch(&conn, &batch, &changes)?;
+
+        Ok(DeleteResult {
+            id: id.to_string(),
+            version: new_version,
+            cascade_count,
+        })
+    })();
+
+    match &result {
+        Ok(_) => { let _ = conn.execute_batch("COMMIT"); }
+        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
+    }
+
+    result
 }
 
 // ─── 恢复 Block ────────────────────────────────────────────────
@@ -524,47 +584,90 @@ pub fn delete_block(db: &Db, id: &str) -> Result<DeleteResult, AppError> {
 pub fn restore_block(db: &Db, id: &str) -> Result<RestoreResult, AppError> {
     let conn = crate::repo::lock_db(db);
 
-    // 1. 查询当前 Block（必须是 deleted 状态）
-    let current = repo::find_deleted(&conn, id)
-        .map_err(|_| AppError::BadRequest(format!("Block {} 不是已删除状态", id)))?;
+    // 事务保护：恢复 Block + 记录历史必须原子化
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
 
-    // 2. 检查父块状态（根文档 parent_id == id，跳过检查）
-    if current.parent_id != current.id {
-        let parent_status = repo::get_status(&conn, &current.parent_id)
-            .unwrap_or_else(|_| "deleted".to_string());
+    let result = (|| -> Result<RestoreResult, AppError> {
+        // 1. 查询当前 Block（必须是 deleted 状态）
+        let current = repo::find_deleted(&conn, id)
+            .map_err(|_| AppError::BadRequest(format!("Block {} 不是已删除状态", id)))?;
 
-        if parent_status == "deleted" {
-            return Err(AppError::BadRequest(format!(
-                "父块 {} 已被删除，请先恢复父块",
-                current.parent_id
-            )));
+        // 2. 检查父块状态（根文档 parent_id == id，跳过检查）
+        if current.parent_id != current.id {
+            let parent_status = repo::get_status(&conn, &current.parent_id)
+                .unwrap_or_else(|_| "deleted".to_string());
+
+            if parent_status == "deleted" {
+                return Err(AppError::BadRequest(format!(
+                    "父块 {} 已被删除，请先恢复父块",
+                    current.parent_id
+                )));
+            }
         }
+
+        // 3. 递归 CTE 查所有已删除的后代
+        let descendant_ids = repo::find_deleted_descendant_ids(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询已删除后代失败: {}", e)))?;
+
+        let cascade_count = descendant_ids.len() as u32;
+
+        // 4. 收集所有将被恢复的块 ID（自身 + 后代）
+        let all_restore_ids = {
+            let mut ids = vec![id.to_string()];
+            ids.extend(descendant_ids.iter().cloned());
+            ids
+        };
+
+        // 5. 捕获恢复前的快照（deleted 状态）
+        let before_blocks: Vec<Block> = all_restore_ids.iter()
+            .filter_map(|did| repo::find_by_id_raw(&conn, did).ok())
+            .collect();
+
+        // 6. 恢复自身
+        let now = now_iso();
+        repo::update_status(&conn, id, "normal", &now)
+            .map_err(|e| AppError::Internal(format!("恢复 Block 失败: {}", e)))?;
+
+        // 7. 恢复后代（仅恢复 status='deleted' 的）
+        repo::batch_update_status_if(&conn, &descendant_ids, "normal", &now, "deleted")
+            .map_err(|e| AppError::Internal(format!("恢复后代 Block 失败: {}", e)))?;
+
+        // 8. 获取更新后的 version
+        let new_version = repo::get_version(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))?;
+
+        // 9. 捕获恢复后的快照（normal 状态）
+        let after_blocks: Vec<Block> = all_restore_ids.iter()
+            .filter_map(|did| repo::find_by_id_raw(&conn, did).ok())
+            .collect();
+
+        // 10. 记录操作历史（每个恢复的块一条 Change）
+        let document_id = before_blocks.first().map(|b| b.document_id.clone()).unwrap_or_default();
+        let batch = oplog::new_batch(Action::Restore, None, &document_id);
+        let changes: Vec<_> = before_blocks.iter()
+            .filter_map(|before| {
+                let after = after_blocks.iter().find(|b| b.id == before.id)?;
+                Some(oplog::block_change_pair(
+                    &batch.id, &before.id, ChangeType::Restored, before, after,
+                ))
+            })
+            .collect();
+        oplog::record_batch(&conn, &batch, &changes)?;
+
+        Ok(RestoreResult {
+            id: id.to_string(),
+            version: new_version,
+            cascade_count,
+        })
+    })();
+
+    match &result {
+        Ok(_) => { let _ = conn.execute_batch("COMMIT"); }
+        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
     }
 
-    // 3. 递归 CTE 查所有已删除的后代
-    let to_restore = repo::find_deleted_descendant_ids(&conn, id)
-        .map_err(|e| AppError::Internal(format!("查询已删除后代失败: {}", e)))?;
-
-    let cascade_count = to_restore.len() as u32;
-
-    // 4. 恢复自身
-    let now = now_iso();
-    repo::update_status(&conn, id, "normal", &now)
-        .map_err(|e| AppError::Internal(format!("恢复 Block 失败: {}", e)))?;
-
-    // 5. 恢复后代（仅恢复 status='deleted' 的）
-    repo::batch_update_status_if(&conn, &to_restore, "normal", &now, "deleted")
-        .map_err(|e| AppError::Internal(format!("恢复后代 Block 失败: {}", e)))?;
-
-    // 6. 获取更新后的 version
-    let new_version = repo::get_version(&conn, id)
-        .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))?;
-
-    Ok(RestoreResult {
-        id: id.to_string(),
-        version: new_version,
-        cascade_count,
-    })
+    result
 }
 
 // ─── 移动 Block ────────────────────────────────────────────────
@@ -582,6 +685,26 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
     // 全局根块不可移动
     if id == crate::model::ROOT_ID {
         return Err(AppError::BadRequest("全局根块不可移动".to_string()));
+    }
+
+    // Document 类型自动转发到 document::move_document_tree
+    // （文档移动 = 子树嫁接，属于文档级操作，见 service::document）
+    {
+        let conn = crate::repo::lock_db(db);
+        let is_document = repo::find_by_id(&conn, id)
+            .map(|b| matches!(b.block_type, BlockType::Document))
+            .unwrap_or(false);
+        drop(conn);
+
+        if is_document {
+            return crate::service::document::move_document_tree(db, MoveDocumentTreeReq {
+                operation_id: req.operation_id,
+                id: req.id.clone(),
+                target_parent_id: req.target_parent_id,
+                before_id: req.before_id,
+                after_id: req.after_id,
+            });
+        }
     }
 
     let conn = crate::repo::lock_db(db);
@@ -670,9 +793,17 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
             return Err(AppError::NotFound(format!("Block {} 不存在", id)));
         }
 
-        // 6. 查询并返回
-        repo::find_by_id_raw(&conn, id)
-            .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))
+        // 6. 记录历史（before = 原位置, after = 新位置）
+        let after = repo::find_by_id_raw(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))?;
+
+        let batch = oplog::new_batch(Action::Move, req.operation_id.clone(), &current.document_id);
+        let change = oplog::block_change_pair(
+            &batch.id, id, ChangeType::Moved, &current, &after,
+        );
+        oplog::record_batch(&conn, &batch, &[change])?;
+
+        Ok(after)
     })();
 
     // 提交或回滚事务
@@ -683,6 +814,181 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
     }
 
     result
+}
+
+// ─── 移动子树 ──────────────────────────────────────────────────
+
+/// 移动 Heading 子树（折叠拖拽场景）
+///
+/// heading + 其下属所有内容块作为一个整体移动到新位置。
+/// 同文档内移动为主，跨文档时自动更新后代的 document_id。
+///
+/// 流程：
+/// 1. 验证根块是 Heading 且非全局根
+/// 2. 从 before_id / after_id 推导 target_parent_id
+/// 3. 循环引用检测
+/// 4. 计算新 position → 移动根块
+/// 5. 跨文档时批量更新后代 document_id
+/// 6. 记录历史
+pub fn move_heading_tree(db: &Db, req: MoveHeadingTreeReq) -> Result<Block, AppError> {
+    let id = &req.id;
+
+    if id == crate::model::ROOT_ID {
+        return Err(AppError::BadRequest("全局根块不可移动".to_string()));
+    }
+
+    let conn = crate::repo::lock_db(db);
+
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+
+    let result = (|| -> Result<Block, AppError> {
+        // 1. 验证根块是 Heading
+        let current = repo::find_by_id(&conn, id)
+            .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
+
+        if !matches!(current.block_type, BlockType::Heading { .. }) {
+            return Err(AppError::BadRequest(
+                "move_heading_tree 只能移动 Heading 类型".to_string(),
+            ));
+        }
+
+        // 2. 确定目标父块（从 sibling 的 parent_id 推导）
+        let target_parent_id = resolve_target_parent(
+            &conn, &req.before_id, &req.after_id, &current.parent_id,
+        )?;
+
+        // 3. 循环引用检测
+        validate_no_cycle(&conn, id, &target_parent_id, &current.parent_id)?;
+
+        // 4. 计算新 position + 推断 document_id
+        let new_position = position::calculate_move_position(
+            &conn, &target_parent_id,
+            req.before_id.as_deref(), req.after_id.as_deref(),
+        )?;
+
+        let new_document_id = derive_document_id_from_parent(&conn, &target_parent_id)?;
+        let cross_document = new_document_id != current.document_id;
+
+        // 5. 移动根块（parent_id + position + document_id）
+        let now = now_iso();
+        let rows = repo::update_parent_position_document_id(
+            &conn, id, &target_parent_id, &new_position, &new_document_id, &now,
+        )
+        .map_err(|e| AppError::Internal(format!("移动根块失败: {}", e)))?;
+
+        if rows == 0 {
+            return Err(AppError::NotFound(format!("Block {} 不存在", id)));
+        }
+
+        // 6. 跨文档时：批量更新后代 document_id
+        if cross_document {
+            let descendant_ids = repo::find_descendant_ids(&conn, id)
+                .map_err(|e| AppError::Internal(format!("查询子树后代失败: {}", e)))?;
+
+            if !descendant_ids.is_empty() {
+                repo::batch_update_document_id(
+                    &conn, &descendant_ids, &new_document_id, &now_iso(),
+                )
+                .map_err(|e| AppError::Internal(format!("更新后代 document_id 失败: {}", e)))?;
+            }
+        }
+
+        // 7. 记录历史
+        let after = repo::find_by_id_raw(&conn, id)
+            .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))?;
+
+        let batch = oplog::new_batch(Action::Move, req.operation_id.clone(), &current.document_id);
+        let mut changes = vec![oplog::block_change_pair(
+            &batch.id, id, ChangeType::Moved, &current, &after,
+        )];
+
+        // 跨文档移动时，后代 document_id 变更也要记录
+        if cross_document {
+            let descendant_ids = repo::find_descendant_ids(&conn, id)
+                .map_err(|e| AppError::Internal(format!("查询后代失败: {}", e)))?;
+            for did in &descendant_ids {
+                if let Ok(desc_after) = repo::find_by_id_raw(&conn, did) {
+                    changes.push(oplog::new_change(
+                        &batch.id, did, ChangeType::Moved,
+                        None,
+                        Some(BlockSnapshot::from_block(&desc_after)),
+                    ));
+                }
+            }
+        }
+
+        oplog::record_batch(&conn, &batch, &changes)?;
+        Ok(after)
+    })();
+
+    finish_tx(&conn, &result)?;
+    result
+}
+
+
+
+// ─── 子树移动辅助函数 ─────────────────────────────────────────
+
+/// 从 before_id / after_id 推导目标父块 id
+pub(crate) fn resolve_target_parent(
+    conn: &rusqlite::Connection,
+    before_id: &Option<String>,
+    after_id: &Option<String>,
+    current_parent_id: &str,
+) -> Result<String, AppError> {
+    let sibling_id = before_id.as_deref().or(after_id.as_deref());
+    match sibling_id {
+        Some(sid) => {
+            let sibling = repo::find_by_id(conn, sid)
+                .map_err(|_| AppError::NotFound(format!(
+                    "定位块 {} 不存在或已删除", sid
+                )))?;
+            Ok(sibling.parent_id.clone())
+        }
+        None => Ok(current_parent_id.to_string()),
+    }
+}
+
+/// 循环引用检测：target_parent 不能是 id 本身，也不能在其后代中
+pub(crate) fn validate_no_cycle(
+    conn: &rusqlite::Connection,
+    id: &str,
+    target_parent_id: &str,
+    current_parent_id: &str,
+) -> Result<(), AppError> {
+    if target_parent_id == current_parent_id {
+        return Ok(());
+    }
+    if target_parent_id == id {
+        return Err(AppError::BadRequest("不能将 Block 移动到自身下".to_string()));
+    }
+    let descendant_ids = repo::find_descendant_ids(conn, id)
+        .map_err(|e| AppError::Internal(format!("查询后代失败: {}", e)))?;
+    if descendant_ids.contains(&target_parent_id.to_string()) {
+        return Err(AppError::BadRequest(
+            "不能将 Block 移动到自身后代的下方".to_string(),
+        ));
+    }
+    let parent_exists = repo::exists_normal(conn, target_parent_id).unwrap_or(false);
+    if !parent_exists {
+        return Err(AppError::BadRequest(format!(
+            "目标父块 {} 不存在或已删除", target_parent_id
+        )));
+    }
+    Ok(())
+}
+
+/// 事务提交或回滚
+pub(crate) fn finish_tx(
+    conn: &rusqlite::Connection,
+    result: &Result<Block, AppError>,
+) -> Result<(), AppError> {
+    match result {
+        Ok(_) => conn.execute_batch("COMMIT")
+            .map_err(|e| AppError::Internal(format!("提交事务失败: {}", e))),
+        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); Ok(()) }
+    }
 }
 
 // ─── 批量操作 ──────────────────────────────────────────────────
@@ -709,6 +1015,7 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
 
     let mut id_map: HashMap<String, String> = HashMap::new();
     let mut results: Vec<BatchOpResult> = Vec::with_capacity(req.operations.len());
+    let mut pending_changes: Vec<crate::model::oplog::Change> = Vec::new();
 
     /// 解析 block_id：如果是 temp_id 映射中存在的，替换为真实 ID
     fn resolve_id(id: &str, id_map: &HashMap<String, String>) -> String {
@@ -742,6 +1049,14 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 match result {
                     Ok(block) => {
                         let real_id = block.id.clone();
+                        // 记录 Change：创建操作 before=None, after=快照
+                        pending_changes.push(oplog::new_change(
+                            "", // batch_id 后面统一设置
+                            &real_id,
+                            ChangeType::Created,
+                            None,
+                            Some(BlockSnapshot::from_block(&block)),
+                        ));
                         id_map.insert(temp_id.clone(), real_id.clone());
                         results.push(BatchOpResult {
                             action: "create".to_string(),
@@ -768,6 +1083,10 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 properties_mode,
             } => {
                 let resolved_id = resolve_id(&block_id, &id_map);
+
+                // 捕获 before 快照
+                let before = repo::find_by_id(&conn, &resolved_id).ok();
+
                 let result = batch_update_block(
                     &conn,
                     &resolved_id,
@@ -778,6 +1097,13 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
 
                 match result {
                     Ok(new_version) => {
+                        // 捕获 after 快照
+                        let after = repo::find_by_id_raw(&conn, &resolved_id).ok();
+                        if let (Some(b), Some(a)) = (&before, &after) {
+                            pending_changes.push(oplog::block_change_pair(
+                                "", &resolved_id, ChangeType::Updated, b, a,
+                            ));
+                        }
                         results.push(BatchOpResult {
                             action: "update".to_string(),
                             block_id: resolved_id,
@@ -798,10 +1124,20 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
 
             BatchOp::Delete { block_id } => {
                 let resolved_id = resolve_id(&block_id, &id_map);
+
+                // 捕获 before 快照
+                let before = repo::find_by_id(&conn, &resolved_id).ok();
+
                 let result = batch_delete_block(&conn, &resolved_id);
 
                 match result {
                     Ok(new_version) => {
+                        if let Some(b) = &before {
+                            pending_changes.push(oplog::new_change(
+                                "", &resolved_id, ChangeType::Deleted,
+                                Some(BlockSnapshot::from_block(b)), None,
+                            ));
+                        }
                         results.push(BatchOpResult {
                             action: "delete".to_string(),
                             block_id: resolved_id,
@@ -832,6 +1168,9 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 let resolved_before = before_id.map(|bid| resolve_id(&bid, &id_map));
                 let resolved_after = after_id.map(|aid| resolve_id(&aid, &id_map));
 
+                // 捕获 before 快照
+                let before = repo::find_by_id(&conn, &resolved_id).ok();
+
                 let result = batch_move_block(
                     &conn,
                     &resolved_id,
@@ -842,6 +1181,13 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
 
                 match result {
                     Ok(new_version) => {
+                        // 捕获 after 快照
+                        let after = repo::find_by_id_raw(&conn, &resolved_id).ok();
+                        if let (Some(b), Some(a)) = (&before, &after) {
+                            pending_changes.push(oplog::block_change_pair(
+                                "", &resolved_id, ChangeType::Moved, b, a,
+                            ));
+                        }
                         results.push(BatchOpResult {
                             action: "move".to_string(),
                             block_id: resolved_id,
@@ -860,6 +1206,20 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 }
             }
         }
+    }
+
+    // 将所有变更记录为一个 Batch（统一设置 batch_id）
+    if !pending_changes.is_empty() {
+        // batch_operations 可能跨文档，使用第一个变更的 document_id
+        let doc_id = pending_changes.first()
+            .and_then(|c| c.before.as_ref().map(|s| s.document_id.clone()))
+            .or_else(|| pending_changes.first().and_then(|c| c.after.as_ref().map(|s| s.document_id.clone())))
+            .unwrap_or_default();
+        let batch = oplog::new_batch(Action::BatchOps, req.operation_id, &doc_id);
+        for change in &mut pending_changes {
+            change.batch_id = batch.id.clone();
+        }
+        oplog::record_batch(&conn, &batch, &pending_changes)?;
     }
 
     // 单条操作失败不影响其他操作，但整个批次在同一个事务内
@@ -1150,6 +1510,22 @@ fn split_block_inner(
     let new_block = repo::find_by_id_raw(&conn, &new_id)
         .map_err(|e| AppError::Internal(format!("查询新创建的 Block 失败: {}", e)))?;
 
+    // 8. 记录历史：拆分 = 更新原块 + 创建新块
+    let batch = oplog::new_batch(Action::Split, req.operation_id, &current.document_id);
+    let changes = vec![
+        // Change 1: 原块被更新（内容从完整变为前半）
+        oplog::block_change_pair(
+            &batch.id, id, ChangeType::Updated, &current, &updated_block,
+        ),
+        // Change 2: 新块被创建
+        oplog::new_change(
+            &batch.id, &new_id, ChangeType::Created,
+            None,
+            Some(BlockSnapshot::from_block(&new_block)),
+        ),
+    ];
+    oplog::record_batch(&conn, &batch, &changes)?;
+
     Ok(SplitResult {
         updated_block,
         new_block,
@@ -1271,9 +1647,9 @@ fn merge_block_inner(
         let mut pos = if merge_into_parent {
             // 合并到父块时，子块插入到 current 之后、current 的后续兄弟之前
             if let Some(first_after) = siblings_after.first() {
-                fractional::generate_between(&current.position, &first_after.position)
+                position::generate_between(&current.position, &first_after.position)
             } else {
-                fractional::generate_after(&current.position)
+                position::generate_after(&current.position)
             }
         } else {
             // 合并到前驱兄弟时，子块追加到 target 的子块末尾
@@ -1281,8 +1657,8 @@ fn merge_block_inner(
             let max_pos = repo::get_max_position(&conn, reparent_target_id)
                 .map_err(|e| AppError::Internal(format!("查询最大 position 失败: {}", e)))?;
             match max_pos {
-                Some(mp) => fractional::generate_after(&mp),
-                None => fractional::generate_first(),
+                Some(mp) => position::generate_after(&mp),
+                None => position::generate_first(),
             }
         };
 
@@ -1292,7 +1668,7 @@ fn merge_block_inner(
                 &conn, &child.id, reparent_target_id, &pos, &new_document_id, &t,
             )
             .map_err(|e| AppError::Internal(format!("Reparent 子块失败: {}", e)))?;
-            pos = fractional::generate_after(&pos);
+            pos = position::generate_after(&pos);
         }
     }
 
@@ -1303,6 +1679,22 @@ fn merge_block_inner(
     // 7. 查询合并后的块
     let merged_block = repo::find_by_id_raw(&conn, &target.id)
         .map_err(|e| AppError::Internal(format!("查询合并后的 Block 失败: {}", e)))?;
+
+    // 8. 记录历史：合并 = 更新目标块 + 删除当前块
+    let batch = oplog::new_batch(Action::Merge, None, &current.document_id);
+    let changes = vec![
+        // Change 1: 目标块被更新（追加了内容）
+        oplog::block_change_pair(
+            &batch.id, &target.id, ChangeType::Updated, &target, &merged_block,
+        ),
+        // Change 2: 当前块被删除
+        oplog::new_change(
+            &batch.id, id, ChangeType::Deleted,
+            Some(BlockSnapshot::from_block(&current)),
+            None,
+        ),
+    ];
+    oplog::record_batch(&conn, &batch, &changes)?;
 
     Ok(MergeResult {
         merged_block,

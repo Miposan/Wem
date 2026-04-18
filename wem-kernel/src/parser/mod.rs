@@ -24,9 +24,6 @@ use types::{ParseOptions, ParseResult, SerializeResult};
 
 /// 解析器 trait —— 文本 → Block 树
 pub trait BlockParser {
-    /// 返回格式名称（如 `"markdown"`）
-    fn format_name(&self) -> &str;
-
     /// 将文本解析为 Block 树
     fn parse(&self, text: &str, options: &ParseOptions) -> Result<ParseResult, AppError>;
 }
@@ -35,9 +32,6 @@ pub trait BlockParser {
 
 /// 序列化器 trait —— Block 树 → 文本
 pub trait BlockSerializer {
-    /// 返回格式名称（如 `"markdown"`）
-    fn format_name(&self) -> &str;
-
     /// 将 Block 树序列化为文本
     fn serialize(
         &self,

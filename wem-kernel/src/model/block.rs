@@ -198,74 +198,23 @@ pub enum BlockType {
 }
 
 impl BlockType {
-    /// 判断是否为容器块（可以包含子 Block）
-    pub fn is_container(&self) -> bool {
-        matches!(
-            self,
-            Self::Document
-                | Self::Heading { .. }
-                | Self::Blockquote
-                | Self::List { .. }
-                | Self::ListItem
-                | Self::Callout
-        )
-    }
-
-    /// 判断是否为叶子块（有文本内容）
-    pub fn is_leaf(&self) -> bool {
-        matches!(
-            self,
-            Self::Paragraph
-                | Self::CodeBlock { .. }
-                | Self::MathBlock
-                | Self::ThematicBreak
-        )
-    }
-
     /// 根据 BlockType 推断默认 ContentType
     ///
-    /// 规则（参考 01-block-model.md §4）：
     /// - Document + 叶子块 → Markdown
     /// - 容器块（除 Document）+ 资源块 → Empty
     /// - Embed → Query
     pub fn default_content_type(&self) -> ContentType {
         match self {
-            // 叶子块 + Document → Markdown
-            // ThematicBreak 虽属叶子块，但无实际内容 → Empty
             Self::Document
             | Self::Paragraph
             | Self::CodeBlock { .. }
             | Self::MathBlock => ContentType::Markdown,
             Self::ThematicBreak => ContentType::Empty,
-            // Embed → Query
             Self::Embed => ContentType::Query,
-            // 其他（容器块除 Document、资源块）→ Empty
             _ => ContentType::Empty,
         }
     }
 
-    /// 获取类型名称字符串（用于数据库 json_extract 索引查询）
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Self::Document => "document",
-            Self::Heading { .. } => "heading",
-            Self::Blockquote => "blockquote",
-            Self::List { .. } => "list",
-            Self::ListItem => "listItem",
-            Self::Callout => "callout",
-            Self::Paragraph => "paragraph",
-            Self::CodeBlock { .. } => "codeBlock",
-            Self::MathBlock => "mathBlock",
-            Self::ThematicBreak => "thematicBreak",
-            Self::Image { .. } => "image",
-            Self::Audio { .. } => "audio",
-            Self::Video { .. } => "video",
-            Self::Iframe { .. } => "iframe",
-            Self::Embed => "embed",
-            Self::AttributeView { .. } => "attributeView",
-            Self::Widget => "widget",
-        }
-    }
 }
 
 // ─── ContentType 枚举 ─────────────────────────────────────────
@@ -308,16 +257,14 @@ impl ContentType {
 
 /// Block 状态
 ///
-/// 状态流转（参考 01-block-model.md §6）：
+/// 状态流转：
 /// - Normal → Deleted（用户删除）
 /// - Deleted → Normal（用户恢复）
-/// - Draft → Normal（用户审批）/ 删除（用户拒绝）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockStatus {
     #[default]
     Normal,
-    Draft,
     Deleted,
 }
 
@@ -326,7 +273,6 @@ impl BlockStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Normal => "normal",
-            Self::Draft => "draft",
             Self::Deleted => "deleted",
         }
     }
@@ -335,7 +281,6 @@ impl BlockStatus {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "normal" => Some(Self::Normal),
-            "draft" => Some(Self::Draft),
             "deleted" => Some(Self::Deleted),
             _ => None,
         }
@@ -381,3 +326,20 @@ pub fn generate_block_id() -> String {
 /// - 系统初始化时自动创建，不可删除
 /// - 所有根文档（无显式 parent_id 的文档）都挂在这个根块下
 pub const ROOT_ID: &str = "00000000000000000000";
+
+// ─── 解析警告 ─────────────────────────────────────────────────
+
+/// 解析过程中产生的警告
+///
+/// 定义在 model 层，供 parser 产出、api 层引用。
+#[derive(Debug, Clone, Serialize)]
+pub struct ParseWarning {
+    /// 行号（1-based，0 表示未知）
+    pub line: usize,
+    /// 警告类型标识
+    pub warning_type: String,
+    /// 人类可读描述
+    pub message: String,
+    /// 采取的操作（如 `"auto_fixed"`）
+    pub action: String,
+}

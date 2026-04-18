@@ -1,394 +1,426 @@
-//! Oplog 业务逻辑层
+//! 操作日志（Oplog）业务逻辑层
+//!
+//! 基于 batch-based 操作日志，为文档提供 undo/redo 能力。
 //!
 //! 提供：
-//! - `record_op()` — 每次 Block 操作后记录 oplog + 自动快照检查
-//! - `get_block_history()` — 查询 Block 的变更历史
-//! - `get_version_content()` — 回放 oplog 还原任意版本
-//! - `rollback_block()` — 回滚到指定版本
-//! - `create_snapshot()` / `maybe_create_snapshot()` — 快照管理
-//!
-//! 参考 05-oplog.md §1~§6
+//! - `record_batch()` — 每次 Block 操作后记录 batch + changes（含自动 GC）
+//! - `undo()` — 撤销最近一次操作（恢复 before 快照）
+//! - `redo()` — 重做最近被撤销的操作（恢复 after 快照）
+//! - `get_history()` — 查询操作日志（分页）
+//! - `get_block_history()` — 查询单个 Block 的变更日志
 
-use crate::repo::{block_repo as repo, oplog_repo, Db};
 use crate::error::AppError;
-use crate::model::Block;
 use crate::model::oplog::{
-    Action, CreateOpData, DeleteOpData, HistoryEntry, RollbackResult, Snapshot,
-    SnapshotReason, SnapshotResult, UpdateOpData, VersionContent,
+    Action, Batch, BlockSnapshot, Change, ChangeSummary, ChangeType, HistoryEntry, UndoRedoResult,
 };
+use crate::model::Block;
+use crate::repo::{block_repo, oplog_repo, Db};
+use crate::util::now_iso;
 
-/// 快照触发阈值：距上次快照的操作数
-const SNAPSHOT_OP_THRESHOLD: i64 = 50;
+/// Batch 容量上限：只保留最近 N 次操作记录
+///
+/// 超出此上限后，`record_batch()` 会自动清理最老的 batch。
+/// changes 表通过 FOREIGN KEY ON DELETE CASCADE 自动级联删除。
+pub const MAX_BATCHES: usize = 1000;
 
 // ─── 记录操作 ──────────────────────────────────────────────────
 
-/// 记录一条操作日志
+/// 记录一次 Batch 操作
 ///
-/// 在 Block CRUD 成功后调用。自动递增 block version 并写入 oplog。
-/// 同时检查是否需要创建快照。
+/// 在 Block CRUD 操作成功后、同一个数据库锁内调用。
+/// 自动写入 Batch 和所有 Change 记录，并在超出容量上限时清理最老的 batch。
 ///
-/// **注意**：调用方必须在同一个 `conn` 事务/锁内调用此函数，
-/// 确保 oplog 与 block 数据的一致性。
-pub fn record_op(
+/// # 参数
+/// - `conn`: 已持有的数据库连接（调用方负责加锁）
+/// - `batch`: Batch 元数据（id、action、description、timestamp）
+/// - `changes`: 变更列表（每个受影响 Block 一条）
+pub fn record_batch(
     conn: &rusqlite::Connection,
-    block_id: &str,
-    action: &Action,
-    data: &str,
-    prev_version: u64,
-    new_version: u64,
-    timestamp: &str,
+    batch: &Batch,
+    changes: &[Change],
 ) -> Result<(), AppError> {
-    // 写入 oplog
-    oplog_repo::insert_oplog(conn, block_id, action, data, prev_version, new_version, timestamp)
-        .map_err(|e| AppError::Internal(format!("写入 oplog 失败: {}", e)))?;
+    // 写入 Batch
+    oplog_repo::insert_batch(conn, batch)
+        .map_err(|e| AppError::Internal(format!("写入 batch 失败: {}", e)))?;
 
-    // 检查是否需要自动创建快照
-    let _ = maybe_create_snapshot(conn, block_id, new_version, timestamp);
+    // 写入 Changes
+    if !changes.is_empty() {
+        oplog_repo::insert_changes(conn, changes)
+            .map_err(|e| AppError::Internal(format!("写入 changes 失败: {}", e)))?;
+    }
+
+    // 自动 GC：超出容量上限时清理最老的 batch
+    gc_batches(conn)?;
 
     Ok(())
 }
 
+/// 批次容量 GC
+///
+/// 当 batch 总量超过 `MAX_BATCHES` 时，删除最老的 batch。
+/// changes 通过 FOREIGN KEY ON DELETE CASCADE 自动级联删除。
+///
+/// 注意：当前 GC 仍然是全局清理（不按文档），
+/// 因为 document-scoped GC 需要额外索引且收益有限。
+fn gc_batches(conn: &rusqlite::Connection) -> Result<(), AppError> {
+    // 全局统计：这里不按 document_id 过滤
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM batches", [], |row| row.get(0))
+        .map_err(|e| AppError::Internal(format!("统计 batch 数量失败: {}", e)))?;
+
+    if count as usize > MAX_BATCHES {
+        oplog_repo::cleanup_old_batches(conn, MAX_BATCHES)
+            .map_err(|e| AppError::Internal(format!("GC batch 失败: {}", e)))?;
+    }
+
+    Ok(())
+}
+
+// ─── Undo ──────────────────────────────────────────────────────
+
+/// 撤销最近一次操作
+///
+/// 流程：
+/// 1. 找到最近的 undone = false 的 Batch
+/// 2. 获取该 Batch 的所有 Change
+/// 3. 对每个 Change，恢复 before 快照到 blocks 表
+/// 4. 标记 Batch 为 undone = true
+///
+/// 返回受影响的 Block ID 和 Document ID（用于 SSE 广播）
+pub fn undo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
+    let conn = crate::repo::lock_db(db);
+
+    // 1. 找到指定文档最近的未撤销 Batch
+    let batch = oplog_repo::find_latest_undoable_batch(&conn, document_id)
+        .map_err(|e| AppError::Internal(format!("查询可撤销 batch 失败: {}", e)))?
+        .ok_or_else(|| AppError::BadRequest("没有可撤销的操作".to_string()))?;
+
+    // 2. 获取所有 Change
+    let changes = oplog_repo::find_batch_changes(&conn, &batch.id)
+        .map_err(|e| AppError::Internal(format!("查询 batch changes 失败: {}", e)))?;
+
+    // 3. 恢复 before 快照
+    let (affected_block_ids, affected_document_ids) =
+        restore_snapshots(&conn, &changes, true)?;
+
+    // 4. 标记为已撤销
+    oplog_repo::set_batch_undone(&conn, &batch.id, true)
+        .map_err(|e| AppError::Internal(format!("标记 batch undone 失败: {}", e)))?;
+
+    Ok(UndoRedoResult {
+        batch_id: batch.id,
+        affected_block_ids,
+        affected_document_ids,
+        action: batch.action.as_str().to_string(),
+    })
+}
+
+// ─── Redo ──────────────────────────────────────────────────────
+
+/// 重做最近被撤销的操作
+///
+/// 流程：
+/// 1. 找到最近的 undone = true 的 Batch
+/// 2. 获取该 Batch 的所有 Change
+/// 3. 对每个 Change，恢复 after 快照到 blocks 表
+/// 4. 标记 Batch 为 undone = false
+pub fn redo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
+    let conn = crate::repo::lock_db(db);
+
+    // 1. 找到指定文档最近的已撤销 Batch
+    let batch = oplog_repo::find_latest_redoable_batch(&conn, document_id)
+        .map_err(|e| AppError::Internal(format!("查询可重做 batch 失败: {}", e)))?
+        .ok_or_else(|| AppError::BadRequest("没有可重做的操作".to_string()))?;
+
+    // 2. 获取所有 Change
+    let changes = oplog_repo::find_batch_changes(&conn, &batch.id)
+        .map_err(|e| AppError::Internal(format!("查询 batch changes 失败: {}", e)))?;
+
+    // 3. 恢复 after 快照
+    let (affected_block_ids, affected_document_ids) =
+        restore_snapshots(&conn, &changes, false)?;
+
+    // 4. 标记为未撤销
+    oplog_repo::set_batch_undone(&conn, &batch.id, false)
+        .map_err(|e| AppError::Internal(format!("标记 batch undone 失败: {}", e)))?;
+
+    Ok(UndoRedoResult {
+        batch_id: batch.id,
+        affected_block_ids,
+        affected_document_ids,
+        action: batch.action.as_str().to_string(),
+    })
+}
+
 // ─── 查询历史 ──────────────────────────────────────────────────
 
-/// 获取 Block 的变更历史
-pub fn get_block_history(
+/// 查询操作历史（分页）
+pub fn get_history(
     db: &Db,
-    block_id: &str,
+    document_id: &str,
     limit: u32,
+    offset: u32,
 ) -> Result<Vec<HistoryEntry>, AppError> {
     let conn = crate::repo::lock_db(db);
 
-    // 验证 Block 存在
-    let _block = repo::find_by_id_raw(&conn, block_id)
-        .map_err(|_| AppError::NotFound(format!("Block {} 不存在", block_id)))?;
-
-    let ops = oplog_repo::find_block_history(&conn, block_id, limit)
+    let batches = oplog_repo::find_batches(&conn, document_id, limit, offset)
         .map_err(|e| AppError::Internal(format!("查询历史失败: {}", e)))?;
 
-    let entries: Vec<HistoryEntry> = ops
-        .into_iter()
-        .map(|op| {
-            let data_value: serde_json::Value = serde_json::from_str(&op.data)
-                .unwrap_or(serde_json::Value::Null);
-            HistoryEntry {
-                op_id: op.op_id,
-                block_id: op.block_id,
-                action: op.action.as_str().to_string(),
-                data: data_value,
-                prev_version: op.prev_version,
-                new_version: op.new_version,
-                timestamp: op.timestamp,
-            }
-        })
-        .collect();
+    let mut entries = Vec::with_capacity(batches.len());
+    for batch in batches {
+        let changes = oplog_repo::find_batch_changes(&conn, &batch.id)
+            .map_err(|e| AppError::Internal(format!("查询 batch changes 失败: {}", e)))?;
+
+        entries.push(HistoryEntry {
+            batch_id: batch.id,
+            action: batch.action.as_str().to_string(),
+            description: batch.description,
+            timestamp: batch.timestamp,
+            undone: batch.undone,
+            changes: changes
+                .into_iter()
+                .map(|c| ChangeSummary {
+                    block_id: c.block_id,
+                    change_type: c.change_type.as_str().to_string(),
+                })
+                .collect(),
+        });
+    }
 
     Ok(entries)
 }
 
-// ─── 版本回放 ──────────────────────────────────────────────────
-
-/// 获取 Block 在指定版本的完整内容
-///
-/// 策略：快照 + 回放
-/// 1. 找到 <= target_version 的最近快照
-/// 2. 从快照版本到目标版本之间的所有 Update/Create oplog
-/// 3. 应用 oplog 得到目标版本的完整内容
-///
-/// 对于简化版：直接返回当前 block 内容 + 历史元数据。
-/// 真正的回放需要解析 Update oplog 中的 content/properties。
-pub fn get_version_content(
+/// 查询单个 Block 的变更历史
+pub fn get_block_history(
     db: &Db,
     block_id: &str,
-    version: u64,
-) -> Result<VersionContent, AppError> {
+    limit: u32,
+) -> Result<Vec<Change>, AppError> {
     let conn = crate::repo::lock_db(db);
 
     // 验证 Block 存在（含已删除）
-    let current = repo::find_by_id_raw(&conn, block_id)
+    let _ = block_repo::find_by_id_raw(&conn, block_id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在", block_id)))?;
 
-    // 1. 找到 <= version 的最近快照
-    let snapshot = oplog_repo::find_snapshot_at_or_before(&conn, block_id, version)
-        .map_err(|e| AppError::Internal(format!("查询快照失败: {}", e)))?;
-
-    let (mut content, mut properties, source) = match snapshot {
-        Some(ref snap) => {
-            // 从快照恢复基础内容
-            let content_str = String::from_utf8_lossy(&snap.content).to_string();
-            (content_str, snap.properties.clone(), format!("snapshot@v{}", snap.version))
-        }
-        None => {
-            // 没有快照，从 oplog 链头部开始
-            (String::new(), "{}".to_string(), "empty".to_string())
-        }
-    };
-
-    // 2. 查询快照版本到目标版本之间的 oplog
-    let snap_version = snapshot.as_ref().map(|s| s.version).unwrap_or(0);
-    let _ = source; // source 用于 API 响应
-    let ops = oplog_repo::find_oplog_range(&conn, block_id, snap_version, version)
-        .map_err(|e| AppError::Internal(format!("查询 oplog 区间失败: {}", e)))?;
-
-    // 3. 回放 oplog — 只应用 Update 和 Create 的 content/properties
-    let applied_count = ops.len();
-    for op in &ops {
-        match op.action {
-            Action::Create | Action::Update => {
-                if let Ok(update_data) = serde_json::from_str::<UpdateOpData>(&op.data) {
-                    content = update_data.content;
-                    properties = update_data.properties;
-                } else if let Ok(create_data) = serde_json::from_str::<CreateOpData>(&op.data) {
-                    content = create_data.content;
-                    properties = create_data.properties;
-                }
-            }
-            Action::Delete => {
-                // Delete 操作记录了删除前的快照，可用于恢复
-                if let Ok(delete_data) = serde_json::from_str::<DeleteOpData>(&op.data) {
-                    content = delete_data.snapshot.content;
-                    properties = delete_data.snapshot.properties;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // 4. 构建 VersionContent
-    //    使用 current block 的结构字段，替换 content 和 properties
-    let mut version_block = current.clone();
-    version_block.version = version;
-    version_block.content = content.into_bytes();
-    version_block.properties = serde_json::from_str(&properties).unwrap_or_default();
-
-    Ok(VersionContent {
-        version,
-        block: version_block,
-        source: format!("{}+{}ops", source, applied_count),
-    })
+    oplog_repo::find_block_history(&conn, block_id, limit)
+        .map_err(|e| AppError::Internal(format!("查询 Block 历史失败: {}", e)))
 }
 
-// ─── 回滚 ─────────────────────────────────────────────────────
+// ─── 内部辅助 ──────────────────────────────────────────────────
 
-/// 回滚 Block 到指定版本
+/// 恢复快照到 blocks 表
 ///
-/// 1. 获取目标版本的完整内容
-/// 2. 用目标版本的内容更新当前 Block（version 递增）
-/// 3. 记录一条 Update oplog（标记 is_rollback=true）
+/// `use_before = true` 时恢复 before 快照（undo），
+/// `use_before = false` 时恢复 after 快照（redo）。
 ///
-/// 参考 05-oplog.md §5
-pub fn rollback_block(
-    db: &Db,
+/// 返回 (affected_block_ids, affected_document_ids)
+fn restore_snapshots(
+    conn: &rusqlite::Connection,
+    changes: &[Change],
+    use_before: bool,
+) -> Result<(Vec<String>, Vec<String>), AppError> {
+    let mut affected_block_ids = Vec::new();
+    let mut affected_document_ids = Vec::new();
+
+    for change in changes {
+        let snapshot = if use_before {
+            change.before.as_ref()
+        } else {
+            change.after.as_ref()
+        };
+
+        match snapshot {
+            Some(snap) => {
+                // 恢复快照：upsert block 到数据库
+                restore_single_block(conn, &change.block_id, snap, &change.change_type)?;
+                affected_block_ids.push(change.block_id.clone());
+                if !affected_document_ids.contains(&snap.document_id) {
+                    affected_document_ids.push(snap.document_id.clone());
+                }
+            }
+            None => {
+                // create 的 before 为 None（undo → 删除该 block）
+                // delete 的 after 为 None（redo → 删除该 block）
+                if use_before && change.change_type == ChangeType::Created {
+                    // undo create → 软删除该 block
+                    soft_delete_block(conn, &change.block_id)?;
+                    affected_block_ids.push(change.block_id.clone());
+                } else if !use_before && change.change_type == ChangeType::Deleted {
+                    // redo delete → 软删除该 block
+                    soft_delete_block(conn, &change.block_id)?;
+                    affected_block_ids.push(change.block_id.clone());
+                }
+            }
+        }
+    }
+
+    Ok((affected_block_ids, affected_document_ids))
+}
+
+/// 将快照恢复到 blocks 表
+///
+/// 根据 change_type 决定是 INSERT（新建恢复）还是 UPDATE（更新恢复）。
+fn restore_single_block(
+    conn: &rusqlite::Connection,
     block_id: &str,
-    target_version: u64,
-) -> Result<RollbackResult, AppError> {
-    let conn = crate::repo::lock_db(db);
-
-    // 1. 验证当前 Block
-    let current = repo::find_by_id(&conn, block_id)
-        .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", block_id)))?;
-
-    if target_version >= current.version {
-        return Err(AppError::BadRequest(
-            "目标版本必须小于当前版本".to_string(),
-        ));
-    }
-
-    if target_version == 0 {
-        return Err(AppError::BadRequest("版本号不能为 0".to_string()));
-    }
-
-    // 2. 获取目标版本内容（使用快照 + 回放）
-    let target_content = reconstruct_version(&conn, block_id, target_version)?;
-
-    // 3. 更新 Block 内容（乐观锁）
-    let new_version = current.version + 1;
+    snap: &BlockSnapshot,
+    change_type: &ChangeType,
+) -> Result<(), AppError> {
     let now = now_iso();
-    let content_bytes = target_content.content;
-    let properties_json = serde_json::to_string(&target_content.properties).unwrap_or_default();
 
-    let rows = repo::update_content_and_props(
-        &conn,
-        block_id,
-        &content_bytes,
-        &properties_json,
-        &now,
+    match change_type {
+        ChangeType::Deleted => {
+            // undo delete → 恢复已删除的 block（UPDATE status + 内容）
+            conn.execute(
+                "UPDATE blocks SET
+                    parent_id = ?1, document_id = ?2, position = ?3,
+                    block_type = ?4, content_type = ?5, content = ?6,
+                    properties = ?7, status = ?8, modified = ?9
+                 WHERE id = ?10",
+                rusqlite::params![
+                    snap.parent_id,
+                    snap.document_id,
+                    snap.position,
+                    snap.block_type,
+                    snap.content_type,
+                    snap.content,
+                    snap.properties,
+                    snap.status,
+                    now,
+                    block_id,
+                ],
+            )
+            .map_err(|e| AppError::Internal(format!("恢复 block 失败: {}", e)))?;
+        }
+        ChangeType::Created => {
+            // redo create → 重新插入 block
+            conn.execute(
+                "INSERT INTO blocks (
+                    id, parent_id, document_id, position, block_type, content_type,
+                    content, properties, version, status, schema_version,
+                    author, encrypted, created, modified
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, 1, 'system', 0, ?10, ?10)
+                ON CONFLICT (id) DO UPDATE SET
+                    parent_id = excluded.parent_id,
+                    document_id = excluded.document_id,
+                    position = excluded.position,
+                    block_type = excluded.block_type,
+                    content_type = excluded.content_type,
+                    content = excluded.content,
+                    properties = excluded.properties,
+                    status = excluded.status,
+                    modified = excluded.modified",
+                rusqlite::params![
+                    block_id,
+                    snap.parent_id,
+                    snap.document_id,
+                    snap.position,
+                    snap.block_type,
+                    snap.content_type,
+                    snap.content,
+                    snap.properties,
+                    snap.status,
+                    now,
+                ],
+            )
+            .map_err(|e| AppError::Internal(format!("重做 create block 失败: {}", e)))?;
+        }
+        _ => {
+            // update / move / restored / reparented → 直接更新
+            conn.execute(
+                "UPDATE blocks SET
+                    parent_id = ?1, document_id = ?2, position = ?3,
+                    block_type = ?4, content_type = ?5, content = ?6,
+                    properties = ?7, status = ?8, modified = ?9
+                 WHERE id = ?10",
+                rusqlite::params![
+                    snap.parent_id,
+                    snap.document_id,
+                    snap.position,
+                    snap.block_type,
+                    snap.content_type,
+                    snap.content,
+                    snap.properties,
+                    snap.status,
+                    now,
+                    block_id,
+                ],
+            )
+            .map_err(|e| AppError::Internal(format!("恢复 block 快照失败: {}", e)))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// 软删除 block（undo create / redo delete 时使用）
+fn soft_delete_block(
+    conn: &rusqlite::Connection,
+    block_id: &str,
+) -> Result<(), AppError> {
+    let now = now_iso();
+    conn.execute(
+        "UPDATE blocks SET status = 'deleted', modified = ?1 WHERE id = ?2",
+        rusqlite::params![now, block_id],
     )
-    .map_err(|e| AppError::Internal(format!("回滚更新失败: {}", e)))?;
-
-    if rows == 0 {
-        return Err(AppError::NotFound(format!("Block {} 不存在", block_id)));
-    }
-
-    // 4. 记录 oplog（标记为回滚）
-    let rollback_data = UpdateOpData {
-        content: String::from_utf8_lossy(&content_bytes).to_string(),
-        properties: properties_json,
-        is_rollback: Some(true),
-        rollback_to: Some(target_version),
-    };
-    let data_json = serde_json::to_string(&rollback_data).unwrap_or_default();
-
-    record_op(
-        &conn,
-        block_id,
-        &Action::Update,
-        &data_json,
-        current.version,
-        new_version,
-        &now,
-    )?;
-
-    Ok(RollbackResult {
-        id: block_id.to_string(),
-        prev_version: current.version,
-        new_version,
-        rollback_to_version: target_version,
-    })
+    .map_err(|e| AppError::Internal(format!("软删除 block 失败: {}", e)))?;
+    Ok(())
 }
 
-// ─── 快照管理 ──────────────────────────────────────────────────
+/// 生成时间有序的唯一 ID（时间戳 + 随机后缀）
+pub fn new_batch_id() -> String {
+    let ts = chrono::Utc::now().timestamp_millis();
+    format!("{ts:016x}-{:04x}", rand::random::<u16>())
+}
 
-/// 手动创建快照
-pub fn create_snapshot(
-    db: &Db,
+// ─── 便捷构造函数 ──────────────────────────────────────────────
+
+/// 创建一个新的 Batch（自动生成 ID 和时间戳）
+pub fn new_batch(action: Action, description: Option<String>, document_id: &str) -> Batch {
+    Batch {
+        id: new_batch_id(),
+        document_id: document_id.to_string(),
+        action,
+        description,
+        timestamp: now_iso(),
+        undone: false,
+    }
+}
+
+/// 创建一个 Change 记录
+pub fn new_change(
+    batch_id: &str,
     block_id: &str,
-) -> Result<SnapshotResult, AppError> {
-    let conn = crate::repo::lock_db(db);
-
-    let block = repo::find_by_id_raw(&conn, block_id)
-        .map_err(|_| AppError::NotFound(format!("Block {} 不存在", block_id)))?;
-
-    let now = now_iso();
-    let snap = block_to_snapshot(&block, &now);
-
-    oplog_repo::upsert_snapshot(&conn, &snap)
-        .map_err(|e| AppError::Internal(format!("创建快照失败: {}", e)))?;
-
-    // 清理旧快照，最多保留 2 个
-    let _ = oplog_repo::cleanup_old_snapshots(&conn, block_id, 2);
-
-    Ok(SnapshotResult {
+    change_type: ChangeType,
+    before: Option<BlockSnapshot>,
+    after: Option<BlockSnapshot>,
+) -> Change {
+    Change {
+        id: 0, // 自增，由数据库生成
+        batch_id: batch_id.to_string(),
         block_id: block_id.to_string(),
-        version: block.version,
-        reason: SnapshotReason::Manual.as_str().to_string(),
-    })
+        change_type,
+        before,
+        after,
+    }
 }
 
-/// 检查并自动创建快照
+/// 从 Block 创建 before/after 变更对
 ///
-/// 触发条件（满足任一）：
-/// 1. 距上次快照的操作数 >= SNAPSHOT_OP_THRESHOLD (50)
-///
-/// TODO: 时间阈值（7 天）需要在 snapshots 表记录 created_at 并在每次检查时计算
-fn maybe_create_snapshot(
-    conn: &rusqlite::Connection,
+/// 用于 update/move 等需要前后对比的操作。
+pub fn block_change_pair(
+    batch_id: &str,
     block_id: &str,
-    _current_version: u64,
-    timestamp: &str,
-) -> Result<bool, AppError> {
-    // 检查操作数阈值
-    let ops_since = oplog_repo::count_oplog_since_last_snapshot(conn, block_id)
-        .map_err(|e| AppError::Internal(format!("查询 oplog 计数失败: {}", e)))?;
-
-    if ops_since < SNAPSHOT_OP_THRESHOLD {
-        return Ok(false);
+    change_type: ChangeType,
+    before_block: &Block,
+    after_block: &Block,
+) -> Change {
+    Change {
+        id: 0,
+        batch_id: batch_id.to_string(),
+        block_id: block_id.to_string(),
+        change_type,
+        before: Some(BlockSnapshot::from_block(before_block)),
+        after: Some(BlockSnapshot::from_block(after_block)),
     }
-
-    // 获取当前 Block 内容
-    let block = match repo::find_by_id_raw(conn, block_id) {
-        Ok(b) => b,
-        Err(_) => return Ok(false), // Block 不存在，跳过
-    };
-
-    let snap = block_to_snapshot(&block, timestamp);
-
-    oplog_repo::upsert_snapshot(conn, &snap)
-        .map_err(|e| AppError::Internal(format!("自动快照失败: {}", e)))?;
-
-    // 清理旧快照，最多保留 2 个
-    let _ = oplog_repo::cleanup_old_snapshots(conn, block_id, 2);
-
-    Ok(true)
-}
-
-// ─── 辅助函数 ──────────────────────────────────────────────────
-
-/// 生成当前时间的 ISO 8601 字符串（毫秒精度）
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-/// 将 Block 转为 Snapshot
-fn block_to_snapshot(block: &Block, timestamp: &str) -> Snapshot {
-    Snapshot {
-        block_id: block.id.clone(),
-        version: block.version,
-        block_type: serde_json::to_string(&block.block_type).unwrap_or_default(),
-        content_type: block.content_type.as_str().to_string(),
-        content: block.content.clone(),
-        properties: serde_json::to_string(&block.properties).unwrap_or_default(),
-        parent_id: block.parent_id.clone(),
-        position: block.position.clone(),
-        timestamp: timestamp.to_string(),
-    }
-}
-
-/// 重建指定版本的 Block 内容（内部函数，调用方已持有锁）
-///
-/// 快照 + 回放策略
-fn reconstruct_version(
-    conn: &rusqlite::Connection,
-    block_id: &str,
-    target_version: u64,
-) -> Result<Block, AppError> {
-    // 找到 <= target_version 的最近快照
-    let snapshot = oplog_repo::find_snapshot_at_or_before(conn, block_id, target_version)
-        .map_err(|e| AppError::Internal(format!("查询快照失败: {}", e)))?;
-
-    let (mut content, mut properties, snap_version) = match snapshot {
-        Some(snap) => (
-            String::from_utf8_lossy(&snap.content).to_string(),
-            snap.properties,
-            snap.version,
-        ),
-        None => (String::new(), "{}".to_string(), 0),
-    };
-
-    // 查询区间 oplog
-    let ops = oplog_repo::find_oplog_range(conn, block_id, snap_version, target_version)
-        .map_err(|e| AppError::Internal(format!("查询 oplog 区间失败: {}", e)))?;
-
-    // 回放
-    for op in &ops {
-        match op.action {
-            Action::Create | Action::Update => {
-                if let Ok(update_data) = serde_json::from_str::<UpdateOpData>(&op.data) {
-                    content = update_data.content;
-                    properties = update_data.properties;
-                } else if let Ok(create_data) = serde_json::from_str::<CreateOpData>(&op.data) {
-                    content = create_data.content;
-                    properties = create_data.properties;
-                }
-            }
-            Action::Delete => {
-                if let Ok(delete_data) = serde_json::from_str::<DeleteOpData>(&op.data) {
-                    content = delete_data.snapshot.content;
-                    properties = delete_data.snapshot.properties;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // 获取 Block 的结构字段（parent_id, position 等）
-    let current = repo::find_by_id_raw(conn, block_id)
-        .map_err(|_| AppError::NotFound(format!("Block {} 不存在", block_id)))?;
-
-    // 组装目标版本的 Block
-    let mut result = current;
-    result.version = target_version;
-    result.content = content.into_bytes();
-    result.properties = serde_json::from_str(&properties).unwrap_or_default();
-
-    Ok(result)
 }

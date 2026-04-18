@@ -119,6 +119,13 @@ export interface MoveBlockReq {
   operation_id?: string
 }
 
+export interface MoveTreeReq {
+  id: string
+  before_id?: string
+  after_id?: string
+  operation_id?: string
+}
+
 // ---- Batch ----
 
 export interface BatchCreateOp {
@@ -222,10 +229,13 @@ export interface HistoryEntry {
   summary?: string
 }
 
-export interface RollbackReq {
-  id: string
-  target_version: number
-  current_version: number
+// ---- Undo / Redo ----
+
+export interface UndoRedoResult {
+  batch_id: string
+  affected_block_ids: string[]
+  affected_document_ids: string[]
+  action: string
 }
 
 // ---- Split / Merge 意图 API ----
@@ -308,11 +318,4 @@ export interface GetHistoryReq {
   limit?: number
 }
 
-export interface GetVersionReq {
-  id: string
-  version: number
-}
 
-export interface SnapshotReq {
-  id: string
-}

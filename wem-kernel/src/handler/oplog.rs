@@ -1,115 +1,111 @@
-//! Oplog HTTP 处理层
+//! 操作日志 HTTP 处理层
 //!
-//! 历史查询、版本回放、回滚、手动快照 等端点。
+//! 操作日志查询、Undo、Redo。
+//! 所有路由前缀：`/api/v1/documents/*`（per-document 操作）。
 
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{extract::State, Json};
 
-use crate::api::request::{GetHistoryReq, GetVersionReq, RollbackReq, SnapshotReq};
-use crate::api::response::{
-    HistoryResponse, RollbackResponse, SnapshotResponse, VersionResponse,
-};
-use crate::repo::Db;
+use crate::api::request::{GetHistoryReq, RedoReq, UndoReq};
+use crate::api::response::{HistoryResponse, UndoRedoResponse};
 use crate::error::{AppError, ApiResponse};
 use crate::model::event::BlockEvent;
+use crate::repo::Db;
 use crate::service::oplog;
 
 // ─── 历史查询 ──────────────────────────────────────────────────
 
-/// POST /api/v1/blocks/history
+/// POST /api/v1/documents/history
 ///
-/// 获取 Block 的变更历史
+/// 获取文档变更历史（支持按 Block ID 或 Document ID 查询）
 pub async fn get_block_history(
     State(db): State<Db>,
     Json(req): Json<GetHistoryReq>,
 ) -> Result<Json<ApiResponse<HistoryResponse>>, AppError> {
-    let id = req.id;
     let limit = req.limit.clamp(1, 500);
 
-    let entries = tokio::task::spawn_blocking(move || {
-        oplog::get_block_history(&db, &id, limit)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+    let entries = if let Some(id) = req.id {
+        // 按 Block ID 查询
+        let block_id = id;
+        let changes = tokio::task::spawn_blocking(move || {
+            oplog::get_block_history(&db, &block_id, limit)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+        // 将 Change 列表包装成简化的 HistoryEntry
+        changes
+            .into_iter()
+            .map(|c| crate::model::oplog::HistoryEntry {
+                batch_id: c.batch_id,
+                action: c.change_type.as_str().to_string(),
+                description: None,
+                timestamp: String::new(), // Change 不含 timestamp，由 Batch 提供
+                undone: false,
+                changes: vec![crate::model::oplog::ChangeSummary {
+                    block_id: c.block_id,
+                    change_type: c.change_type.as_str().to_string(),
+                }],
+            })
+            .collect()
+    } else if let Some(doc_id) = req.document_id {
+        // 按文档查询历史
+        tokio::task::spawn_blocking(move || oplog::get_history(&db, &doc_id, limit, req.offset))
+            .await
+            .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??
+    } else {
+        // 未指定 document_id，返回空
+        vec![]
+    };
 
     Ok(Json(ApiResponse::ok(Some(HistoryResponse { entries }))))
 }
 
-// ─── 版本回放 ──────────────────────────────────────────────────
+// ─── Undo ──────────────────────────────────────────────────────
 
-/// POST /api/v1/blocks/version
+/// POST /api/v1/documents/undo
 ///
-/// 获取 Block 在指定版本的完整内容
-pub async fn get_block_version(
+/// 撤销最近一次操作
+pub async fn undo(
     State(db): State<Db>,
-    Json(req): Json<GetVersionReq>,
-) -> Result<Json<ApiResponse<VersionResponse>>, AppError> {
-    let id = req.id;
-    let version = req.version;
-    let version_content = tokio::task::spawn_blocking(move || {
-        oplog::get_version_content(&db, &id, version)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+    Json(req): Json<UndoReq>,
+) -> Result<Json<ApiResponse<UndoRedoResponse>>, AppError> {
+    let document_id = req.document_id.clone();
+    let result = tokio::task::spawn_blocking(move || oplog::undo(&db, &document_id))
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    Ok(Json(ApiResponse::ok(Some(VersionResponse {
-        version: version_content,
-    }))))
-}
-
-// ─── 回滚 ──────────────────────────────────────────────────────
-
-/// POST /api/v1/blocks/rollback
-///
-/// 回滚 Block 到指定版本
-pub async fn rollback_block(
-    State(db): State<Db>,
-    Json(req): Json<RollbackReq>,
-) -> Result<Json<ApiResponse<RollbackResponse>>, AppError> {
-    let id = req.id.clone();
-    let target_version = req.target_version;
-    let db_for_query = db.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        oplog::rollback_block(&db, &id, target_version)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
-
-    // 查询回滚后的 block 以获取 document_id 用于广播
-    let blk = tokio::task::spawn_blocking(move || {
-        crate::service::block::get_block(&db_for_query, &req.id, false)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))?;
-
-    if let Ok(block) = blk {
-        crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
-            document_id: block.document_id.clone(),
+    // 广播 SSE 事件：通知前端受影响的文档
+    for doc_id in &result.affected_document_ids {
+        crate::service::event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
+            document_id: doc_id.clone(),
             operation_id: None,
-            block,
         });
     }
 
-    Ok(Json(ApiResponse::ok(Some(RollbackResponse { result }))))
+    Ok(Json(ApiResponse::ok(Some(UndoRedoResponse { result }))))
 }
 
-// ─── 手动快照 ──────────────────────────────────────────────────
+// ─── Redo ──────────────────────────────────────────────────────
 
-/// POST /api/v1/blocks/snapshot
+/// POST /api/v1/documents/redo
 ///
-/// 手动创建 Block 快照
-pub async fn create_snapshot(
+/// 重做最近被撤销的操作
+pub async fn redo(
     State(db): State<Db>,
-    Json(req): Json<SnapshotReq>,
-) -> Result<Json<ApiResponse<SnapshotResponse>>, AppError> {
-    let id = req.id;
-    let result = tokio::task::spawn_blocking(move || {
-        oplog::create_snapshot(&db, &id)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+    Json(req): Json<RedoReq>,
+) -> Result<Json<ApiResponse<UndoRedoResponse>>, AppError> {
+    let document_id = req.document_id.clone();
+    let result = tokio::task::spawn_blocking(move || oplog::redo(&db, &document_id))
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    Ok(Json(ApiResponse::ok(Some(SnapshotResponse { result }))))
+    // 广播 SSE 事件：通知前端受影响的文档
+    for doc_id in &result.affected_document_ids {
+        crate::service::event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
+            document_id: doc_id.clone(),
+            operation_id: None,
+        });
+    }
+
+    Ok(Json(ApiResponse::ok(Some(UndoRedoResponse { result }))))
 }

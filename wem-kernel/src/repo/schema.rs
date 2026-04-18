@@ -1,9 +1,15 @@
 //! SQLite Schema 定义
 //!
 //! 所有建表 DDL、索引、PRAGMA 配置集中管理。
-//! 当前包含：blocks、oplog、snapshots 三张表。
 //!
-//! 参考 06-storage.md §1~§2, 05-oplog.md §3~§4
+//! ## 表结构
+//!
+//! | 表 | 用途 | 生命周期 |
+//! |----|------|----------|
+//! | `blocks` | Block 主表（文档内容块） | 永久 |
+//! | `batches` | 操作批次（undo/redo 单元） | 短期，GC 可清理 |
+//! | `changes` | 块级变更记录（before/after 快照） | 随 batch 清理 |
+//! | `snapshots` | 文档级快照（完整存档） | 长期，用户管理 |
 
 // ─── PRAGMA 配置 ────────────────────────────────────────────────
 
@@ -27,7 +33,6 @@ PRAGMA synchronous = NORMAL;
 /// blocks 表建表语句
 ///
 /// 16 个字段 + 外键约束 + UNIQUE 约束
-/// 参考 06-storage.md §2.1
 pub const CREATE_BLOCKS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS blocks (
     id              TEXT PRIMARY KEY,                -- 20 位 Block ID
@@ -52,7 +57,7 @@ CREATE TABLE IF NOT EXISTS blocks (
 
 /// blocks 表索引
 ///
-/// 7 个索引覆盖所有主要查询场景
+/// 8 个索引覆盖所有主要查询场景
 pub const CREATE_BLOCKS_INDEXES: &[&str] = &[
     // 唯一约束：同一父块下 position 不能重复（排除已软删除的块）
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_parent_pos ON blocks(parent_id, position) WHERE status != 'deleted';",
@@ -72,62 +77,77 @@ pub const CREATE_BLOCKS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_blocks_encrypted ON blocks(encrypted) WHERE encrypted = 1;"
 ];
 
-// ─── oplog 表 ──────────────────────────────────────────────────
+// ─── batches 表 ─────────────────────────────────────────────────
 
-/// oplog 表建表语句
+/// batches 表建表语句
 ///
-/// 记录每次 Block 操作，支持历史回溯和回滚。
-/// op_id 由 SQLite AUTOINCREMENT 自动分配，保证全局单调递增。
-/// 参考 05-oplog.md §1, §3
-pub const CREATE_OPLOG_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS oplog (
-    op_id          INTEGER PRIMARY KEY AUTOINCREMENT,  -- 全局单调递增
-    block_id       TEXT NOT NULL,                      -- 操作目标 Block
-    action         TEXT NOT NULL,                      -- create/update/delete/move/restore
-    data           TEXT NOT NULL DEFAULT '{}',         -- 操作数据（JSON）
-    prev_version   INTEGER NOT NULL,                  -- 操作前的 block version
-    new_version    INTEGER NOT NULL,                  -- 操作后的 block version
-    timestamp      TEXT NOT NULL                      -- ISO 8601 操作时间
+/// 每次用户操作产生一个 Batch（全局唯一 batch_id）。
+/// Batch 内记录所有受影响 Block 的 before/after 快照（changes 表）。
+/// undo = 标记 undone=1 + 恢复 before；redo = 标记 undone=0 + 恢复 after。
+pub const CREATE_BATCHES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS batches (
+    id              TEXT PRIMARY KEY,                -- 批次 ID（UUID v7，时间有序）
+    document_id     TEXT NOT NULL,                   -- 所属文档 ID（undo/redo 按文档隔离）
+    action          TEXT NOT NULL,                   -- create/update/delete/move/restore/split/merge/batch_ops/import
+    description     TEXT,                            -- 操作描述（可选）
+    timestamp       TEXT NOT NULL,                   -- ISO 8601 操作时间
+    undone          INTEGER NOT NULL DEFAULT 0       -- 0=未撤销, 1=已撤销
 );
 "#;
 
-/// oplog 表索引
+/// batches 表索引
+pub const CREATE_BATCHES_INDEXES: &[&str] = &[
+    // 按文档查批次（undo/redo 查找最近的 batch）
+    "CREATE INDEX IF NOT EXISTS idx_batches_document ON batches(document_id, timestamp DESC);",
+    // 按时间排序（GC 清理旧 batch）
+    "CREATE INDEX IF NOT EXISTS idx_batches_timestamp ON batches(timestamp DESC);",
+];
+
+// ─── changes 表 ─────────────────────────────────────────────────
+
+/// changes 表建表语句
 ///
-/// 覆盖三种查询场景：
-/// 1. 按 Block 查历史（最频繁）
-/// 2. 按时间查最近操作
-/// 3. 按 Block + version 查特定版本区间
-pub const CREATE_OPLOG_INDEXES: &[&str] = &[
-    // 按 Block 查变更历史（ORDER BY op_id DESC LIMIT N）
-    "CREATE INDEX IF NOT EXISTS idx_oplog_block ON oplog(block_id, op_id DESC);",
-    // 按时间查最近操作
-    "CREATE INDEX IF NOT EXISTS idx_oplog_timestamp ON oplog(timestamp DESC);",
+/// 一个 Block 在某次 Batch 中的变更记录。
+/// before_data / after_data 存储 BlockSnapshot 的 JSON。
+pub const CREATE_CHANGES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS changes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT, -- 自增 ID
+    batch_id        TEXT NOT NULL,                     -- 所属批次 ID
+    block_id        TEXT NOT NULL,                     -- 受影响的 Block ID
+    change_type     TEXT NOT NULL,                     -- created/updated/deleted/moved/restored/reparented
+    before_data     TEXT,                              -- 变更前快照 JSON（create 时为 NULL）
+    after_data      TEXT,                              -- 变更后快照 JSON（delete 时为 NULL）
+    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+);
+"#;
+
+/// changes 表索引
+pub const CREATE_CHANGES_INDEXES: &[&str] = &[
+    // 按批次查变更（undo/redo 核心操作）
+    "CREATE INDEX IF NOT EXISTS idx_changes_batch ON changes(batch_id);",
+    // 按 Block 查变更历史
+    "CREATE INDEX IF NOT EXISTS idx_changes_block ON changes(block_id, id DESC);",
 ];
 
 // ─── snapshots 表 ──────────────────────────────────────────────
 
 /// snapshots 表建表语句
 ///
-/// 记录 Block 在某个 version 的完整内容快照。
-/// 配合 oplog 实现高效的历史回溯（快照 + 增量回放）。
-/// 参考 05-oplog.md §4
+/// 文档级快照：某一时刻整篇文档所有 Block 的完整状态。
+/// 用于版本存档和整档恢复，与 Batch（细粒度）互补。
 pub const CREATE_SNAPSHOTS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS snapshots (
-    block_id       TEXT NOT NULL,                     -- Block ID
-    version        INTEGER NOT NULL,                  -- 快照对应的 Block version
-    block_type     TEXT NOT NULL,                     -- JSON BlockType
-    content_type   TEXT NOT NULL,                     -- markdown/empty/query
-    content        BLOB DEFAULT X'',                  -- 块内容
-    properties     TEXT DEFAULT '{}',                 -- JSON 属性
-    parent_id      TEXT NOT NULL,                     -- 父块 ID
-    position       TEXT NOT NULL,                     -- 排序位置
-    timestamp      TEXT NOT NULL,                     -- 快照创建时间
-    PRIMARY KEY (block_id, version)
+    id              TEXT PRIMARY KEY,                -- 快照 ID（UUID v7）
+    document_id     TEXT NOT NULL,                   -- 文档 ID
+    name            TEXT NOT NULL,                   -- 快照名称（用户可编辑）
+    timestamp       TEXT NOT NULL,                   -- 创建时间（ISO 8601）
+    block_count     INTEGER NOT NULL DEFAULT 0,      -- Block 数量（冗余字段）
+    data            TEXT NOT NULL DEFAULT '[]'       -- 完整快照数据（JSON 数组）
 );
 "#;
 
 /// snapshots 表索引
 pub const CREATE_SNAPSHOTS_INDEXES: &[&str] = &[
-    // 按 Block 查最近快照（ORDER BY version DESC LIMIT 1）
-    "CREATE INDEX IF NOT EXISTS idx_snapshots_block_ver ON snapshots(block_id, version DESC);",
+    // 按文档查快照列表
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_document ON snapshots(document_id, timestamp DESC);",
 ];

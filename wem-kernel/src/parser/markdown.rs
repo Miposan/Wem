@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::model::{generate_block_id, Block, BlockStatus, BlockType};
+use crate::util::now_iso;
 
 use super::types::{LossyInfo, ParseOptions, ParseResult, ParseWarning, SerializeResult};
 use super::{BlockParser, BlockSerializer};
@@ -39,10 +40,6 @@ impl MarkdownFormat {
 // ─── BlockParser 实现 ────────────────────────────────────────
 
 impl BlockParser for MarkdownFormat {
-    fn format_name(&self) -> &str {
-        "markdown"
-    }
-
     fn parse(&self, text: &str, options: &ParseOptions) -> Result<ParseResult, AppError> {
         if text.trim().is_empty() {
             return Ok(empty_result());
@@ -62,10 +59,6 @@ impl BlockParser for MarkdownFormat {
 // ─── BlockSerializer 实现 ────────────────────────────────────
 
 impl BlockSerializer for MarkdownFormat {
-    fn format_name(&self) -> &str {
-        "markdown"
-    }
-
     fn serialize(
         &self,
         root: &Block,
@@ -820,12 +813,6 @@ fn empty_result() -> ParseResult {
         warnings: Vec::new(),
     }
 }
-
-/// 当前时间的 ISO 8601 字符串
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
 
 // ═══════════════════════════════════════════════════════════════
 //  序列化器内部
