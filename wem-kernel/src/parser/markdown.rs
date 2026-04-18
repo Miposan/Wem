@@ -757,7 +757,8 @@ fn parse_markdown(
     } else {
         state.doc_title
     };
-    doc.properties.insert("title".to_string(), doc_title);
+    doc.properties.insert("title".to_string(), doc_title.clone());
+    doc.content = doc_title.into_bytes();
 
     Ok((doc, state.blocks, state.warnings))
 }
@@ -790,7 +791,7 @@ fn empty_result() -> ParseResult {
         doc_id.clone(), // 文档块的 document_id 指向自身
         "a0".to_string(),
         BlockType::Document,
-        Vec::new(),
+        DEFAULT_TITLE.as_bytes().to_vec(),
         HashMap::from([("title".to_string(), DEFAULT_TITLE.to_string())]),
         &now,
     );

@@ -29,8 +29,8 @@ pub enum PropertiesMode {
 /// `POST /api/v1/blocks`
 #[derive(Debug, Deserialize)]
 pub struct CreateBlockReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// 父块 ID（必填）
     pub parent_id: String,
     /// Block 类型（必填）
@@ -52,8 +52,8 @@ pub struct CreateBlockReq {
 /// `POST /api/v1/blocks/update`
 #[derive(Debug, Deserialize)]
 pub struct UpdateBlockReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 新内容（不传则不更新 content）
@@ -73,17 +73,20 @@ pub struct UpdateBlockReq {
 /// 移动 Block 请求
 ///
 /// `POST /api/v1/blocks/move`
+///
+/// 定位方式（互斥）：
+/// - before_id / after_id → 从兄弟块的 parent_id 推导目标父块，position 由兄弟决定
+/// - target_parent_id     → 作为该父块的首个子块（无兄弟定位时使用）
 #[derive(Debug, Deserialize)]
 pub struct MoveBlockReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 目标父块 ID（可选）
     ///
-    /// 不传时后端按优先级推导：
-    /// 1. 若有 before_id/after_id → 从该兄弟块的 parent_id 推导
-    /// 2. 否则保持当前父块不变
+    /// 仅在未指定 before_id/after_id 时使用，含义为"作为该父块的首个子块"。
+    /// 有 before_id/after_id 时此字段被忽略（父块从兄弟块推导）。
     pub target_parent_id: Option<String>,
     /// 移到此 Block 之前（可选）
     pub before_id: Option<String>,
@@ -99,8 +102,8 @@ pub struct MoveBlockReq {
 /// 同文档内移动为主，移动后自动触发 heading 层级重组。
 #[derive(Debug, Deserialize)]
 pub struct MoveHeadingTreeReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// Block ID（heading 子树根节点）
     pub id: String,
     /// 移到此 Block 之前（可选）
@@ -115,17 +118,18 @@ pub struct MoveHeadingTreeReq {
 ///
 /// 将一个 Document（及其全部后代）嫁接到另一个 Document 下，
 /// 本质是树的重排序 / 跨文档嫁接。需要批量更新后代的 document_id。
+///
+/// 定位方式与 MoveBlockReq 一致：before/after 互斥 target_parent_id。
 #[derive(Debug, Deserialize)]
 pub struct MoveDocumentTreeReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// Block ID（document 子树根节点）
     pub id: String,
     /// 目标父块 ID（可选）
     ///
-    /// 不传时后端按优先级推导：
-    /// 1. 若有 before_id/after_id → 从该兄弟块的 parent_id 推导
-    /// 2. 否则保持当前父块不变
+    /// 仅在未指定 before_id/after_id 时使用，含义为"作为该父块的首个子块"。
+    /// 有 before_id/after_id 时此字段被忽略（父块从兄弟块推导）。
     pub target_parent_id: Option<String>,
     /// 移到此 Block 之前（可选）
     pub before_id: Option<String>,
@@ -143,8 +147,8 @@ pub struct MoveDocumentTreeReq {
 /// 后端原子性地完成「更新当前块 + 创建新块」两步操作。
 #[derive(Debug, Deserialize)]
 pub struct SplitReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// Block ID
     pub id: String,
     /// 光标前的内容（用于更新当前块）
@@ -167,8 +171,8 @@ pub struct SplitReq {
 /// 原子操作，无需前端分别调用 update + delete。
 #[derive(Debug, Deserialize)]
 pub struct MergeReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// Block ID
     pub id: String,
 }
@@ -180,8 +184,8 @@ pub struct MergeReq {
 /// `POST /api/v1/documents`
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// 文档标题
     pub title: String,
     /// 父文档 ID（不传 = 根文档）
@@ -197,8 +201,8 @@ pub struct CreateDocumentReq {
 /// `POST /api/v1/documents/import`
 #[derive(Debug, Deserialize)]
 pub struct ImportTextReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// 源格式（"markdown" 或 "md"）
     pub format: String,
     /// 文本内容
@@ -223,8 +227,8 @@ pub struct ImportTextReq {
 /// 参考 03-api-rest.md §3 "批量操作"
 #[derive(Debug, Deserialize)]
 pub struct BatchReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     /// 操作列表（上限 50 条）
     pub operations: Vec<BatchOp>,
 }
@@ -305,8 +309,8 @@ pub struct GetChildrenReq {
 /// `POST /api/v1/documents/delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteDocumentReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     pub id: String,
 }
 
@@ -341,8 +345,8 @@ pub struct GetBlockReq {
 /// `POST /api/v1/blocks/delete`
 #[derive(Debug, Deserialize)]
 pub struct DeleteBlockReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     pub id: String,
 }
 
@@ -351,8 +355,8 @@ pub struct DeleteBlockReq {
 /// `POST /api/v1/blocks/restore`
 #[derive(Debug, Deserialize)]
 pub struct RestoreReq {
-    /// 操作 ID（前端生成，用于 SSE 回声去重）
-    pub operation_id: Option<String>,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
     pub id: String,
 }
 

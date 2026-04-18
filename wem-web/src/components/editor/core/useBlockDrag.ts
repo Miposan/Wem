@@ -8,16 +8,21 @@
  * - 管理拖拽状态（draggingBlockId、dropTarget）
  * - 计算 drop target 位置（before/after/child）
  * - 校验合法性（不可拖入自身后代）
- * - 通过 onAction 发出 move-block 操作
+ * - heading 有子节点时走 move-heading-tree（后端整体移动子树）
+ * - 其他情况走 move-block
  */
 
 import { useCallback, useRef, useState } from 'react'
 import type { BlockNode } from '@/types/api'
-import type { DragHandlers, DragState, DropPosition, DropTarget } from './types'
+import type { BlockAction, DragHandlers, DragState, DropPosition, DropTarget } from './types'
 import { findBlockById, flattenTree } from './BlockOperations'
 
 // ─── 配置常量 ───
-// （无需阈值常量：基于 .wem-block-content rect 的简单上下半区判定）
+
+/** 鼠标距离块底部多少像素内判定为"放在块之后" */
+const AFTER_THRESHOLD = 8
+/** 鼠标距离左侧缩进多少像素内判定为"拖入容器作为子块" */
+const CHILD_INDENT_THRESHOLD = 40
 
 // ─── Hook 参数 ───
 
@@ -25,7 +30,7 @@ export interface UseBlockDragOptions {
   /** 获取当前块树快照 */
   getTree: () => BlockNode[]
   /** 拖拽完成时发出 action */
-  onAction: (action: { type: 'move-block'; blockId: string; target: DropTarget }) => void
+  onAction: (action: BlockAction) => void
 }
 
 // ─── 辅助函数 ───
@@ -132,11 +137,11 @@ export function useBlockDrag(options: UseBlockDragOptions) {
 
       const tree = getTree()
 
-      // 不能放到自己的后代上
-      if (isDescendantOf(tree, targetBlockId, dragBlockId)) return false
-
-      // 验证：不能把块拖成自己的兄弟+自己的后代的位置
-      // （这种情况已经被上面的 isDescendantOf 覆盖了）
+      // 只有 child 位置才会产生循环（拖入自己的后代作为子块），需要阻止
+      // before/after 位置只是放在后代旁边，后端会自己处理父子关系
+      if (position === 'child' && isDescendantOf(tree, targetBlockId, dragBlockId)) {
+        return false
+      }
 
       return true
     },
@@ -253,8 +258,24 @@ export function useBlockDrag(options: UseBlockDragOptions) {
       dragBlockIdRef.current = null
       setDragState({ draggingBlockId: null, dropTarget: null })
 
-      // 发出 move-block action
-      onAction({ type: 'move-block', blockId: dragBlockId, target })
+      // 区分 heading-tree vs move-block：
+      // 目标是自己的后代 → move-block（后端会解除父子关系）
+      // heading 有子节点 + 目标不是自己的后代 → move-heading-tree（整体移动子树）
+      // 其他 → move-block
+      const tree = getTree()
+      const draggedBlock = findBlockById(tree, dragBlockId)
+      const targetIsDescendant = isDescendantOf(tree, targetBlockId, dragBlockId)
+
+      if (
+        !targetIsDescendant &&
+        draggedBlock &&
+        draggedBlock.block_type.type === 'heading' &&
+        draggedBlock.children.length > 0
+      ) {
+        onAction({ type: 'move-heading-tree', blockId: dragBlockId, target })
+      } else {
+        onAction({ type: 'move-block', blockId: dragBlockId, target })
+      }
     },
     [computeDropPosition, isValidDrop, onAction],
   )

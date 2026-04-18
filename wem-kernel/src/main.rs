@@ -4,16 +4,11 @@
 //! Block = 一切数据的原子单位（文档、段落、标题、列表项……都是 Block）。
 //! 内核提供 REST API，人和 AI 通过同一套接口操作 Block 树。
 
-// 声明模块（每个 mod 对应 src/ 下的同名文件或目录下的 mod.rs）
-mod api;        // API 数据传输对象（请求/响应/查询参数）
+// 模块声明在 lib.rs 中，main.rs 只保留 config（服务器专用）
 mod config;     // 全局配置（端口、数据库路径）
-mod error;      // 统一错误处理 + API 响应格式
-mod model;      // 数据模型（Block、BlockType 等）
-mod repo;        // 数据访问层（SQLite 连接、建表、查询）
-mod service;    // 业务逻辑层（Block CRUD、树操作）
-mod handler;    // HTTP 处理层（Axum route handlers）
-mod parser;     // 文本格式转换（Markdown ↔ Block 树，可扩展）
-mod util;       // 纯工具函数（零外部依赖的算法）
+
+// handler 直接在 main.rs 中使用 lib 的路径
+use wem_kernel::handler;
 
 use axum::{Router, routing::{get, post}, extract::DefaultBodyLimit};
 use axum::http::header::HeaderValue;
@@ -26,7 +21,7 @@ async fn main() {
     // 加载配置（配置文件 + 环境变量）
     let cfg = config::load();
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
-    let db = repo::init_db(&cfg.database.path)
+    let db = wem_kernel::repo::init_db(&cfg.database.path)
         .expect("数据库初始化失败");
 
 

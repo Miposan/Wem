@@ -2,6 +2,11 @@
 name = "wem-kernel"
 version = "0.1.0"
 edition = "2024"
+default-run = "wem-kernel"
+
+[[bin]]
+name = "wem-cli"
+path = "src/bin/wem_cli.rs"
 
 [dependencies]
 # Web框架，处理 HTTP 请求/路由

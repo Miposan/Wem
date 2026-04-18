@@ -36,7 +36,7 @@ pub async fn get_block_history(
         changes
             .into_iter()
             .map(|c| crate::model::oplog::HistoryEntry {
-                batch_id: c.batch_id,
+                operation_id: c.operation_id,
                 action: c.change_type.as_str().to_string(),
                 description: None,
                 timestamp: String::new(), // Change 不含 timestamp，由 Batch 提供
@@ -78,7 +78,7 @@ pub async fn undo(
     for doc_id in &result.affected_document_ids {
         crate::service::event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
             document_id: doc_id.clone(),
-            operation_id: None,
+            editor_id: None,
         });
     }
 
@@ -103,7 +103,7 @@ pub async fn redo(
     for doc_id in &result.affected_document_ids {
         crate::service::event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
             document_id: doc_id.clone(),
-            operation_id: None,
+            editor_id: None,
         });
     }
 

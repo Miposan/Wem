@@ -30,6 +30,7 @@ import {
   executeFocusNext,
   executeConvertBlock,
   executeMove,
+  executeMoveHeadingTree,
 } from './core/Commands'
 import type { CommandContext } from './core/Commands'
 import type { BlockAction, EditorSelection } from './core/types'
@@ -87,7 +88,7 @@ export function WemEditor({
   const handleActionRef = useRef<(action: BlockAction) => void>(() => {})
 
   const handleDragAction = useCallback(
-    (action: { type: 'move-block'; blockId: string; target: { blockId: string; position: 'before' | 'after' | 'child' } }) => {
+    (action: BlockAction) => {
       handleActionRef.current(action)
     },
     [],
@@ -99,17 +100,17 @@ export function WemEditor({
   })
 
   /**
-   * SSE 回声去重：追踪自身发起的操作 ID。
-   * 前端为每个结构操作生成唯一 operation_id，后端在 SSE 事件中原样回传。
-   * 收到 SSE 事件时，若 operation_id 在此集合中，说明是自身操作的回声，跳过 refetch。
+   * SSE 回声去重：追踪自身发起的 editor_id。
+   * 前端为每个结构操作生成唯一 editor_id，后端在 SSE 事件中原样回传。
+   * 收到 SSE 事件时，若 editor_id 在此集合中，说明是自身操作的回声，跳过 refetch。
    */
-  const pendingOperationIds = useRef<Set<string>>(new Set())
+  const pendingEditorIds = useRef<Set<string>>(new Set())
 
-  /** 将 operation_id 延迟清理，避免 SSE 事件到达时已被删除导致误判为外部事件 */
+  /** 将 editor_id 延迟清理，避免 SSE 事件到达时已被删除导致误判为外部事件 */
   const addPendingOperationId = useCallback((id: string) => {
-    pendingOperationIds.current.add(id)
+    pendingEditorIds.current.add(id)
     setTimeout(() => {
-      pendingOperationIds.current.delete(id)
+      pendingEditorIds.current.delete(id)
     }, 5000)
   }, [])
 
@@ -179,7 +180,7 @@ export function WemEditor({
   // ─── SSE 实时事件订阅 ───
   //
   // 后端广播所有 mutation。自身操作已通过 OperationQueue 悲观更新 UI，
-  // 同源事件通过 operation_id 匹配抑制，仅外部事件触发 refetch。
+  // 同源事件通过 editor_id 匹配抑制，仅外部事件触发 refetch。
 
   // 结构性变更（创建/删除/移动/恢复）统一 refetch 整个文档
   const refetchDocument = useCallback(() => {
@@ -190,17 +191,17 @@ export function WemEditor({
   }, [documentId, setTreeSync])
 
   /**
-   * SSE 结构性事件处理：基于 operation_id 去重。
+   * SSE 结构性事件处理：基于 editor_id 去重。
    *
-   * 前端发起结构操作时生成唯一 operation_id 并记录到 pendingOperationIds。
-   * 后端在 SSE 事件中原样回传该 operation_id。
-   * 收到事件时，若 operation_id 在 pending 集合中 → 自身操作回声，跳过 refetch。
+   * 前端发起结构操作时生成唯一 editor_id 并记录到 pendingEditorIds。
+   * 后端在 SSE 事件中原样回传该 editor_id。
+   * 收到事件时，若 editor_id 在 pending 集合中 → 自身操作回声，跳过 refetch。
    * 否则 → 外部操作，触发 refetch。
    */
   const handleStructuralEvent = useCallback(
-    (event: { operation_id?: string }) => {
-      if (event.operation_id && pendingOperationIds.current.has(event.operation_id)) {
-        console.log(`[SSE] 自身操作回声 (${event.operation_id})，跳过 refetch`)
+    (event: { editor_id?: string }) => {
+      if (event.editor_id && pendingEditorIds.current.has(event.editor_id)) {
+        console.log(`[SSE] 自身操作回声 (${event.editor_id})，跳过 refetch`)
         return
       }
       refetchDocument()
@@ -230,7 +231,7 @@ export function WemEditor({
       },
       [setTreeAsync],
     ),
-    // 结构性变更：基于 operation_id 去重
+    // 结构性变更：基于 editor_id 去重
     onBlockCreated: handleStructuralEvent,
     onBlockDeleted: handleStructuralEvent,
     onBlockMoved: handleStructuralEvent,
@@ -240,9 +241,9 @@ export function WemEditor({
 
   // ─── Command Context ───
 
-  const makeContext = useCallback((operationId?: string): CommandContext => ({
+  const makeContext = useCallback((editorId?: string): CommandContext => ({
     documentId,
-    operationId,
+    editorId,
     getTree: () => treeRef.current,
     setTreeSync,
     cancelPendingSave,
@@ -253,15 +254,15 @@ export function WemEditor({
     },
   }), [documentId, setTreeSync, cancelPendingSave])
 
-  /** 结构操作入队辅助：生成 operation_id + 追踪 pending 集合 */
+  /** 结构操作入队辅助：生成 editor_id + 追踪 pending 集合 */
   const enqueueStructuralOp = useCallback(
     (label: string, execute: (ctx: CommandContext) => Promise<void>) => {
       opQueue.current.enqueue({
         label,
         execute: async () => {
-          const operationId = crypto.randomUUID()
-          addPendingOperationId(operationId)
-          await execute(makeContext(operationId))
+          const editorId = crypto.randomUUID()
+          addPendingOperationId(editorId)
+          await execute(makeContext(editorId))
         },
       })
     },
@@ -341,7 +342,7 @@ export function WemEditor({
               ctx.cancelPendingSave(id)
             }
             for (const id of blockIds) {
-              await deleteBlock(id, ctx.operationId)
+              await deleteBlock(id, ctx.editorId)
             }
             ctx.setTreeSync((prev) => {
               let result = prev
@@ -362,6 +363,13 @@ export function WemEditor({
           const { blockId, target } = action
           enqueueStructuralOp(`move:${blockId}`, (ctx) =>
             executeMove(ctx, { blockId, target }),
+          )
+          break
+        }
+        case 'move-heading-tree': {
+          const { blockId, target } = action
+          enqueueStructuralOp(`move-heading-tree:${blockId}`, (ctx) =>
+            executeMoveHeadingTree(ctx, { blockId, target }),
           )
           break
         }
@@ -441,15 +449,15 @@ export function WemEditor({
       // 树不为空，忽略
       if (treeRef.current.length > 0) return
 
-      const operationId = crypto.randomUUID()
-      addPendingOperationId(operationId)
+      const editorId = crypto.randomUUID()
+      addPendingOperationId(editorId)
 
       createBlock({
         parent_id: documentId,
         block_type: { type: 'paragraph' },
         content: '',
         content_type: 'markdown',
-        operation_id: operationId,
+        editor_id: editorId,
       })
         .then((created) => {
           const newBlock: BlockNode = { ...created, children: [] }

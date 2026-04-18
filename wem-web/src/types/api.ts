@@ -99,7 +99,7 @@ export interface CreateBlockReq {
   content?: string
   properties?: Record<string, string>
   after_id?: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface UpdateBlockReq {
@@ -108,7 +108,7 @@ export interface UpdateBlockReq {
   block_type?: BlockType
   properties?: Record<string, string>
   properties_mode?: 'merge' | 'replace'
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface MoveBlockReq {
@@ -116,14 +116,14 @@ export interface MoveBlockReq {
   target_parent_id?: string
   before_id?: string
   after_id?: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface MoveTreeReq {
   id: string
   before_id?: string
   after_id?: string
-  operation_id?: string
+  editor_id?: string
 }
 
 // ---- Batch ----
@@ -165,7 +165,7 @@ export type BatchOp = BatchCreateOp | BatchUpdateOp | BatchDeleteOp | BatchMoveO
 
 export interface BatchReq {
   operations: BatchOp[] // 上限 50
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface BatchOpResult {
@@ -212,12 +212,14 @@ export interface ExportResult {
 
 export interface DeleteResult {
   id: string
+  document_id: string
   version: number
   cascade_count: number
 }
 
 export interface RestoreResult {
   id: string
+  document_id: string
   version: number
   cascade_count: number
 }
@@ -232,7 +234,7 @@ export interface HistoryEntry {
 // ---- Undo / Redo ----
 
 export interface UndoRedoResult {
-  batch_id: string
+  operation_id: string
   affected_block_ids: string[]
   affected_document_ids: string[]
   action: string
@@ -251,7 +253,7 @@ export interface SplitReq {
   new_block_type?: BlockType
   /** 是否将新块嵌套为当前块的子块（heading Enter 时为 true） */
   nest_under_parent?: boolean
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface SplitResult {
@@ -268,7 +270,7 @@ export interface MergeReq {
   direction?: string
   /** 前一个兄弟块的当前内容（校验用，可选） */
   prev_content?: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface MergeResult {
@@ -290,7 +292,7 @@ export interface GetChildrenReq {
 
 export interface DeleteDocumentReq {
   id: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface ExportReq {
@@ -305,12 +307,12 @@ export interface GetBlockReq {
 
 export interface DeleteBlockReq {
   id: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface RestoreReq {
   id: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface GetHistoryReq {

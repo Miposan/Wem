@@ -58,13 +58,16 @@ pub fn create_document(
         }
     };
 
-    // 2. 计算 position（在同级兄弟文档中的位置）
+    // 2. 同层文档名去重（自动加序号）
+    let final_title = repo::deduplicate_doc_name(&conn, &parent_id_actual, &title)?;
+
+    // 3. 计算 position（在同级兄弟文档中的位置）
     let position =
         position::calculate_insert_position(&conn, &parent_id_actual, after_id.as_deref())?;
 
-    // 3. 创建 Document Block
+    // 4. 创建 Document Block
     let mut properties = HashMap::new();
-    properties.insert("title".to_string(), title.clone());
+    properties.insert("title".to_string(), final_title.clone());
     let properties_json = serde_json::to_string(&properties).unwrap_or_default();
     let block_type_json = serde_json::to_string(&BlockType::Document).unwrap();
 
@@ -75,7 +78,7 @@ pub fn create_document(
         position,
         block_type: block_type_json,
         content_type: "markdown".to_string(),
-        content: title.into_bytes(),
+        content: final_title.into_bytes(),
         properties: properties_json,
         version: 1,
         status: "normal".to_string(),
@@ -88,7 +91,7 @@ pub fn create_document(
     })
     .map_err(|e| AppError::Internal(format!("创建文档失败: {}", e)))?;
 
-    // 4. 创建空段落子块（段落是文档的子块，与文档不在同一 parent 下）
+    // 5. 创建空段落子块（段落是文档的子块，与文档不在同一 parent 下）
     let para_id = generate_block_id();
     let para_position = position::generate_first();
     let para_block_type = serde_json::to_string(&BlockType::Paragraph).unwrap();
@@ -113,7 +116,7 @@ pub fn create_document(
     })
     .map_err(|e| AppError::Internal(format!("创建默认段落失败: {}", e)))?;
 
-    // 5. 查询并返回文档 Block
+    // 6. 查询并返回文档 Block
     repo::find_by_id_raw(&conn, &doc_id)
         .map_err(|e| AppError::Internal(format!("查询刚创建的文档失败: {}", e)))
 }
@@ -132,18 +135,12 @@ pub fn get_document_content(db: &Db, doc_id: &str) -> Result<DocumentContentResu
     let document = repo::find_by_id(&conn, doc_id)
         .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", doc_id)))?;
 
-    // 递归 CTE 查询所有未删除的后代（不含文档块自身）
+    // 递归 CTE 查询所有未删除的后代（不含文档块自身和子文档）
     let all_blocks = repo::find_descendants(&conn, doc_id)
         .map_err(|e| AppError::Internal(format!("查询文档内容失败: {}", e)))?;
 
-    // 过滤：只保留非 document 类型的内容块
-    let content_blocks: Vec<Block> = all_blocks
-        .into_iter()
-        .filter(|b| !matches!(b.block_type, BlockType::Document))
-        .collect();
-
-    // 构建嵌套树
-    let blocks = build_block_tree(doc_id, &content_blocks);
+    // 构建嵌套树（子文档由 get_document_children 独立加载）
+    let blocks = build_block_tree(doc_id, &all_blocks);
 
     Ok(DocumentContentResult {
         document,
@@ -239,10 +236,7 @@ pub fn move_document_tree(db: &Db, req: MoveDocumentTreeReq) -> Result<Block, Ap
 
     let conn = crate::repo::lock_db(db);
 
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
-
-    let result = (|| -> Result<Block, AppError> {
+    crate::service::content::run_in_transaction(&conn, || -> Result<Block, AppError> {
         // 1. 验证根块是 Document
         let current = repo::find_by_id(&conn, id)
             .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
@@ -275,16 +269,32 @@ pub fn move_document_tree(db: &Db, req: MoveDocumentTreeReq) -> Result<Block, Ap
             }
         }
 
-        // 4. 循环引用检测
+        // 4. 同层文档名去重（跨父块移动时自动加序号）
+        if target_parent_id != current.parent_id {
+            let title = String::from_utf8_lossy(&current.content);
+            let deduped = repo::deduplicate_doc_name(&conn, &target_parent_id, &title)?;
+            if deduped != title {
+                // 更新文档标题
+                repo::update_content_and_props(
+                    &conn,
+                    &current.id,
+                    &deduped.into_bytes(),
+                    &serde_json::to_string(&current.properties).unwrap_or_default(),
+                    &now_iso(),
+                )?;
+            }
+        }
+
+        // 5. 循环引用检测
         content::validate_no_cycle(&conn, id, &target_parent_id, &current.parent_id)?;
 
-        // 5. 计算新 position（在目标父块的子列表中重排序）
+        // 6. 计算新 position（在目标父块的子列表中重排序）
         let new_position = position::calculate_move_position(
             &conn, &target_parent_id,
             req.before_id.as_deref(), req.after_id.as_deref(),
         )?;
 
-        // 6. 移动根块：只更新 parent_id + position
+        // 7. 移动根块：只更新 parent_id + position
         //    Document 始终拥有自身子树，document_id = 自身 id 不随父块变化
         let now = now_iso();
         let rows = repo::update_parent_position(
@@ -296,21 +306,18 @@ pub fn move_document_tree(db: &Db, req: MoveDocumentTreeReq) -> Result<Block, Ap
             return Err(AppError::NotFound(format!("Block {} 不存在", id)));
         }
 
-        // 7. 后代完全不变：document_id 不动，内部结构不动
+        // 8. 后代完全不变：document_id 不动，内部结构不动
 
-        // 8. 记录历史
+        // 9. 记录历史
         let after = repo::find_by_id_raw(&conn, id)
             .map_err(|e| AppError::Internal(format!("查询移动后的 Block 失败: {}", e)))?;
 
-        let batch = oplog::new_batch(Action::Move, req.operation_id.clone(), &current.document_id);
+        let op = oplog::new_operation(Action::Move, &current.document_id, req.editor_id.clone());
         let change = oplog::block_change_pair(
-            &batch.id, id, ChangeType::Moved, &current, &after,
+            &op.id, id, ChangeType::Moved, &current, &after,
         );
-        oplog::record_batch(&conn, &batch, &[change])?;
+        oplog::record_operation(&conn, &op, &[change])?;
 
         Ok(after)
-    })();
-
-    content::finish_tx(&conn, &result)?;
-    result
+    })
 }

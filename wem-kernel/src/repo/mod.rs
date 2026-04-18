@@ -72,12 +72,17 @@ pub fn init_db(path: &str) -> Result<Db, AppError> {
             .map_err(|e| AppError::Internal(format!("建索引失败: {}", e)))?;
     }
 
-    // 建 batches 表 + 索引
-    conn.execute_batch(schema::CREATE_BATCHES_TABLE)
-        .map_err(|e| AppError::Internal(format!("建 batches 表失败: {}", e)))?;
-    for idx_sql in schema::CREATE_BATCHES_INDEXES {
+    // 增量迁移：batches → operations（旧数据库升级）
+    conn.execute_batch("ALTER TABLE batches RENAME TO operations").ok();
+    conn.execute_batch("ALTER TABLE operations RENAME COLUMN operation_id TO editor_id").ok();
+    conn.execute_batch("ALTER TABLE changes RENAME COLUMN batch_id TO operation_id").ok();
+
+    // 建 operations 表 + 索引
+    conn.execute_batch(schema::CREATE_OPERATIONS_TABLE)
+        .map_err(|e| AppError::Internal(format!("建 operations 表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_OPERATIONS_INDEXES {
         conn.execute_batch(idx_sql)
-            .map_err(|e| AppError::Internal(format!("建 batches 索引失败: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("建 operations 索引失败: {}", e)))?;
     }
 
     // 建 changes 表 + 索引
@@ -146,28 +151,19 @@ fn ensure_root_block(conn: &Connection) -> Result<(), AppError> {
 
 // ─── 测试基础设施 ──────────────────────────────────────────────
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-
-    /// 创建内存数据库（用于单元测试）
-    ///
-    /// 复刻 `init_db` 的完整流程，但使用 `:memory:` SQLite：
-    /// 1. 打开内存连接
-    /// 2. 执行建表 DDL + 索引
-    /// 3. 插入全局根块
-    ///
-    /// 每次调用返回独立的数据库实例，测试间互不干扰。
-    /// 整个过程在微秒级完成，无需清理。
-    pub fn init_test_db() -> Db {
+/// 创建内存数据库
+///
+/// 复刻 `init_db` 的完整流程，但使用 `:memory:` SQLite。
+/// 供 CLI 和测试使用。
+pub fn init_memory_db() -> Db {
         let conn = Connection::open_in_memory()
             .expect("内存数据库创建失败");
 
         // 建表（与 init_db 保持一致）
         conn.execute_batch(schema::CREATE_BLOCKS_TABLE)
             .expect("建表失败");
-        conn.execute_batch(schema::CREATE_BATCHES_TABLE)
-            .expect("建 batches 表失败");
+        conn.execute_batch(schema::CREATE_OPERATIONS_TABLE)
+            .expect("建 operations 表失败");
         conn.execute_batch(schema::CREATE_CHANGES_TABLE)
             .expect("建 changes 表失败");
 
@@ -175,7 +171,7 @@ pub(crate) mod tests {
         for idx_sql in schema::CREATE_BLOCKS_INDEXES {
             conn.execute_batch(idx_sql).expect("建索引失败");
         }
-        for idx_sql in schema::CREATE_BATCHES_INDEXES {
+        for idx_sql in schema::CREATE_OPERATIONS_INDEXES {
             conn.execute_batch(idx_sql).expect("建 batches 索引失败");
         }
         for idx_sql in schema::CREATE_CHANGES_INDEXES {
@@ -185,5 +181,13 @@ pub(crate) mod tests {
         ensure_root_block(&conn).expect("创建根块失败");
 
         Arc::new(Mutex::new(conn))
+    }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub fn init_test_db() -> Db {
+        init_memory_db()
     }
 }

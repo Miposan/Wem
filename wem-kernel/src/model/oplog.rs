@@ -1,35 +1,35 @@
 //! 操作日志（Oplog）数据模型
 //!
-//! 基于 batch-based 操作日志，为文档提供 undo/redo 能力。
+//! 基于 Operation-based 操作日志，为文档提供 undo/redo 能力。
 //!
 //! ## 双层存档架构
 //!
 //! | 层级 | 粒度 | 用途 | 生命周期 |
 //! |------|------|------|----------|
-//! | **Batch + Change** | 细粒度（单次操作） | undo/redo | 短期，被快照压缩后可清理 |
+//! | **Operation + Change** | 细粒度（单次操作） | undo/redo | 短期，被快照压缩后可清理 |
 //! | **Snapshot** | 粗粒度（整篇文档） | 版本存档、恢复 | 长期，用户手动管理 |
 //!
-//! ### Batch（细粒度）
-//! - 每次用户操作产生一个 Batch（全局唯一 batch_id）
-//! - Batch 内记录所有受影响 Block 的 before/after 快照
+//! ### Operation（细粒度）
+//! - 每次用户操作产生一个 Operation（全局唯一 id）
+//! - Operation 内记录所有受影响 Block 的 before/after 快照
 //! - undo = 恢复 before 快照；redo = 恢复 after 快照
 //!
 //! ### Snapshot（粗粒度）
 //! - 某一时刻整篇文档所有 Block 的完整状态
-//! - 触发方式：手动保存 / 每 N 个 Batch 自动 / 导入前自动
+//! - 触发方式：手动保存 / 每 N 个 Operation 自动 / 导入前自动
 //! - 恢复 = 将文档内所有 Block 回滚到快照时的状态
-//! - 快照之间的 Batch 可用于 undo/redo；快照之前的 Batch 可被 GC 清理
+//! - 快照之间的 Operation 可用于 undo/redo；快照之前的可被 GC 清理
 
 use serde::{Deserialize, Serialize};
 
-// ─── Batch ─────────────────────────────────────────────────────
+// ─── Operation ─────────────────────────────────────────────────
 
-/// 一次用户操作产生的一个变更批次
+/// 一次用户操作产生的变更记录
 ///
-/// 对应 `batches` 表的一行。batch_id 由客户端生成或服务端生成。
+/// 对应 `operations` 表的一行。id 由服务端生成（时间有序）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Batch {
-    /// 批次 ID（UUID v7，时间有序）
+pub struct Operation {
+    /// 操作 ID（时间有序唯一 ID）
     pub id: String,
     /// 所属文档 ID（undo/redo 按文档作用域隔离）
     pub document_id: String,
@@ -41,6 +41,8 @@ pub struct Batch {
     pub timestamp: String,
     /// 是否已被撤销
     pub undone: bool,
+    /// 编辑者标识（前端会话级 UUID，用于 SSE 回声去重）
+    pub editor_id: Option<String>,
 }
 
 // ─── Action ────────────────────────────────────────────────────
@@ -95,7 +97,7 @@ impl Action {
 
 // ─── Change ────────────────────────────────────────────────────
 
-/// 一个 Block 在某次 Batch 中的变更记录
+/// 一个 Block 在某次 Operation 中的变更记录
 ///
 /// 对应 `changes` 表的一行。before/after 存储 Block 的完整快照。
 /// - create: before = None, after = 完整 Block
@@ -105,8 +107,8 @@ impl Action {
 pub struct Change {
     /// 自增 ID
     pub id: i64,
-    /// 所属批次 ID
-    pub batch_id: String,
+    /// 所属操作 ID
+    pub operation_id: String,
     /// 受影响的 Block ID
     pub block_id: String,
     /// 变更类型（create / update / delete / reparent）
@@ -198,8 +200,8 @@ impl BlockSnapshot {
 /// Undo/Redo 结果
 #[derive(Debug, Clone, Serialize)]
 pub struct UndoRedoResult {
-    /// 恢复的批次 ID
-    pub batch_id: String,
+    /// 恢复的操作 ID
+    pub operation_id: String,
     /// 受影响的 Block ID 列表
     pub affected_block_ids: Vec<String>,
     /// 受影响的 document_id 集合（用于 SSE 广播）
@@ -211,7 +213,7 @@ pub struct UndoRedoResult {
 /// 历史条目（API 返回）
 #[derive(Debug, Clone, Serialize)]
 pub struct HistoryEntry {
-    pub batch_id: String,
+    pub operation_id: String,
     pub action: String,
     pub description: Option<String>,
     pub timestamp: String,

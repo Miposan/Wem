@@ -44,8 +44,10 @@ export type BlockAction =
   | { type: 'convert-block'; blockId: string; content: string; blockType: BlockType }
   /** 跨块选区删除 */
   | { type: 'delete-range'; blockIds: string[] }
-  /** 块拖拽移动 */
+  /** 块拖拽移动（普通块 / 无子节点的 heading） */
   | { type: 'move-block'; blockId: string; target: DropTarget }
+  /** heading 子树整体拖拽移动（折叠 heading + 其下属内容） */
+  | { type: 'move-heading-tree'; blockId: string; target: DropTarget }
 
 // ─── Component Props ───
 

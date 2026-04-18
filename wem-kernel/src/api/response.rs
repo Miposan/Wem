@@ -17,6 +17,7 @@ use crate::model::{Block, ParseWarning};
 #[derive(Debug, Serialize)]
 pub struct DeleteResult {
     pub id: String,
+    pub document_id: String,
     pub version: u64,
     pub cascade_count: u32,
 }
@@ -27,6 +28,7 @@ pub struct DeleteResult {
 #[derive(Debug, Serialize)]
 pub struct RestoreResult {
     pub id: String,
+    pub document_id: String,
     pub version: u64,
     pub cascade_count: u32,
 }

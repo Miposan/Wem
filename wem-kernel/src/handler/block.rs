@@ -28,14 +28,14 @@ pub async fn create_block(
     if req.content.len() > 1_000_000 {
         return Err(AppError::BadRequest("content 长度超过限制 (1MB)".to_string()));
     }
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let blk = tokio::task::spawn_blocking(move || content::create_block(&db, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: blk.document_id.clone(),
-        operation_id,
+        editor_id,
         block: blk.clone(),
     });
 
@@ -72,7 +72,7 @@ pub async fn update_block(
             return Err(AppError::BadRequest("content 长度超过限制 (1MB)".to_string()));
         }
     }
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || content::update_block(&db, &id, req))
         .await
@@ -80,7 +80,7 @@ pub async fn update_block(
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
         document_id: blk.document_id.clone(),
-        operation_id,
+        editor_id,
         block: blk.clone(),
     });
 
@@ -94,9 +94,8 @@ pub async fn delete_block(
     State(db): State<Db>,
     Json(req): Json<DeleteBlockReq>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id;
-    let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
         content::delete_block(&db, &id)
     })
@@ -104,8 +103,8 @@ pub async fn delete_block(
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
-        document_id: id_clone,
-        operation_id,
+        document_id: result.document_id.clone(),
+        editor_id,
         block_id: result.id.clone(),
         cascade_count: result.cascade_count,
     });
@@ -122,7 +121,7 @@ pub async fn move_block(
     State(db): State<Db>,
     Json(req): Json<MoveBlockReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id.clone();
     let blk = tokio::task::spawn_blocking(move || content::move_block(&db, &id, req))
         .await
@@ -130,7 +129,7 @@ pub async fn move_block(
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockMoved {
         document_id: blk.document_id.clone(),
-        operation_id,
+        editor_id,
         block: blk.clone(),
     });
 
@@ -144,14 +143,14 @@ pub async fn move_heading_tree(
     State(db): State<Db>,
     Json(req): Json<MoveHeadingTreeReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let blk = tokio::task::spawn_blocking(move || content::move_heading_tree(&db, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockMoved {
         document_id: blk.document_id.clone(),
-        operation_id,
+        editor_id,
         block: blk.clone(),
     });
 
@@ -167,26 +166,25 @@ pub async fn restore_block(
     State(db): State<Db>,
     Json(req): Json<RestoreReq>,
 ) -> Result<Json<ApiResponse<RestoreResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id;
     let result = tokio::task::spawn_blocking(move || {
         let restore_result = content::restore_block(&db, &id)?;
-        // 在同一锁范围内查询最新状态用于广播
         let restored = content::get_block(&db, &id, false)?;
         Ok::<_, AppError>((restore_result, restored))
     })
     .await
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    let (_result, restored) = result;
+    let (restore_result, restored) = result;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockRestored {
-        document_id: restored.document_id.clone(),
-        operation_id,
+        document_id: restore_result.document_id.clone(),
+        editor_id,
         block: restored,
     });
 
-    Ok(Json(ApiResponse::ok(Some(_result))))
+    Ok(Json(ApiResponse::ok(Some(restore_result))))
 }
 
 // ─── Split / Merge ─────────────────────────────────────────────
@@ -198,7 +196,7 @@ pub async fn split_block(
     State(db): State<Db>,
     Json(req): Json<SplitReq>,
 ) -> Result<Json<ApiResponse<SplitResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id.clone();
     let result = tokio::task::spawn_blocking(move || {
         content::split_block(&db, &id, req)
@@ -209,12 +207,12 @@ pub async fn split_block(
     let doc_id = result.updated_block.document_id.clone();
     crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
         document_id: doc_id.clone(),
-        operation_id: operation_id.clone(),
+        editor_id: editor_id.clone(),
         block: result.updated_block.clone(),
     });
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: doc_id,
-        operation_id,
+        editor_id,
         block: result.new_block.clone(),
     });
 
@@ -228,7 +226,7 @@ pub async fn merge_block(
     State(db): State<Db>,
     Json(req): Json<MergeReq>,
 ) -> Result<Json<ApiResponse<MergeResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id.clone();
     let result = tokio::task::spawn_blocking(move || {
         content::merge_block(&db, &id, req)
@@ -239,12 +237,12 @@ pub async fn merge_block(
     let doc_id = result.merged_block.document_id.clone();
     crate::service::event::EventBus::global().emit(BlockEvent::BlockUpdated {
         document_id: doc_id.clone(),
-        operation_id: operation_id.clone(),
+        editor_id: editor_id.clone(),
         block: result.merged_block.clone(),
     });
     crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
         document_id: doc_id,
-        operation_id,
+        editor_id,
         block_id: result.deleted_block_id.clone(),
         cascade_count: 0,
     });
@@ -261,7 +259,7 @@ pub async fn batch_blocks(
     State(db): State<Db>,
     Json(req): Json<BatchReq>,
 ) -> Result<Json<ApiResponse<BatchResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let db_for_query = db.clone();
     let result = tokio::task::spawn_blocking(move || {
         content::batch_operations(&db, req)
@@ -285,7 +283,7 @@ pub async fn batch_blocks(
         if let Some(blk) = doc_id {
             bus.emit(BlockEvent::BlocksBatchChanged {
                 document_id: blk.document_id.clone(),
-                operation_id,
+                editor_id,
             });
         }
     }

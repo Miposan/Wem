@@ -134,7 +134,7 @@ mod tests {
     /// 辅助：导入 Markdown 文本
     fn import_md(db: &Db, content: &str) -> Result<ImportResult, AppError> {
         import_text(db, ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "markdown".to_string(),
             content: content.to_string(),
             parent_id: None,
@@ -183,7 +183,7 @@ mod tests {
     fn import_with_title_override() {
         let db = init_test_db();
         let req = ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "markdown".to_string(),
             content: "# Original\n\nContent".to_string(),
             parent_id: None,
@@ -203,7 +203,7 @@ mod tests {
         let parent = document::create_document(&db, "Parent Doc".to_string(), Some(ROOT_ID.to_string()), None).unwrap();
 
         let req = ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "markdown".to_string(),
             content: "# Child\n\nChild content".to_string(),
             parent_id: Some(parent.id.clone()),
@@ -224,7 +224,7 @@ mod tests {
 
         // 在 doc1 之后导入
         let req = ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "markdown".to_string(),
             content: "# Second\n\nSecond content".to_string(),
             parent_id: None,
@@ -243,7 +243,7 @@ mod tests {
     fn import_invalid_format() {
         let db = init_test_db();
         let req = ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "pdf".to_string(),
             content: "some text".to_string(),
             parent_id: None,
@@ -258,7 +258,7 @@ mod tests {
     fn import_nonexistent_parent() {
         let db = init_test_db();
         let req = ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "markdown".to_string(),
             content: "Hello".to_string(),
             parent_id: Some("nonexistent_id_12345".to_string()),
@@ -317,7 +317,7 @@ mod tests {
     fn import_md_alias() {
         let db = init_test_db();
         let req = ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "md".to_string(),
             content: "# Alias Test".to_string(),
             parent_id: None,

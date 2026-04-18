@@ -19,23 +19,23 @@ use crate::model::Block;
 ///
 /// 将 16 个独立参数打包成一个结构体，提高可读性。
 /// service 层构建此结构体后传给 `insert_block()`。
-pub(crate) struct InsertBlockParams {
-    pub(crate) id: String,
-    pub(crate) parent_id: String,
-    pub(crate) document_id: String,
-    pub(crate) position: String,
-    pub(crate) block_type: String,      // JSON 序列化后的 BlockType
-    pub(crate) content_type: String,    // "markdown" / "empty" / "query"
-    pub(crate) content: Vec<u8>,        // BLOB
-    pub(crate) properties: String,      // JSON 字符串
-    pub(crate) version: u64,            // 通常为 1
-    pub(crate) status: String,          // "normal"
-    pub(crate) schema_version: u32,     // 通常为 1
-    pub(crate) author: String,          // "system"
-    pub(crate) owner_id: Option<String>,
-    pub(crate) encrypted: bool,         // false → 0
-    pub(crate) created: String,         // ISO 8601
-    pub(crate) modified: String,        // ISO 8601
+pub struct InsertBlockParams {
+    pub id: String,
+    pub parent_id: String,
+    pub document_id: String,
+    pub position: String,
+    pub block_type: String,      // JSON 序列化后的 BlockType
+    pub content_type: String,    // "markdown" / "empty" / "query"
+    pub content: Vec<u8>,        // BLOB
+    pub properties: String,      // JSON 字符串
+    pub version: u64,            // 通常为 1
+    pub status: String,          // "normal"
+    pub schema_version: u32,     // 通常为 1
+    pub author: String,          // "system"
+    pub owner_id: Option<String>,
+    pub encrypted: bool,         // false → 0
+    pub created: String,         // ISO 8601
+    pub modified: String,        // ISO 8601
 }
 
 // ─── 单行读取（Read Single）────────────────────────────────────
@@ -146,10 +146,96 @@ pub fn find_root_documents(conn: &Connection) -> Result<Vec<Block>, rusqlite::Er
     Ok(blocks)
 }
 
-/// 查询 Block 的所有后代（不含自身，排除已删除）
+/// 按 parent_id + content（标题）查找同层 Document
+///
+/// 返回匹配的第一个文档块，用于：
+/// - 同层文档名唯一性校验
+/// - CLI 按名称引用文档
+/// 获取同层所有文档名（content 字段，即文档标题）
+///
+/// 用于创建文档时检测重名并自动加序号。
+pub fn find_sibling_doc_names(
+    conn: &Connection,
+    parent_id: &str,
+) -> Result<Vec<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT content FROM blocks
+         WHERE parent_id = ?1 AND status != 'deleted'
+           AND JSON_EXTRACT(block_type, '$.type') = 'document'
+           AND id != parent_id",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![parent_id], |row| {
+        let content: Vec<u8> = row.get(0)?;
+        Ok(String::from_utf8_lossy(&content).to_string())
+    })?;
+    let mut names = Vec::new();
+    for row in rows {
+        names.push(row?);
+    }
+    Ok(names)
+}
+
+/// 同层文档名自动去重
+///
+/// 如果同层已有同名文档，自动追加序号 `(1)`、`(2)` ...
+/// 类似文件管理器的行为。
+pub fn deduplicate_doc_name(
+    conn: &Connection,
+    parent_id: &str,
+    title: &str,
+) -> Result<String, rusqlite::Error> {
+    let existing = find_sibling_doc_names(conn, parent_id)?;
+    if !existing.contains(&title.to_string()) {
+        return Ok(title.to_string());
+    }
+    // 收集已占用的序号
+    let prefix = format!("{} (", title);
+    let mut max_seq: u32 = 0;
+    for name in &existing {
+        if name == title {
+            continue;
+        }
+        if name.starts_with(&prefix) && name.ends_with(')') {
+            let seq_str = &name[prefix.len()..name.len() - 1];
+            if let Ok(n) = seq_str.parse::<u32>() {
+                max_seq = max_seq.max(n);
+            }
+        }
+    }
+    // 从 1 开始找第一个可用的序号
+    let mut seq = 1;
+    loop {
+        let candidate = format!("{} ({})", title, seq);
+        if !existing.contains(&candidate) {
+            return Ok(candidate);
+        }
+        seq += 1;
+    }
+}
+
+pub fn find_doc_by_parent_and_title(
+    conn: &Connection,
+    parent_id: &str,
+    title: &str,
+) -> Result<Option<Block>, rusqlite::Error> {
+    match conn.query_row(
+        "SELECT * FROM blocks
+         WHERE parent_id = ?1 AND content = ?2 AND status != 'deleted'
+           AND JSON_EXTRACT(block_type, '$.type') = 'document'
+         LIMIT 1",
+        rusqlite::params![parent_id, title.as_bytes()],
+        Block::from_row,
+    ) {
+        Ok(block) => Ok(Some(block)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 查询 Block 的所有后代（不含自身，排除已删除和子文档类型）
 ///
 /// 使用 document_id 等值查询替代递归 CTE，性能从 O(n·log n) 降为 O(n)。
-/// 需要文档块和所有内容块的 document_id 正确维护。
+/// 子文档类型（block_type = document）被过滤掉，由 `get_document_children` 独立加载。
 pub fn find_descendants(
     conn: &Connection,
     document_id: &str,
@@ -157,6 +243,7 @@ pub fn find_descendants(
     let mut stmt = conn.prepare(
         "SELECT * FROM blocks
          WHERE document_id = ?1 AND id != ?1 AND status != 'deleted'
+           AND JSON_EXTRACT(block_type, '$.type') != 'document'
          ORDER BY position ASC",
     )?;
     let blocks: Vec<Block> = stmt
@@ -978,7 +1065,24 @@ mod tests {
 
         // 创建两个文档
         let doc1 = make_doc_params("move_doc_00000001", crate::model::ROOT_ID, "a1");
-        let doc2 = make_doc_params("move_doc_00000002", crate::model::ROOT_ID, "a2");
+        let doc2 = InsertBlockParams {
+            id: "move_doc_00000002".to_string(),
+            parent_id: crate::model::ROOT_ID.to_string(),
+            document_id: "move_doc_00000002".to_string(),
+            position: "a2".to_string(),
+            block_type: r#"{"type":"document"}"#.to_string(),
+            content_type: "markdown".to_string(),
+            content: b"Doc B".to_vec(),
+            properties: r#"{"title":"Doc B"}"#.to_string(),
+            version: 1,
+            status: "normal".to_string(),
+            schema_version: 1,
+            author: "system".to_string(),
+            owner_id: None,
+            encrypted: false,
+            created: "2026-01-01T00:00:00.000Z".to_string(),
+            modified: "2026-01-01T00:00:00.000Z".to_string(),
+        };
         insert_block(&conn, &doc1).unwrap();
         insert_block(&conn, &doc2).unwrap();
 
@@ -1066,7 +1170,24 @@ mod tests {
 
         // 插入两个文档和一个段落
         insert_block(&conn, &make_doc_params("rootdoc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_doc_params("rootdoc_00000002", crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &InsertBlockParams {
+            id: "rootdoc_00000002".to_string(),
+            parent_id: crate::model::ROOT_ID.to_string(),
+            document_id: "rootdoc_00000002".to_string(),
+            position: "a3".to_string(),
+            block_type: r#"{"type":"document"}"#.to_string(),
+            content_type: "markdown".to_string(),
+            content: b"Doc 2".to_vec(),
+            properties: r#"{"title":"Doc 2"}"#.to_string(),
+            version: 1,
+            status: "normal".to_string(),
+            schema_version: 1,
+            author: "system".to_string(),
+            owner_id: None,
+            encrypted: false,
+            created: "2026-01-01T00:00:00.000Z".to_string(),
+            modified: "2026-01-01T00:00:00.000Z".to_string(),
+        }).unwrap();
         insert_block(&conn, &make_params("para_00000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2")).unwrap();
 
         let docs = find_root_documents(&conn).unwrap();

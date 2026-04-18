@@ -30,7 +30,7 @@ pub async fn create_document(
     if req.title.len() > 500 {
         return Err(AppError::BadRequest("title 长度超过限制 (500字符)".to_string()));
     }
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let title = req.title;
     let parent_id = req.parent_id;
     let after_id = req.after_id;
@@ -43,7 +43,7 @@ pub async fn create_document(
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: doc.document_id.clone(),
-        operation_id,
+        editor_id,
         block: doc.clone(),
     });
 
@@ -100,9 +100,8 @@ pub async fn delete_document(
     State(db): State<Db>,
     Json(req): Json<DeleteDocumentReq>,
 ) -> Result<Json<ApiResponse<DeleteResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let id = req.id;
-    let id_clone = id.clone();
     let result = tokio::task::spawn_blocking(move || {
         content::delete_block(&db, &id)
     })
@@ -110,8 +109,8 @@ pub async fn delete_document(
     .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockDeleted {
-        document_id: id_clone,
-        operation_id,
+        document_id: result.document_id.clone(),
+        editor_id,
         block_id: result.id.clone(),
         cascade_count: result.cascade_count,
     });
@@ -128,14 +127,14 @@ pub async fn move_document_tree(
     State(db): State<Db>,
     Json(req): Json<MoveDocumentTreeReq>,
 ) -> Result<Json<ApiResponse<Block>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let blk = tokio::task::spawn_blocking(move || document::move_document_tree(&db, req))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockMoved {
         document_id: blk.document_id.clone(),
-        operation_id,
+        editor_id,
         block: blk.clone(),
     });
 
@@ -151,7 +150,7 @@ pub async fn import_text(
     State(db): State<Db>,
     Json(req): Json<ImportTextReq>,
 ) -> Result<Json<ApiResponse<ImportResult>>, AppError> {
-    let operation_id = req.operation_id.clone();
+    let editor_id = req.editor_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         crate::service::import::import_text(&db, req)
     })
@@ -160,7 +159,7 @@ pub async fn import_text(
 
     crate::service::event::EventBus::global().emit(BlockEvent::BlockCreated {
         document_id: result.root.id.clone(),
-        operation_id,
+        editor_id,
         block: result.root.clone(),
     });
 

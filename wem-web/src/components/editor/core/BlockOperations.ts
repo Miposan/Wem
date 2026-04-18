@@ -141,4 +141,129 @@ export function updateBlockInTree(
   })
 }
 
+/** 替换指定 ID 的块为另一个块（保持子树或替换） */
+export function replaceBlockInTree(
+  tree: BlockNode[],
+  targetId: string,
+  replacement: BlockNode,
+): BlockNode[] {
+  for (let i = 0; i < tree.length; i++) {
+    if (tree[i].id === targetId) {
+      return [...tree.slice(0, i), replacement, ...tree.slice(i + 1)]
+    }
+  }
+  return tree.map((block) => {
+    const updated = replaceBlockInTree(block.children, targetId, replacement)
+    if (updated !== block.children) {
+      return { ...block, children: updated }
+    }
+    return block
+  })
+}
+
+// ─── 移动（拖拽乐观更新） ───
+
+/** 在指定块之前插入新块（顶层或嵌套） */
+export function insertBefore(tree: BlockNode[], beforeId: string, newBlock: BlockNode): BlockNode[] {
+  for (let i = 0; i < tree.length; i++) {
+    if (tree[i].id === beforeId) {
+      return [...tree.slice(0, i), newBlock, ...tree.slice(i)]
+    }
+  }
+  return tree.map((block) => {
+    const updated = insertBefore(block.children, beforeId, newBlock)
+    if (updated !== block.children) {
+      return { ...block, children: updated }
+    }
+    return block
+  })
+}
+
+/** 将块替换为其子块列表（子块提升到父级） */
+export function replaceWithChildren(tree: BlockNode[], blockId: string): BlockNode[] {
+  for (let i = 0; i < tree.length; i++) {
+    if (tree[i].id === blockId) {
+      return [...tree.slice(0, i), ...tree[i].children, ...tree.slice(i + 1)]
+    }
+  }
+  return tree.map((block) => {
+    const updated = replaceWithChildren(block.children, blockId)
+    if (updated !== block.children) {
+      return { ...block, children: updated }
+    }
+    return block
+  })
+}
+
+/**
+ * 移动单个块（move-block 乐观更新）
+ *
+ * 对于有子块的 heading：子块留在原位（detach），heading 不带子块移到目标位置。
+ * 对于其他块：直接移动（非 heading 通常无子块）。
+ */
+export function moveBlockInTree(
+  tree: BlockNode[],
+  blockId: string,
+  target: { blockId: string; position: 'before' | 'after' | 'child' },
+): BlockNode[] {
+  const block = findBlockById(tree, blockId)
+  if (!block) return tree
+
+  const targetBlock = findBlockById(tree, target.blockId)
+  if (!targetBlock) return tree
+
+  if (blockId === target.blockId) return tree
+
+  // heading 有子块时 detach（子块留在 heading 原位置）
+  const detachChildren = block.block_type.type === 'heading' && block.children.length > 0
+  const movedBlock: BlockNode = detachChildren ? { ...block, children: [] } : block
+
+  // 从旧位置移除（heading detach 时用 replaceWithChildren 保留子块）
+  let newTree = detachChildren
+    ? replaceWithChildren(tree, blockId)
+    : removeBlock(tree, blockId)
+
+  // 插入到目标位置
+  switch (target.position) {
+    case 'before':
+      return insertBefore(newTree, target.blockId, movedBlock)
+    case 'after':
+      return insertAfter(newTree, target.blockId, movedBlock)
+    case 'child':
+      return insertAsFirstChild(newTree, target.blockId, movedBlock)
+  }
+}
+
+/**
+ * 移动子树（move-heading-tree 乐观更新）
+ *
+ * heading 及其全部子块作为整体移动到目标位置。
+ */
+export function moveSubtreeInTree(
+  tree: BlockNode[],
+  blockId: string,
+  target: { blockId: string; position: 'before' | 'after' | 'child' },
+): BlockNode[] {
+  const block = findBlockById(tree, blockId)
+  if (!block) return tree
+
+  const targetBlock = findBlockById(tree, target.blockId)
+  if (!targetBlock) return tree
+
+  if (blockId === target.blockId) return tree
+
+  // 移除整棵子树
+  const newTree = removeBlock(tree, blockId)
+
+  // 整棵子树插入到目标位置
+  switch (target.position) {
+    case 'before':
+      return insertBefore(newTree, target.blockId, block)
+    case 'after':
+      return insertAfter(newTree, target.blockId, block)
+    case 'child':
+      return insertAsFirstChild(newTree, target.blockId, block)
+  }
+}
+
 

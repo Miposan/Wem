@@ -83,7 +83,7 @@ mod tests {
     /// 辅助：导入 Markdown 并返回 doc_id
     fn import_md(db: &Db, content: &str) -> String {
         let result = import::import_text(db, ImportTextReq {
-            operation_id: None,
+            editor_id: None,
             format: "markdown".to_string(),
             content: content.to_string(),
             parent_id: None,

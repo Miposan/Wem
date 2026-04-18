@@ -19,7 +19,7 @@ import type { Block } from '@/types/api'
 /** 携带完整 block 数据的事件（block 字段被 serde flatten 展平到顶层） */
 export type BlockEventPayload = Block & {
   document_id: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface BlockCreatedEvent extends BlockEventPayload {
@@ -35,7 +35,7 @@ export interface BlockDeletedEvent {
   document_id: string
   block_id: string
   cascade_count: number
-  operation_id?: string
+  editor_id?: string
 }
 
 export interface BlockMovedEvent extends BlockEventPayload {
@@ -49,7 +49,7 @@ export interface BlockRestoredEvent extends BlockEventPayload {
 export interface BlocksBatchChangedEvent {
   type: 'blocks_batch_changed'
   document_id: string
-  operation_id?: string
+  editor_id?: string
 }
 
 export type BlockEvent =

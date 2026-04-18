@@ -27,9 +27,9 @@ pub enum BlockEvent {
     /// Block 创建（create_block / create_document）
     BlockCreated {
         document_id: String,
-        /// 关联的操作 ID：前端生成的 UUID，用于 SSE 回声去重
+        /// 编辑者标识：前端会话级 UUID，用于 SSE 回声去重
         #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
+        editor_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
@@ -37,7 +37,7 @@ pub enum BlockEvent {
     BlockUpdated {
         document_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
+        editor_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
@@ -45,7 +45,7 @@ pub enum BlockEvent {
     BlockDeleted {
         document_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
+        editor_id: Option<String>,
         block_id: String,
         cascade_count: u32,
     },
@@ -53,7 +53,7 @@ pub enum BlockEvent {
     BlockMoved {
         document_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
+        editor_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
@@ -61,7 +61,7 @@ pub enum BlockEvent {
     BlockRestored {
         document_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
+        editor_id: Option<String>,
         #[serde(flatten)]
         block: Block,
     },
@@ -69,7 +69,7 @@ pub enum BlockEvent {
     BlocksBatchChanged {
         document_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        operation_id: Option<String>,
+        editor_id: Option<String>,
     },
 }
 
