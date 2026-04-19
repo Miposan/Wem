@@ -90,8 +90,8 @@ pub fn create_document(
 
         let mut properties = HashMap::new();
         properties.insert("title".to_string(), final_title.clone());
-        let properties_json = serde_json::to_string(&properties).unwrap_or_default();
-        let block_type_json = serde_json::to_string(&BlockType::Document).unwrap();
+        let properties_json = super::block::to_json(&properties);
+        let block_type_json = super::block::to_json(&BlockType::Document);
 
         repo::insert_block(&conn, &InsertBlockParams {
             id: doc_id.clone(),
@@ -115,7 +115,7 @@ pub fn create_document(
 
         let para_id = crate::model::generate_block_id();
         let para_position = position::generate_first();
-        let para_block_type = serde_json::to_string(&BlockType::Paragraph).unwrap();
+        let para_block_type = super::block::to_json(&BlockType::Paragraph);
 
         repo::insert_block(&conn, &InsertBlockParams {
             id: para_id,
@@ -251,7 +251,7 @@ impl TreeMoveOps for DocumentTreeMove {
                     conn,
                     &current.id,
                     &deduped.into_bytes(),
-                    &serde_json::to_string(&current.properties).unwrap_or_default(),
+                    &super::block::to_json(&current.properties),
                     &now_iso(),
                 )?;
             }
@@ -359,10 +359,10 @@ fn insert_block_from_model(conn: &rusqlite::Connection, block: &Block) -> Result
             parent_id: block.parent_id.clone(),
             document_id: block.document_id.clone(),
             position: block.position.clone(),
-            block_type: serde_json::to_string(&block.block_type).unwrap_or_default(),
+            block_type: super::block::to_json(&block.block_type),
             content_type: block.content_type.as_str().to_string(),
             content: block.content.clone(),
-            properties: serde_json::to_string(&block.properties).unwrap_or_default(),
+            properties: super::block::to_json(&block.properties),
             version: block.version,
             status: block.status.as_str().to_string(),
             schema_version: block.schema_version,

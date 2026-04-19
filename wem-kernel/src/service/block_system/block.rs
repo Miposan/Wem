@@ -21,6 +21,17 @@ use super::{event, oplog, position};
 use crate::util;
 use util::now_iso;
 
+/// 将可序列化值转为 JSON 字符串。
+///
+/// `BlockType`、`HashMap<String, String>` 等类型的序列化不会失败，
+/// 用此函数替代 `.unwrap_or_default()` 以避免静默吞错。
+pub(crate) fn to_json<T: serde::Serialize>(val: &T) -> String {
+    serde_json::to_string(val).unwrap_or_else(|e| {
+        tracing::error!("序列化失败（不应发生）: {}", e);
+        "{}".to_string()
+    })
+}
+
 // ─── 操作上下文 ─────────────────────────────────────────────────
 
 /// 移动操作的上下文，传递给类型钩子
@@ -269,10 +280,10 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
             parent_id: req.parent_id,
             document_id: document_id.clone(),
             position,
-            block_type: serde_json::to_string(&req.block_type).unwrap_or_default(),
+            block_type: to_json(&req.block_type),
             content_type: content_type.as_str().to_string(),
             content: req.content.into_bytes(),
-            properties: serde_json::to_string(&req.properties).unwrap_or_default(),
+            properties: to_json(&req.properties),
             version: 1,
             status: "normal".to_string(),
             schema_version: 1,
@@ -380,7 +391,7 @@ fn update_block_inner(
 
     // 4. 计算新 properties（merge 或 replace）
     let new_properties = merge_properties(&current.properties, req.properties.as_ref(), &req.properties_mode);
-    let properties_json = serde_json::to_string(&new_properties).unwrap_or_default();
+    let properties_json = to_json(&new_properties);
 
     // 5. 写入数据库
     let new_content_type = req.block_type
@@ -425,7 +436,7 @@ fn write_block_updates(
     let block_type_changed = block_type_req.is_some();
 
     let rows = if block_type_changed {
-        let bt_str = serde_json::to_string(new_block_type).unwrap_or_default();
+        let bt_str = to_json(new_block_type);
         repo::update_block_fields(
             conn, id, new_content, properties_json,
             Some(&bt_str), Some(new_content_type), &now,
@@ -474,7 +485,7 @@ pub(crate) fn reparent_children_to(
         .map_err(|e| AppError::Internal(format!("查询后续兄弟失败: {}", e)))?;
 
     let mut pos = match siblings_after.first() {
-        Some(first_after) => position::generate_between(anchor_position, &first_after.position),
+        Some(first_after) => position::generate_between(anchor_position, &first_after.position)?,
         None => position::generate_after(anchor_position),
     };
 
@@ -1393,10 +1404,10 @@ fn batch_create_block(
         parent_id: parent_id.to_string(),
         document_id,
         position,
-        block_type: serde_json::to_string(&block_type).unwrap_or_default(),
+        block_type: to_json(&block_type),
         content_type: ct,
         content: content.as_bytes().to_vec(),
-        properties: serde_json::to_string(properties).unwrap_or_default(),
+        properties: to_json(properties),
         version: 1,
         status: "normal".to_string(),
         schema_version: 1,
@@ -1427,7 +1438,7 @@ fn batch_update_block(
         .unwrap_or(current.content);
 
     let new_properties = merge_properties(&current.properties, properties.as_ref(), properties_mode);
-    let properties_json = serde_json::to_string(&new_properties).unwrap_or_default();
+    let properties_json = to_json(&new_properties);
 
     let now = now_iso();
     let rows = repo::update_content_and_props(

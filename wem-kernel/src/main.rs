@@ -17,12 +17,11 @@ use tower_http::cors::{CorsLayer, Any};
 // ─── 启动入口 ───────────────────────────────────────────────────
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 加载配置（配置文件 + 环境变量）
     let cfg = config::load();
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
-    let db = wem_kernel::repo::init_db(&cfg.database.path)
-        .expect("数据库初始化失败");
+    let db = wem_kernel::repo::init_db(&cfg.database.path)?;
 
 
     // 创建 Axum 路由器，注册所有 API 路由
@@ -74,8 +73,7 @@ async fn main() {
                     tower_http::cors::AllowOrigin::any()
                 } else {
                     tower_http::cors::AllowOrigin::exact(
-                        cfg.server.cors_origin.parse::<HeaderValue>()
-                            .expect("WEM_CORS_ORIGIN 不是合法的 Origin 值")
+                        cfg.server.cors_origin.parse::<HeaderValue>()?
                     )
                 })
                 .allow_methods(Any)
@@ -83,9 +81,7 @@ async fn main() {
         );
 
     // 绑定 TCP 监听端口
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("Failed to bind port");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     println!("🚀 Wem Kernel listening on {}", addr);
     println!("📋 API 端点:");
@@ -120,7 +116,6 @@ async fn main() {
     println!("   POST   /api/v1/blocks/delete-tree");
 
     // 启动 HTTP 服务器
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(listener, app).await?;
+    Ok(())
 }

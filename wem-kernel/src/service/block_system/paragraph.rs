@@ -68,7 +68,7 @@ fn split_block_inner(
     // 2. 更新当前块 content
     let now = now_iso();
     let new_content = req.content_before.into_bytes();
-    let properties_json = serde_json::to_string(&current.properties).unwrap_or_default();
+    let properties_json = block::to_json(&current.properties);
 
     let rows = repo::update_content_and_props(
         &conn, id, &new_content, &properties_json, &now,
@@ -107,7 +107,7 @@ fn split_block_inner(
         parent_id: new_parent_id,
         document_id,
         position,
-        block_type: serde_json::to_string(&new_block_type).unwrap_or_default(),
+        block_type: block::to_json(&new_block_type),
         content_type: content_type.as_str().to_string(),
         content: req.content_after.into_bytes(),
         properties: "{}".to_string(),
@@ -223,7 +223,7 @@ fn merge_block_inner(
 
     // 4. 更新合并目标块
     let now = now_iso();
-    let properties_json = serde_json::to_string(&target.properties).unwrap_or_default();
+    let properties_json = block::to_json(&target.properties);
 
     let rows = repo::update_content_and_props(
         &conn,
@@ -255,7 +255,7 @@ fn merge_block_inner(
 
         let mut pos = if merge_into_parent {
             if let Some(first_after) = siblings_after.first() {
-                position::generate_between(&current.position, &first_after.position)
+                position::generate_between(&current.position, &first_after.position)?
             } else {
                 position::generate_after(&current.position)
             }

@@ -594,7 +594,6 @@ pub fn batch_update_status_if(
     if ids.is_empty() {
         return Ok(0);
     }
-    // 构建动态占位符: "?1, ?2, ?3, ..."
     let placeholders: Vec<&str> = (1..=ids.len()).map(|_| "?").collect();
     let sql = format!(
         "UPDATE blocks SET status = ?1, modified = ?2, version = version + 1 \

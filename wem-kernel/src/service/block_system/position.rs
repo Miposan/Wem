@@ -91,8 +91,12 @@ pub fn generate_before(before: &str) -> String {
 }
 
 /// 生成在两个 position **之间** 的 position（要求 `a < b`）
-pub fn generate_between(a: &str, b: &str) -> String {
-    assert!(a < b, "generate_between 要求 a < b，收到 a={}, b={}", a, b);
+pub fn generate_between(a: &str, b: &str) -> Result<String, AppError> {
+    if a >= b {
+        return Err(AppError::Internal(format!(
+            "generate_between 要求 a < b，收到 a={}, b={}", a, b
+        )));
+    }
 
     let a_chars: Vec<char> = a.chars().collect();
     let b_chars: Vec<char> = b.chars().collect();
@@ -111,7 +115,7 @@ pub fn generate_between(a: &str, b: &str) -> String {
             let mid_idx = (a_idx + b_idx) / 2;
             let mut result: Vec<char> = a_chars[..i].to_vec();
             result.push(char_at(mid_idx));
-            return result.into_iter().collect();
+            return Ok(result.into_iter().collect());
         }
 
         let prefix: String = a_chars[..=i].iter().collect();
@@ -119,20 +123,20 @@ pub fn generate_between(a: &str, b: &str) -> String {
 
         if suffix.is_empty() {
             let candidate = format!("{}{}", prefix, MID_CHAR);
-            assert!(a < candidate.as_str() && candidate.as_str() < b,
-                "生成的 position {} 不在 {} 和 {} 之间", candidate, a, b);
-            return candidate;
+            if a < candidate.as_str() && candidate.as_str() < b {
+                return Ok(candidate);
+            }
         } else {
             let new_suffix = generate_after(&suffix);
             let candidate = format!("{}{}", prefix, new_suffix);
-            if candidate.as_str() < b {
-                assert!(a < candidate.as_str(), "递增后应大于 a");
-                return candidate;
+            if a < candidate.as_str() && candidate.as_str() < b {
+                return Ok(candidate);
             }
-            let candidate = format!("{}{}", a, MID_CHAR);
-            assert!(a < candidate.as_str() && candidate.as_str() < b,
-                "无法在 {} 和 {} 之间生成 position", a, b);
-            return candidate;
+        }
+        // suffix 存在但候选超出范围，或 suffix 为空但 MID_CHAR 不在区间内 → 追加中间字符
+        let candidate = format!("{}{}", a, MID_CHAR);
+        if a < candidate.as_str() && candidate.as_str() < b {
+            return Ok(candidate);
         }
     }
 
@@ -141,15 +145,17 @@ pub fn generate_between(a: &str, b: &str) -> String {
         let x = generate_before(&rest);
         let candidate = format!("{}{}", a, x);
         if a < candidate.as_str() && candidate.as_str() < b {
-            return candidate;
+            return Ok(candidate);
         }
         let candidate = format!("{}{}", a, MID_CHAR);
-        assert!(a < candidate.as_str() && candidate.as_str() < b,
-            "无法在 {} 和 {} 之间生成 position", a, b);
-        return candidate;
+        if a < candidate.as_str() && candidate.as_str() < b {
+            return Ok(candidate);
+        }
     }
 
-    unreachable!("generate_between: a ({}) < b ({}) 但未找到插入点", a, b)
+    Err(AppError::Internal(format!(
+        "无法在 {} 和 {} 之间生成 position", a, b
+    )))
 }
 
 // ─── DB 感知层：位置计算 ───────────────────────────────────────
@@ -174,7 +180,7 @@ fn calculate_position(
                     "after 位置必须在 before 位置之前".to_string(),
                 ));
             }
-            Ok(generate_between(ap, bp))
+            generate_between(ap, bp)
         }
         (Some(ap), None) => {
             // 理论上应该查 after 的下一个兄弟来 generate_between，
@@ -356,21 +362,27 @@ mod tests {
 
     #[test]
     fn test_generate_between_midpoint() {
-        assert_eq!(generate_between("a0", "a2"), "a1");
+        assert_eq!(generate_between("a0", "a2").unwrap(), "a1");
     }
 
     #[test]
     fn test_generate_between_adjacent() {
-        let result = generate_between("a0", "a1");
+        let result = generate_between("a0", "a1").unwrap();
         assert!("a0" < result.as_str());
         assert!(result.as_str() < "a1");
     }
 
     #[test]
     fn test_generate_between_prefix() {
-        let result = generate_between("a0", "a0U");
+        let result = generate_between("a0", "a0U").unwrap();
         assert!("a0" < result.as_str());
         assert!(result.as_str() < "a0U");
+    }
+
+    #[test]
+    fn test_generate_between_invalid_order() {
+        assert!(generate_between("a2", "a0").is_err());
+        assert!(generate_between("a1", "a1").is_err());
     }
 
     #[test]
@@ -387,7 +399,7 @@ mod tests {
                 "排序错误: {} >= {}", positions[i], positions[i + 1]);
         }
 
-        let mid = generate_between(&positions[2], &positions[3]);
+        let mid = generate_between(&positions[2], &positions[3]).unwrap();
         assert!(positions[2].as_str() < mid.as_str());
         assert!(mid.as_str() < positions[3].as_str());
     }

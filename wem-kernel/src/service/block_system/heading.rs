@@ -202,7 +202,7 @@ fn escape_heading_if_needed(
     .map_err(|e| AppError::Internal(format!("查询逃逸点后续兄弟失败: {}", e)))?;
 
     let new_position = if let Some(first_after) = siblings_after_escape.first() {
-        position::generate_between(&escape_block.position, &first_after.position)
+        position::generate_between(&escape_block.position, &first_after.position)?
     } else {
         position::generate_after(&escape_block.position)
     };
@@ -297,8 +297,9 @@ impl TreeMoveOps for HeadingTreeMove {
         current: &Block,
         target_parent_id: &str,
     ) -> Result<Option<Block>, AppError> {
-        if target_parent_id == current.id
-            || repo::check_is_descendant(conn, &current.id, target_parent_id).unwrap_or(false)
+        let is_descendant = repo::check_is_descendant(conn, &current.id, target_parent_id)
+            .map_err(|e| AppError::Internal(format!("检查后代关系失败: {}", e)))?;
+        if target_parent_id == current.id || is_descendant
         {
             detach_heading_children(conn, current)?;
             return Ok(Some(current.clone()));

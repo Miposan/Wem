@@ -40,7 +40,13 @@ pub async fn document_events(
         loop {
             match receiver.recv().await {
                 Ok(event) if event.document_id() == document_id => {
-                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    let data = match serde_json::to_string(&event) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::error!("SSE 序列化失败: {}", e);
+                            continue;
+                        }
+                    };
                     yield Ok::<_, Infallible>(Event::default().event(event.event_type()).data(data));
                 }
                 Ok(_) => continue, // 其他文档事件，跳过
