@@ -8,7 +8,6 @@ use axum::{extract::State, Json};
 use crate::api::request::{GetHistoryReq, RedoReq, UndoReq};
 use crate::api::response::{HistoryResponse, UndoRedoResponse};
 use crate::error::{AppError, ApiResponse};
-use crate::model::event::BlockEvent;
 use crate::repo::Db;
 use crate::service::oplog;
 
@@ -74,14 +73,6 @@ pub async fn undo(
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
-    // 广播 SSE 事件：通知前端受影响的文档
-    for doc_id in &result.affected_document_ids {
-        crate::service::event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
-            document_id: doc_id.clone(),
-            editor_id: None,
-        });
-    }
-
     Ok(Json(ApiResponse::ok(Some(UndoRedoResponse { result }))))
 }
 
@@ -98,14 +89,6 @@ pub async fn redo(
     let result = tokio::task::spawn_blocking(move || oplog::redo(&db, &document_id))
         .await
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
-
-    // 广播 SSE 事件：通知前端受影响的文档
-    for doc_id in &result.affected_document_ids {
-        crate::service::event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
-            document_id: doc_id.clone(),
-            editor_id: None,
-        });
-    }
 
     Ok(Json(ApiResponse::ok(Some(UndoRedoResponse { result }))))
 }

@@ -329,6 +329,24 @@ fn default_export_format() -> String {
     "markdown".to_string()
 }
 
+fn default_export_depth() -> String {
+    "descendants".to_string()
+}
+
+/// 导出 Block 请求
+///
+/// `POST /api/v1/blocks/export`
+#[derive(Debug, Deserialize)]
+pub struct ExportBlockReq {
+    pub id: String,
+    /// 目标格式（默认 "markdown"）
+    #[serde(default = "default_export_format")]
+    pub format: String,
+    /// 导出深度："children"（仅直接子块）或 "descendants"（所有后代）
+    #[serde(default = "default_export_depth")]
+    pub depth: String,
+}
+
 /// 获取 Block 请求
 ///
 /// `POST /api/v1/blocks/get`

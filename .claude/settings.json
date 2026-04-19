@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/^fn / {func = $0; start = NR} /^}/ && func {print FILENAME \":\" start \":\" NR-1 \": \" func}' block.rs)"
+    ]
+  }
+}

@@ -31,7 +31,7 @@ async fn main() {
         .route("/api/v1/health", get(handler::health))
 
         // ─── Document RPC ─────────────────────────────
-        // 文档级操作：CRUD + 导入/导出 + 跨文档嫁接 + Oplog
+        // 文档级操作：CRUD + 导入/导出 + Oplog
         .route("/api/v1/documents", post(handler::create_document))
         .route("/api/v1/documents/list", post(handler::list_documents))
         .route("/api/v1/documents/get", post(handler::get_document))
@@ -39,7 +39,7 @@ async fn main() {
         .route("/api/v1/documents/delete", post(handler::delete_document))
         .route("/api/v1/documents/export", post(handler::export_text))
         .route("/api/v1/documents/import", post(handler::import_text))
-        .route("/api/v1/documents/move-document-tree", post(handler::move_document_tree))
+        .route("/api/v1/documents/move", post(handler::move_document_tree))
         .route("/api/v1/documents/history", post(handler::get_block_history))
         .route("/api/v1/documents/undo", post(handler::undo))
         .route("/api/v1/documents/redo", post(handler::redo))
@@ -47,13 +47,15 @@ async fn main() {
         .route("/api/v1/documents/{id}/events", get(handler::document_events))
 
         // ─── Block RPC ────────────────────────────────
-        // Block 级操作：CRUD + 移动 + 恢复 + 拆分/合并 + 批量
+        // Block 级操作：CRUD + 移动 + 恢复 + 拆分/合并 + 批量 + 导出
         .route("/api/v1/blocks", post(handler::create_block))
         .route("/api/v1/blocks/get", post(handler::get_block))
         .route("/api/v1/blocks/update", post(handler::update_block))
         .route("/api/v1/blocks/delete", post(handler::delete_block))
+        .route("/api/v1/blocks/delete-tree", post(handler::delete_tree))
         .route("/api/v1/blocks/move", post(handler::move_block))
-        .route("/api/v1/blocks/move-heading-tree", post(handler::move_heading_tree))
+        .route("/api/v1/blocks/move-tree", post(handler::move_heading_tree))
+        .route("/api/v1/blocks/export", post(handler::export_block))
         .route("/api/v1/blocks/restore", post(handler::restore_block))
         .route("/api/v1/blocks/split", post(handler::split_block))
         .route("/api/v1/blocks/merge", post(handler::merge_block))
@@ -97,7 +99,7 @@ async fn main() {
     println!("   POST   /api/v1/documents/delete");
     println!("   POST   /api/v1/documents/export");
     println!("   POST   /api/v1/documents/import");
-    println!("   POST   /api/v1/documents/move-document-tree");
+    println!("   POST   /api/v1/documents/move");
     println!("   POST   /api/v1/documents/history");
     println!("   POST   /api/v1/documents/undo");
     println!("   POST   /api/v1/documents/redo");
@@ -109,11 +111,13 @@ async fn main() {
     println!("   POST   /api/v1/blocks/update");
     println!("   POST   /api/v1/blocks/delete");
     println!("   POST   /api/v1/blocks/move");
-    println!("   POST   /api/v1/blocks/move-heading-tree");
+    println!("   POST   /api/v1/blocks/move-tree");
+    println!("   POST   /api/v1/blocks/export");
     println!("   POST   /api/v1/blocks/restore");
     println!("   POST   /api/v1/blocks/split");
     println!("   POST   /api/v1/blocks/merge");
     println!("   POST   /api/v1/blocks/batch");
+    println!("   POST   /api/v1/blocks/delete-tree");
 
     // 启动 HTTP 服务器
     axum::serve(listener, app)

@@ -19,8 +19,8 @@ pub use document::{
     move_document_tree, import_text, export_text,
 };
 pub use block::{
-    create_block, get_block, update_block, delete_block, move_block, move_heading_tree,
-    restore_block, split_block, merge_block, batch_blocks,
+    create_block, get_block, update_block, delete_block, delete_tree, move_block, move_heading_tree,
+    restore_block, split_block, merge_block, batch_blocks, export_block,
 };
 pub use event::{health, document_events};
 pub use oplog::{get_block_history, undo, redo};

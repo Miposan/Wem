@@ -10,12 +10,14 @@
 //! - `get_block_history()` — 查询单个 Block 的变更日志
 
 use crate::error::AppError;
+use crate::model::event::BlockEvent;
 use crate::model::oplog::{
     Action, Operation, BlockSnapshot, Change, ChangeSummary, ChangeType, HistoryEntry, UndoRedoResult,
 };
 use crate::model::Block;
 use crate::repo::{block_repo, oplog_repo, Db};
 use crate::util::now_iso;
+use super::event;
 
 /// Operation 容量上限：只保留最近 N 次操作记录
 ///
@@ -112,6 +114,15 @@ pub fn undo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
         Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
     }
 
+    if let Ok(ref r) = result {
+        for doc_id in &r.affected_document_ids {
+            event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
+                document_id: doc_id.clone(),
+                editor_id: None,
+            });
+        }
+    }
+
     result
 }
 
@@ -159,6 +170,15 @@ pub fn redo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
     match &result {
         Ok(_) => { let _ = conn.execute_batch("COMMIT"); }
         Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
+    }
+
+    if let Ok(ref r) = result {
+        for doc_id in &r.affected_document_ids {
+            event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
+                document_id: doc_id.clone(),
+                editor_id: None,
+            });
+        }
     }
 
     result
@@ -274,60 +294,13 @@ fn restore_single_block(
     let now = now_iso();
 
     match change_type {
-        ChangeType::Deleted => {
-            conn.execute(
-                "UPDATE blocks SET
-                    parent_id = ?1, document_id = ?2, position = ?3,
-                    block_type = ?4, content_type = ?5, content = ?6,
-                    properties = ?7, status = ?8, modified = ?9
-                 WHERE id = ?10",
-                rusqlite::params![
-                    snap.parent_id, snap.document_id, snap.position,
-                    snap.block_type, snap.content_type, snap.content,
-                    snap.properties, snap.status, now, block_id,
-                ],
-            )
-            .map_err(|e| AppError::Internal(format!("恢复 block 失败: {}", e)))?;
-        }
         ChangeType::Created => {
-            conn.execute(
-                "INSERT INTO blocks (
-                    id, parent_id, document_id, position, block_type, content_type,
-                    content, properties, version, status, schema_version,
-                    author, encrypted, created, modified
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, 1, 'system', 0, ?10, ?10)
-                ON CONFLICT (id) DO UPDATE SET
-                    parent_id = excluded.parent_id,
-                    document_id = excluded.document_id,
-                    position = excluded.position,
-                    block_type = excluded.block_type,
-                    content_type = excluded.content_type,
-                    content = excluded.content,
-                    properties = excluded.properties,
-                    status = excluded.status,
-                    modified = excluded.modified",
-                rusqlite::params![
-                    block_id, snap.parent_id, snap.document_id, snap.position,
-                    snap.block_type, snap.content_type, snap.content,
-                    snap.properties, snap.status, now,
-                ],
-            )
-            .map_err(|e| AppError::Internal(format!("重做 create block 失败: {}", e)))?;
+            block_repo::upsert_from_snapshot(conn, block_id, snap, &now)
+                .map_err(|e| AppError::Internal(format!("重做 create block 失败: {}", e)))?;
         }
         _ => {
-            conn.execute(
-                "UPDATE blocks SET
-                    parent_id = ?1, document_id = ?2, position = ?3,
-                    block_type = ?4, content_type = ?5, content = ?6,
-                    properties = ?7, status = ?8, modified = ?9
-                 WHERE id = ?10",
-                rusqlite::params![
-                    snap.parent_id, snap.document_id, snap.position,
-                    snap.block_type, snap.content_type, snap.content,
-                    snap.properties, snap.status, now, block_id,
-                ],
-            )
-            .map_err(|e| AppError::Internal(format!("恢复 block 快照失败: {}", e)))?;
+            block_repo::restore_from_snapshot(conn, block_id, snap, &now)
+                .map_err(|e| AppError::Internal(format!("恢复 block 失败: {}", e)))?;
         }
     }
 
@@ -340,12 +313,8 @@ fn soft_delete_block(
     block_id: &str,
 ) -> Result<(), AppError> {
     let now = now_iso();
-    conn.execute(
-        "UPDATE blocks SET status = 'deleted', modified = ?1 WHERE id = ?2",
-        rusqlite::params![now, block_id],
-    )
-    .map_err(|e| AppError::Internal(format!("软删除 block 失败: {}", e)))?;
-    Ok(())
+    block_repo::soft_delete_no_version(conn, block_id, &now)
+        .map_err(|e| AppError::Internal(format!("软删除 block 失败: {}", e)))
 }
 
 /// 生成时间有序的唯一 ID（时间戳 + 随机后缀）

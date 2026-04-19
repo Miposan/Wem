@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 wem.db \".tables\")",
+      "Bash(sqlite3 wem.db \".schema\")",
+      "Bash(sqlite3 *)",
+      "Bash(awk '/^pub fn|^pub\\\\\\(crate\\\\\\) fn|^fn /{start=NR} /^pub fn get_block|^fn tests/{if\\(start\\) print start\"-\"NR-1, $0}' src/service/content.rs)",
+      "Bash(awk 'END{print NR}' src/service/content.rs)"
+    ]
+  }
+}

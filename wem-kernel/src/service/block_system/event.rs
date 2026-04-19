@@ -3,7 +3,7 @@
 //! 使用 `tokio::sync::broadcast` 实现一对多事件分发。
 //!
 //! **使用方式**：
-//! - Handler 层：mutation 成功后调用 `EventBus::global().emit(BlockEvent::...)`
+//! - Service 层：mutation 成功后调用 `EventBus::global().emit(BlockEvent::...)`
 //! - SSE 端点：调用 `EventBus::global().subscribe()` 获取事件流
 //!
 //! 发送是同步的（`broadcast::Sender::send()` 不需要 async），可以在

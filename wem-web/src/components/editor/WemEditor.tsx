@@ -97,6 +97,7 @@ export function WemEditor({
   const { dragState, dragHandlers } = useBlockDrag({
     getTree: () => treeRef.current,
     onAction: handleDragAction,
+    isCollapsed: (id) => collapsedIds.has(id),
   })
 
   /**
@@ -278,8 +279,10 @@ export function WemEditor({
     // Debounce 保存到后端
     const timer = setTimeout(async () => {
       pendingTimers.current.delete(blockId)
+      const editorId = crypto.randomUUID()
+      addPendingOperationId(editorId)
       try {
-        await updateBlock(blockId, { content })
+        await updateBlock(blockId, { content, editor_id: editorId })
       } catch (err) {
         console.error('自动保存失败:', err)
       }
@@ -288,7 +291,7 @@ export function WemEditor({
     const saves = pendingTimers.current
     if (saves.has(blockId)) clearTimeout(saves.get(blockId)!)
     saves.set(blockId, timer)
-  }, [setTreeAsync])
+  }, [setTreeAsync, addPendingOperationId])
 
   // 清理定时器
   useEffect(() => {

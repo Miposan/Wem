@@ -72,12 +72,15 @@ export class OperationQueue {
     const entry = this.queue.shift()!
 
     try {
-      await Promise.race([
-        entry.execute(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`操作 "${entry.label}" 超时`)), OP_TIMEOUT_MS),
-        ),
-      ])
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`操作 "${entry.label}" 超时`)), OP_TIMEOUT_MS)
+      })
+      try {
+        await Promise.race([entry.execute(), timeout])
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+      }
     } catch (err) {
       this.onError?.(err, entry.label)
     }

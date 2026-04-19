@@ -11,6 +11,7 @@ import type {
   DeleteResult,
   DocumentChildrenResult,
   DocumentContentResult,
+  ExportBlockReq,
   ExportReq,
   ExportResult,
   GetBlockReq,
@@ -139,16 +140,20 @@ export function deleteBlock(id: string, editor_id?: string) {
   return post<DeleteResult>('/blocks/delete', { id, editor_id } as DeleteBlockReq)
 }
 
+export function deleteTree(id: string, editor_id?: string) {
+  return post<DeleteResult>('/blocks/delete-tree', { id, editor_id } as DeleteBlockReq)
+}
+
 export function moveBlock(id: string, req: Omit<MoveBlockReq, 'id'>) {
   return post<Block>('/blocks/move', { id, ...req } as MoveBlockReq)
 }
 
-export function moveHeadingTree(id: string, req: Omit<MoveTreeReq, 'id'>) {
-  return post<Block>('/blocks/move-heading-tree', { id, ...req } as MoveTreeReq)
+export function moveTree(id: string, req: Omit<MoveTreeReq, 'id'>) {
+  return post<Block>('/blocks/move-tree', { id, ...req } as MoveTreeReq)
 }
 
-export function moveDocumentTree(id: string, req: Omit<MoveTreeReq, 'id'>) {
-  return post<Block>('/documents/move-document-tree', { id, ...req } as MoveTreeReq)
+export function moveDocument(id: string, req: Omit<MoveTreeReq, 'id'>) {
+  return post<Block>('/documents/move', { id, ...req } as MoveTreeReq)
 }
 
 export function restoreBlock(id: string, editor_id?: string) {
@@ -161,6 +166,12 @@ export function restoreBlock(id: string, editor_id?: string) {
 
 export function batchBlocks(req: BatchReq) {
   return post<BatchResult>('/blocks/batch', req)
+}
+
+// ---------- Export ----------
+
+export function exportBlock(id: string, depth: 'children' | 'descendants' = 'descendants', format = 'markdown') {
+  return post<ExportResult>('/blocks/export', { id, format, depth } as ExportBlockReq)
 }
 
 // ---------- Import ----------

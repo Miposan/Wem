@@ -16,7 +16,7 @@ use wem_kernel::api::request::*;
 use wem_kernel::api::response::DocumentContentResult;
 use wem_kernel::model::{Block, BlockType};
 use wem_kernel::repo;
-use wem_kernel::service::{content, document, export, import, oplog};
+use wem_kernel::service::block_system::{block, document, oplog};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -158,6 +158,7 @@ fn execute_command(db: &repo::Db, line: &str, ctx: &mut CmdContext) -> Result<()
         "add-block" => cmd_add_block(db, args, ctx),
         "update-block" => cmd_update_block(db, args),
         "delete-block" => cmd_delete_block(db, args),
+        "delete-tree" => cmd_delete_tree(db, args),
         "restore-block" => cmd_restore_block(db, args),
         "move-block" => cmd_move_block(db, args),
         "move-heading" => cmd_move_heading(db, args),
@@ -282,7 +283,7 @@ fn parse_block_type(s: &str) -> Result<BlockType, String> {
 
 fn cmd_create_doc(db: &repo::Db, args: &str, ctx: &mut CmdContext) -> Result<(), String> {
     let title = if args.is_empty() { "Untitled" } else { args };
-    let doc = document::create_document(db, title.to_string(), None, None)
+    let doc = document::create_document(db, title.to_string(), None, None, None)
         .map_err(|e| e.to_string())?;
     ctx.last_doc_id = Some(doc.id.clone());
     ctx.push_id(doc.id.clone());
@@ -323,7 +324,7 @@ fn cmd_add_block(db: &repo::Db, args: &str, ctx: &mut CmdContext) -> Result<(), 
     let block_type = parse_block_type(parts[1])?;
     let content = parts.get(2).unwrap_or(&"").to_string();
 
-    let block = content::create_block(db, CreateBlockReq {
+    let block = block::create_block(db, CreateBlockReq {
         editor_id: Some("cli".to_string()),
         parent_id: parent_id.to_string(),
         block_type,
@@ -346,7 +347,7 @@ fn cmd_update_block(db: &repo::Db, args: &str) -> Result<(), String> {
     let id = parts[0];
     let content = parts[1].to_string();
 
-    let block = content::update_block(db, id, UpdateBlockReq {
+    let block = block::update_block(db, id, UpdateBlockReq {
         editor_id: Some("cli".to_string()),
         id: id.to_string(),
         content: Some(content),
@@ -362,7 +363,15 @@ fn cmd_update_block(db: &repo::Db, args: &str) -> Result<(), String> {
 fn cmd_delete_block(db: &repo::Db, args: &str) -> Result<(), String> {
     let id = args.trim();
     if id.is_empty() { return Err("用法: delete-block <id>".to_string()); }
-    let result = content::delete_block(db, id).map_err(|e| e.to_string())?;
+    let result = block::delete_block(db, id, Some("cli".to_string())).map_err(|e| e.to_string())?;
+    println!("deleted {} (children promoted)", result.id);
+    Ok(())
+}
+
+fn cmd_delete_tree(db: &repo::Db, args: &str) -> Result<(), String> {
+    let id = args.trim();
+    if id.is_empty() { return Err("用法: delete-tree <id>".to_string()); }
+    let result = block::delete_tree(db, id, Some("cli".to_string())).map_err(|e| e.to_string())?;
     println!("deleted {} (cascade: {})", result.id, result.cascade_count);
     Ok(())
 }
@@ -370,7 +379,7 @@ fn cmd_delete_block(db: &repo::Db, args: &str) -> Result<(), String> {
 fn cmd_restore_block(db: &repo::Db, args: &str) -> Result<(), String> {
     let id = args.trim();
     if id.is_empty() { return Err("用法: restore-block <id>".to_string()); }
-    let result = content::restore_block(db, id).map_err(|e| e.to_string())?;
+    let result = block::restore_block(db, id, Some("cli".to_string())).map_err(|e| e.to_string())?;
     println!("restored {} (cascade: {})", result.id, result.cascade_count);
     Ok(())
 }
@@ -378,7 +387,7 @@ fn cmd_restore_block(db: &repo::Db, args: &str) -> Result<(), String> {
 fn cmd_move_block(db: &repo::Db, args: &str) -> Result<(), String> {
     let kv = parse_kv(args);
     let id = args.split_whitespace().next().ok_or("用法: move-block <id> [after:<id>] [parent:<id>]")?;
-    let block = content::move_block(db, id, MoveBlockReq {
+    let block = block::move_block(db, id, MoveBlockReq {
         editor_id: Some("cli".to_string()),
         id: id.to_string(),
         target_parent_id: kv.get("parent").cloned(),
@@ -392,7 +401,7 @@ fn cmd_move_block(db: &repo::Db, args: &str) -> Result<(), String> {
 fn cmd_move_heading(db: &repo::Db, args: &str) -> Result<(), String> {
     let kv = parse_kv(args);
     let id = args.split_whitespace().next().ok_or("用法: move-heading <id> [after:<id>]")?;
-    let block = content::move_heading_tree(db, MoveHeadingTreeReq {
+    let block = block::move_heading_tree(db, MoveHeadingTreeReq {
         editor_id: Some("cli".to_string()),
         id: id.to_string(),
         before_id: kv.get("before").cloned(),
@@ -421,7 +430,7 @@ fn cmd_split(db: &repo::Db, args: &str) -> Result<(), String> {
     if parts.len() < 2 { return Err("用法: split <id> <before>|<after>".to_string()); }
     let pipe: Vec<&str> = parts[1].splitn(2, '|').collect();
     if pipe.len() < 2 { return Err("用法: split <id> <before>|<after>".to_string()); }
-    let result = content::split_block(db, parts[0], SplitReq {
+    let result = block::split_block(db, parts[0], SplitReq {
         editor_id: Some("cli".to_string()),
         id: parts[0].to_string(),
         content_before: pipe[0].to_string(),
@@ -436,7 +445,7 @@ fn cmd_split(db: &repo::Db, args: &str) -> Result<(), String> {
 fn cmd_merge(db: &repo::Db, args: &str) -> Result<(), String> {
     let id = args.trim();
     if id.is_empty() { return Err("用法: merge <id>".to_string()); }
-    let result = content::merge_block(db, id, MergeReq {
+    let result = block::merge_block(db, id, MergeReq {
         editor_id: Some("cli".to_string()),
         id: id.to_string(),
     }).map_err(|e| e.to_string())?;
@@ -490,7 +499,7 @@ fn cmd_export(db: &repo::Db, args: &str, ctx: &mut CmdContext) -> Result<(), Str
     } else {
         resolve_doc_arg(db, args, ctx)?
     };
-    let result = export::export_text(db, &doc_id, "markdown").map_err(|e| e.to_string())?;
+    let result = document::export_text(db, &doc_id, "markdown").map_err(|e| e.to_string())?;
     println!("{}", result.content);
     ctx.last_doc_id = Some(doc_id);
     Ok(())
@@ -498,7 +507,7 @@ fn cmd_export(db: &repo::Db, args: &str, ctx: &mut CmdContext) -> Result<(), Str
 
 fn cmd_import(db: &repo::Db, args: &str) -> Result<(), String> {
     if args.is_empty() { return Err("用法: import <markdown-text>".to_string()); }
-    let result = import::import_text(db, ImportTextReq {
+    let result = document::import_text(db, ImportTextReq {
         editor_id: Some("cli".to_string()),
         format: "markdown".to_string(),
         content: args.to_string(),

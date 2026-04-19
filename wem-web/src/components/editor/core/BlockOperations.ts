@@ -163,6 +163,58 @@ export function replaceBlockInTree(
 
 // ─── 移动（拖拽乐观更新） ───
 
+/** Heading 移动到新位置后，吸收同层级下排在其后面的兄弟节点 */
+function absorbSiblingsAfterHeading(
+  tree: BlockNode[],
+  headingId: string,
+  headingLevel: number,
+): BlockNode[] {
+  return absorbInLevel(tree, headingId, headingLevel)
+}
+
+/** 在某一层级中查找 heading 并吸收其后的兄弟 */
+function absorbInLevel(
+  level: BlockNode[],
+  headingId: string,
+  headingLevel: number,
+): BlockNode[] {
+  // 先在当前层级找 heading
+  const foundIdx = level.findIndex((b) => b.id === headingId)
+  if (foundIdx >= 0) {
+    const toAbsorb: number[] = []
+    for (let i = foundIdx + 1; i < level.length; i++) {
+      const sibling = level[i]
+      if (sibling.block_type.type === 'heading') {
+        if ((sibling.block_type as { level: number }).level <= headingLevel) break
+      }
+      toAbsorb.push(i)
+    }
+    if (toAbsorb.length === 0) return level
+
+    const heading = level[foundIdx]
+    const absorbed = toAbsorb.map((i) => level[i])
+    const newChildren = [...heading.children, ...absorbed]
+    const result = [...level]
+    result[foundIdx] = { ...heading, children: newChildren }
+    for (let i = toAbsorb.length - 1; i >= 0; i--) {
+      result.splice(toAbsorb[i], 1)
+    }
+    return result
+  }
+
+  // 不在当前层级，递归子节点
+  let changed = false
+  const result = level.map((block) => {
+    const updated = absorbInLevel(block.children, headingId, headingLevel)
+    if (updated !== block.children) {
+      changed = true
+      return { ...block, children: updated }
+    }
+    return block
+  })
+  return changed ? result : level
+}
+
 /** 在指定块之前插入新块（顶层或嵌套） */
 export function insertBefore(tree: BlockNode[], beforeId: string, newBlock: BlockNode): BlockNode[] {
   for (let i = 0; i < tree.length; i++) {
@@ -195,11 +247,21 @@ export function replaceWithChildren(tree: BlockNode[], blockId: string): BlockNo
   })
 }
 
+/** 检查 targetId 是否是 ancestorId 的后代（递归） */
+function isDescendantOf(block: BlockNode, targetId: string): boolean {
+  for (const child of block.children) {
+    if (child.id === targetId) return true
+    if (isDescendantOf(child, targetId)) return true
+  }
+  return false
+}
+
 /**
  * 移动单个块（move-block 乐观更新）
  *
  * 对于有子块的 heading：子块留在原位（detach），heading 不带子块移到目标位置。
  * 对于其他块：直接移动（非 heading 通常无子块）。
+ * 特殊情况：heading 拖入自身子树 → 只 detach 子块，heading 不动。
  */
 export function moveBlockInTree(
   tree: BlockNode[],
@@ -214,8 +276,35 @@ export function moveBlockInTree(
 
   if (blockId === target.blockId) return tree
 
-  // heading 有子块时 detach（子块留在 heading 原位置）
-  const detachChildren = block.block_type.type === 'heading' && block.children.length > 0
+  const isHeading = block.block_type.type === 'heading'
+
+  // heading 拖入自身子树：推导的 target_parent 是自身或自身后代 → 只 detach，不移动
+  if (isHeading && block.children.length > 0) {
+    const intoOwnSubtree =
+      target.position === 'child'
+        ? isDescendantOf(block, target.blockId) || target.blockId === blockId
+        : isDescendantOf(block, target.blockId)
+          || targetBlock.parent_id === blockId
+          || isDescendantOf(block, targetBlock.parent_id)
+    if (intoOwnSubtree) {
+      // heading 不动，子块释放到 heading 的父级
+      const detached: BlockNode = { ...block, children: [] }
+      return replaceBlockInTree(tree, blockId, detached)
+    }
+  }
+
+  // 判断 heading 是否需要 detach 子块
+  // 与后端一致：只有 parent 改变时才 detach（子块留在原父级）
+  // target.position === 'child' → parent 一定改变（成为目标块的子节点）
+  // before/after → 推导 parent = targetBlock.parent_id，与 block.parent_id 比较
+  let parentChanged = false
+  if (target.position === 'child') {
+    parentChanged = true
+  } else {
+    parentChanged = block.parent_id !== targetBlock.parent_id
+  }
+
+  const detachChildren = isHeading && block.children.length > 0 && parentChanged
   const movedBlock: BlockNode = detachChildren ? { ...block, children: [] } : block
 
   // 从旧位置移除（heading detach 时用 replaceWithChildren 保留子块）
@@ -224,14 +313,25 @@ export function moveBlockInTree(
     : removeBlock(tree, blockId)
 
   // 插入到目标位置
+  let inserted: BlockNode[]
   switch (target.position) {
     case 'before':
-      return insertBefore(newTree, target.blockId, movedBlock)
+      inserted = insertBefore(newTree, target.blockId, movedBlock)
+      break
     case 'after':
-      return insertAfter(newTree, target.blockId, movedBlock)
+      inserted = insertAfter(newTree, target.blockId, movedBlock)
+      break
     case 'child':
-      return insertAsFirstChild(newTree, target.blockId, movedBlock)
+      inserted = insertAsFirstChild(newTree, target.blockId, movedBlock)
+      break
   }
+
+  // heading 移动后吸收后续同级兄弟
+  if (isHeading) {
+    const headingLevel = (block.block_type as { level: number }).level
+    return absorbSiblingsAfterHeading(inserted, blockId, headingLevel)
+  }
+  return inserted
 }
 
 /**
@@ -239,7 +339,7 @@ export function moveBlockInTree(
  *
  * heading 及其全部子块作为整体移动到目标位置。
  */
-export function moveSubtreeInTree(
+export function moveHeadingTreeInTree(
   tree: BlockNode[],
   blockId: string,
   target: { blockId: string; position: 'before' | 'after' | 'child' },
@@ -256,14 +356,22 @@ export function moveSubtreeInTree(
   const newTree = removeBlock(tree, blockId)
 
   // 整棵子树插入到目标位置
+  let inserted: BlockNode[]
   switch (target.position) {
     case 'before':
-      return insertBefore(newTree, target.blockId, block)
+      inserted = insertBefore(newTree, target.blockId, block)
+      break
     case 'after':
-      return insertAfter(newTree, target.blockId, block)
+      inserted = insertAfter(newTree, target.blockId, block)
+      break
     case 'child':
-      return insertAsFirstChild(newTree, target.blockId, block)
+      inserted = insertAsFirstChild(newTree, target.blockId, block)
+      break
   }
+
+  // heading 移动后吸收后续同级兄弟
+  const headingLevel = (block.block_type as { level: number }).level
+  return absorbSiblingsAfterHeading(inserted, blockId, headingLevel)
 }
 
 

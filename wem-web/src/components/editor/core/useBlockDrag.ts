@@ -8,8 +8,7 @@
  * - 管理拖拽状态（draggingBlockId、dropTarget）
  * - 计算 drop target 位置（before/after/child）
  * - 校验合法性（不可拖入自身后代）
- * - heading 有子节点时走 move-heading-tree（后端整体移动子树）
- * - 其他情况走 move-block
+ * - 统一走 move-block，heading 单独移动，子块由吸收逻辑决定
  */
 
 import { useCallback, useRef, useState } from 'react'
@@ -31,6 +30,8 @@ export interface UseBlockDragOptions {
   getTree: () => BlockNode[]
   /** 拖拽完成时发出 action */
   onAction: (action: BlockAction) => void
+  /** 判断块是否处于折叠状态（折叠 heading 拖拽走 heading-tree） */
+  isCollapsed: (blockId: string) => boolean
 }
 
 // ─── 辅助函数 ───
@@ -64,7 +65,7 @@ function isDescendantOf(tree: BlockNode[], blockId: string, ancestorId: string):
 // ─── Hook ───
 
 export function useBlockDrag(options: UseBlockDragOptions) {
-  const { getTree, onAction } = options
+  const { getTree, onAction, isCollapsed } = options
 
   const [dragState, setDragState] = useState<DragState>({
     draggingBlockId: null,
@@ -258,26 +259,24 @@ export function useBlockDrag(options: UseBlockDragOptions) {
       dragBlockIdRef.current = null
       setDragState({ draggingBlockId: null, dropTarget: null })
 
-      // 区分 heading-tree vs move-block：
-      // 目标是自己的后代 → move-block（后端会解除父子关系）
-      // heading 有子节点 + 目标不是自己的后代 → move-heading-tree（整体移动子树）
-      // 其他 → move-block
+      // 折叠 heading（有子块）拖到 before/after 位置 → move-heading-tree（整体移动子树）
+      // 其余情况（child 位置、非折叠、非 heading）→ move-block
+      // move_heading_tree 不支持 target_parent_id，无法处理 child 语义
       const tree = getTree()
       const draggedBlock = findBlockById(tree, dragBlockId)
-      const targetIsDescendant = isDescendantOf(tree, targetBlockId, dragBlockId)
-
       if (
-        !targetIsDescendant &&
         draggedBlock &&
         draggedBlock.block_type.type === 'heading' &&
-        draggedBlock.children.length > 0
+        draggedBlock.children.length > 0 &&
+        isCollapsed(dragBlockId) &&
+        target.position !== 'child'
       ) {
         onAction({ type: 'move-heading-tree', blockId: dragBlockId, target })
       } else {
         onAction({ type: 'move-block', blockId: dragBlockId, target })
       }
     },
-    [computeDropPosition, isValidDrop, onAction],
+    [onAction],
   )
 
   const onDragEnd = useCallback((_e: React.DragEvent) => {

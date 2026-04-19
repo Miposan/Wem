@@ -300,6 +300,12 @@ export interface ExportReq {
   format?: string
 }
 
+export interface ExportBlockReq {
+  id: string
+  format?: string
+  depth?: 'children' | 'descendants'
+}
+
 export interface GetBlockReq {
   id: string
   include_deleted?: boolean

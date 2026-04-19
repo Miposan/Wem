@@ -11,7 +11,7 @@
  */
 
 import type { BlockNode, BlockType } from '@/types/api'
-import { deleteBlock, splitBlock, mergeBlock, updateBlock, moveBlock, moveHeadingTree } from '@/api/client'
+import { deleteBlock, splitBlock, mergeBlock, updateBlock, moveBlock, moveTree } from '@/api/client'
 import {
   flattenTree,
   findBlockById,
@@ -23,7 +23,7 @@ import {
   findPrevBlock,
   findNextBlock,
   moveBlockInTree,
-  moveSubtreeInTree,
+  moveHeadingTreeInTree,
 } from './BlockOperations'
 import { focusBlock, focusBlockEnd, getCursorPosition, syncBlockContent } from './SelectionManager'
 
@@ -383,10 +383,10 @@ export async function executeMoveHeadingTree(
   ctx.cancelPendingSave(blockId)
 
   // ── 乐观更新：立即在 UI 中移动子树 ──
-  ctx.setTreeSync((prev) => moveSubtreeInTree(prev, blockId, target))
+  ctx.setTreeSync((prev) => moveHeadingTreeInTree(prev, blockId, target))
   focusBlock(blockId)
 
-  // 构建 moveHeadingTree API 请求参数（只有 before_id / after_id，无 target_parent_id）
+  // 构建 moveTree API 请求参数（只有 before_id / after_id，无 target_parent_id）
   const moveReq: Record<string, string> = { editor_id: ctx.editorId ?? '' }
 
   switch (target.position) {
@@ -405,12 +405,12 @@ export async function executeMoveHeadingTree(
 
   // ── 后台 API + refetch 修正 ──
   try {
-    await moveHeadingTree(blockId, moveReq)
-    // heading-tree 涉及吸收逻辑，refetch 确保与后端一致
+    await moveTree(blockId, moveReq)
+    // moveTree 涉及吸收逻辑，refetch 确保与后端一致
     await ctx.refetchDocument()
     focusBlock(blockId)
   } catch (err) {
-    console.error('[move-heading-tree] 移动 heading 子树失败，回滚:', err)
+    console.error('[move-tree] 移动子树失败，回滚:', err)
     ctx.refetchDocument()
   }
 }

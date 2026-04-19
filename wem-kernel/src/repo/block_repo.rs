@@ -814,6 +814,83 @@ pub fn check_is_descendant(
     )
 }
 
+// ─── Oplog 恢复专用 ────────────────────────────────────────────
+
+/// 从快照恢复 Block（UPDATE 所有快照字段，不递增 version）
+///
+/// 用于 undo/redo：直接用快照覆盖 block 的所有业务字段。
+/// 不递增 version——version 是用户编辑计数，不属于系统恢复。
+pub fn restore_from_snapshot(
+    conn: &Connection,
+    block_id: &str,
+    snap: &crate::model::oplog::BlockSnapshot,
+    modified: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE blocks SET
+            parent_id = ?1, document_id = ?2, position = ?3,
+            block_type = ?4, content_type = ?5, content = ?6,
+            properties = ?7, status = ?8, modified = ?9
+         WHERE id = ?10",
+        params![
+            snap.parent_id, snap.document_id, snap.position,
+            snap.block_type, snap.content_type, snap.content,
+            snap.properties, snap.status, modified, block_id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// 从快照恢复 Block（UPSERT：插入或覆盖更新，不递增 version）
+///
+/// 用于 redo create：block 可能已被软删除但仍存在于表中，
+/// 需要用 INSERT ... ON CONFLICT DO UPDATE 保证幂等。
+pub fn upsert_from_snapshot(
+    conn: &Connection,
+    block_id: &str,
+    snap: &crate::model::oplog::BlockSnapshot,
+    modified: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO blocks (
+            id, parent_id, document_id, position, block_type, content_type,
+            content, properties, version, status, schema_version,
+            author, encrypted, created, modified
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, 1, 'system', 0, ?10, ?10)
+        ON CONFLICT (id) DO UPDATE SET
+            parent_id = excluded.parent_id,
+            document_id = excluded.document_id,
+            position = excluded.position,
+            block_type = excluded.block_type,
+            content_type = excluded.content_type,
+            content = excluded.content,
+            properties = excluded.properties,
+            status = excluded.status,
+            modified = excluded.modified",
+        params![
+            block_id, snap.parent_id, snap.document_id, snap.position,
+            snap.block_type, snap.content_type, snap.content,
+            snap.properties, snap.status, modified,
+        ],
+    )?;
+    Ok(())
+}
+
+/// 软删除 Block（不递增 version）
+///
+/// 用于 undo create / redo delete：仅将 status 设为 'deleted'，不改 version。
+pub fn soft_delete_no_version(
+    conn: &Connection,
+    block_id: &str,
+    modified: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE blocks SET status = 'deleted', modified = ?1 WHERE id = ?2",
+        params![modified, block_id],
+    )?;
+    Ok(())
+}
+
 // ─── 单元测试 ─────────────────────────────────────────────────
 
 #[cfg(test)]
