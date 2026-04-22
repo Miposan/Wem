@@ -8,7 +8,7 @@
 
 use rusqlite::{params, Connection};
 
-use crate::model::oplog::{
+use crate::block_system::model::oplog::{
     Action, Operation, BlockSnapshot, Change, ChangeType,
 };
 

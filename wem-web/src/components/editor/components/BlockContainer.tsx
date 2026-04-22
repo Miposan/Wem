@@ -3,6 +3,7 @@ import type { BlockRendererProps, DropPosition } from '../core/types'
 import { ParagraphBlock } from '../blocks/ParagraphBlock'
 import { HeadingBlock } from '../blocks/HeadingBlock'
 import { ThematicBreakBlock } from '../blocks/ThematicBreakBlock'
+import { getHeadingLevel } from '../core/BlockOperations'
 import { UnknownBlock } from '../blocks/UnknownBlock'
 
 // ─── Block Type → Component 路由 ───
@@ -87,7 +88,7 @@ export function BlockContainer({
       className={`wem-block-container ${collapsible ? 'wem-block-collapsible' : ''} ${collapsed ? 'wem-block-collapsed' : ''} ${selected ? 'wem-block-selected' : ''} ${isDragging ? 'wem-block-dragging' : ''} ${isDropTarget ? 'wem-block-drop-target' : ''}`}
       data-block-id={block.id}
       data-block-type={block.block_type.type}
-      data-heading-level={block.block_type.type === 'heading' ? (block.block_type as { level: number }).level : undefined}
+      data-heading-level={getHeadingLevel(block.block_type) ?? undefined}
       onDragOver={(e) => dragHandlers.onDragOver(e, block.id)}
       onDragLeave={(e) => dragHandlers.onDragLeave(e, block.id)}
       onDrop={(e) => dragHandlers.onDrop(e, block.id)}

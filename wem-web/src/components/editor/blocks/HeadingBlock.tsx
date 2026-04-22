@@ -1,10 +1,11 @@
 import type { TextBlockProps } from '../core/types'
 import { useTextBlock } from '../core/useTextBlock'
+import { getHeadingLevel } from '../core/BlockOperations'
 
 /** 标题块 (h1-h6) */
 export function HeadingBlock({ block, readonly, placeholder, ...rest }: TextBlockProps) {
   const { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useTextBlock({ block, readonly, placeholder, ...rest })
-  const level = block.block_type.type === 'heading' ? (block.block_type as { level: number }).level : 2
+  const level = getHeadingLevel(block.block_type) ?? 2
   const Tag = `h${level}` as const
 
   return (

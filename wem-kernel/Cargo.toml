@@ -8,6 +8,10 @@ default-run = "wem-kernel"
 name = "wem-cli"
 path = "src/bin/wem_cli.rs"
 
+[[bin]]
+name = "wem-agent"
+path = "src/bin/wem_agent.rs"
+
 [dependencies]
 # Web框架，处理 HTTP 请求/路由
 axum = "0.8"
@@ -45,3 +49,32 @@ async-stream = "0.3"
 
 # 日志（EventBus 调试用）
 tracing = "0.1"
+
+# ─── Agent 子系统依赖 ──────────────────────────────────────
+
+# HTTP 客户端（Anthropic Provider）
+reqwest = { version = "0.12", features = ["stream", "json"] }
+
+# SSE 流解析（Anthropic 流式响应）
+eventsource-stream = "0.2"
+
+# async trait 支持
+async-trait = "0.1"
+
+# OpenAI 兼容 API 客户端
+async-openai = { version = "0.35", default-features = false, features = ["chat-completion"] }
+
+# 并发安全 HashMap（Session Manager）
+dashmap = "6"
+
+# tokio 工具（CancellationToken）
+tokio-util = "0.7"
+
+# JSON Schema 自动生成（Tool 参数定义）
+schemars = "0.8"
+
+# UUID 生成（Session ID）
+uuid = { version = "1", features = ["v4"] }
+
+# MCP 协议客户端（Model Context Protocol）
+rmcp = { version = "0.8", features = ["client", "transport-child-process"] }

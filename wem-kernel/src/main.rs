@@ -8,7 +8,16 @@
 mod config;     // 全局配置（端口、数据库路径）
 
 // handler 直接在 main.rs 中使用 lib 的路径
-use wem_kernel::handler;
+use wem_kernel::block_system::handler;
+use wem_kernel::agent::handler as agent_handler;
+use wem_kernel::agent::provider::anthropic::AnthropicProvider;
+use wem_kernel::agent::provider::openai_compatible::OpenAICompatibleProvider;
+use wem_kernel::agent::provider::Provider;
+use wem_kernel::agent::runtime::AgentRuntime;
+use wem_kernel::agent::session::SessionManager;
+use wem_kernel::agent::tools::ToolRegistry;
+use wem_kernel::agent::handler::AgentState;
+use wem_kernel::agent::mcp::McpManager;
 
 use axum::{Router, routing::{get, post}, extract::DefaultBodyLimit};
 use axum::http::header::HeaderValue;
@@ -25,7 +34,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 
     // 创建 Axum 路由器，注册所有 API 路由
-    let app = Router::new()
+
+    // Agent 子系统状态
+    let provider: std::sync::Arc<dyn Provider> = match cfg.agent.provider.as_str() {
+        "openai_compatible" => {
+            let mut p = OpenAICompatibleProvider::with_headers(
+                cfg.agent.api_key.clone(),
+                cfg.agent.base_url.clone(),
+                cfg.agent.model.clone(),
+                cfg.agent.custom_headers.clone(),
+            );
+            p = p.with_max_tokens(cfg.agent.max_tokens);
+            std::sync::Arc::new(p)
+        }
+        _ => {
+            let mut p = AnthropicProvider::new(cfg.agent.api_key.clone());
+            if cfg.agent.base_url != "https://api.anthropic.com" {
+                p = p.with_base_url(cfg.agent.base_url.clone());
+            }
+            if cfg.agent.model != "claude-sonnet-4-20250514" {
+                p = p.with_model(cfg.agent.model.clone());
+            }
+            std::sync::Arc::new(p)
+        }
+    };
+    let agent_state = {
+        let mut registry = ToolRegistry::new();
+        if !cfg.agent.mcp_servers.is_empty() {
+            match McpManager::connect_all(&cfg.agent.mcp_servers).await {
+                Ok((_manager, mcp_tools)) => {
+                    for tool in mcp_tools {
+                        registry.register(tool);
+                    }
+                }
+                Err(e) => eprintln!("⚠️  MCP 连接失败: {}", e),
+            }
+        }
+        let tools = std::sync::Arc::new(registry);
+        let runtime = std::sync::Arc::new(AgentRuntime::new(
+            std::sync::Arc::new(SessionManager::new()),
+            provider,
+            tools,
+            200_000,
+        ));
+        std::sync::Arc::new(AgentState {
+            runtime,
+        })
+    };
+
+    let block_routes = Router::new()
         // ─── 健康检查（唯一保留 GET 的非 SSE 端点） ──────
         .route("/api/v1/health", get(handler::health))
 
@@ -61,7 +118,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/blocks/batch", post(handler::batch_blocks))
 
         // 注入数据库 State
-        .with_state(db)
+        .with_state(db);
+
+    let agent_routes = Router::new()
+        .route("/api/v1/agent/health", get(agent_handler::health))
+        .route("/api/v1/agent/sessions", post(agent_handler::create_session))
+        .route("/api/v1/agent/sessions/list", post(agent_handler::list_sessions))
+        .route("/api/v1/agent/sessions/{id}", post(agent_handler::destroy_session))
+        .route("/api/v1/agent/sessions/{id}/chat", post(agent_handler::chat))
+        .route("/api/v1/agent/sessions/{id}/abort", post(agent_handler::abort_session))
+        .with_state(agent_state);
+
+    let app = block_routes
+        .merge(agent_routes)
 
         // 请求体大小限制（10 MB）
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
@@ -114,6 +183,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   POST   /api/v1/blocks/merge");
     println!("   POST   /api/v1/blocks/batch");
     println!("   POST   /api/v1/blocks/delete-tree");
+    println!();
+    println!("   ── Agent ───────────────────────────────────");
+    println!("   GET    /api/v1/agent/health");
+    println!("   POST   /api/v1/agent/sessions");
+    println!("   POST   /api/v1/agent/sessions/list");
+    println!("   POST   /api/v1/agent/sessions/{{id}}");
+    println!("   POST   /api/v1/agent/sessions/{{id}}/chat");
+    println!("   POST   /api/v1/agent/sessions/{{id}}/abort");
 
     // 启动 HTTP 服务器
     axum::serve(listener, app).await?;

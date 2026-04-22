@@ -14,9 +14,9 @@ use std::io::{self, Write};
 
 use wem_kernel::api::request::*;
 use wem_kernel::api::response::DocumentContentResult;
-use wem_kernel::model::{Block, BlockType};
+use wem_kernel::block_system::model::{Block, BlockType};
 use wem_kernel::repo;
-use wem_kernel::service::block_system::{block, document, oplog};
+use wem_kernel::block_system::service::{block, document, oplog};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -98,7 +98,7 @@ impl CmdContext {
     /// 替换命令参数中的 $doc / $1 / $2 / ... 变量
     fn subst_vars(&self, s: &str) -> String {
         let mut out = s.to_string();
-        out = out.replace("$root", wem_kernel::model::ROOT_ID);
+        out = out.replace("$root", wem_kernel::block_system::model::ROOT_ID);
         if let Some(doc_id) = &self.last_doc_id {
             out = out.replace("$doc", doc_id);
         }
@@ -124,18 +124,16 @@ impl CmdContext {
 fn resolve_doc_arg(db: &repo::Db, arg: &str, ctx: &CmdContext) -> Result<String, String> {
     if arg.starts_with('@') {
         let name = &arg[1..];
-        let parent = ctx.last_doc_id.as_deref().unwrap_or(wem_kernel::model::ROOT_ID);
-        let conn = repo::lock_db(db);
-        let doc = wem_kernel::repo::block_repo::find_doc_by_parent_and_title(&conn, parent, name)
+        let parent = ctx.last_doc_id.as_deref().unwrap_or(wem_kernel::block_system::model::ROOT_ID);
+        let doc = document::find_doc_by_name(db, parent, name)
             .map_err(|e| e.to_string())?;
         match doc {
             Some(d) => Ok(d.id),
             None => {
                 // 回退到 root 下查找
-                if parent != wem_kernel::model::ROOT_ID {
-                    let doc2 = wem_kernel::repo::block_repo::find_doc_by_parent_and_title(
-                        &conn, wem_kernel::model::ROOT_ID, name,
-                    ).map_err(|e| e.to_string())?;
+                if parent != wem_kernel::block_system::model::ROOT_ID {
+                    let doc2 = document::find_doc_by_name(db, wem_kernel::block_system::model::ROOT_ID, name)
+                        .map_err(|e| e.to_string())?;
                     doc2.map(|d| d.id).ok_or_else(|| format!("文档 \"{}\" 不存在", name))
                 } else {
                     Err(format!("文档 \"{}\" 不存在", name))

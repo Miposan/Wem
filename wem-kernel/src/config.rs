@@ -32,6 +32,7 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
+    pub agent: AgentConfig,
 }
 
 /// 服务器配置
@@ -54,6 +55,33 @@ pub struct DatabaseConfig {
     pub path: String,
 }
 
+/// Agent 子系统配置
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Provider 类型: "anthropic" 或 "openai_compatible"
+    pub provider: String,
+    /// API Key（也可通过环境变量设置）
+    pub api_key: String,
+    /// API Base URL
+    pub base_url: String,
+    /// 模型名称
+    pub model: String,
+    /// 最大 token 数
+    pub max_tokens: u32,
+    /// 温度
+    pub temperature: f32,
+    /// 最大步数
+    pub max_steps: u32,
+    /// 环境变量名（读取 api_key 时优先使用这个环境变量）
+    pub api_key_env: String,
+    /// 自定义 HTTP 请求头（JSON 对象）
+    pub custom_headers: std::collections::HashMap<String, String>,
+    /// MCP 服务器配置列表
+    #[serde(default)]
+    pub mcp_servers: Vec<wem_kernel::agent::mcp::McpServerConfig>,
+}
+
 
 
 // ─── 默认值实现 ────────────────────────────────────────────────
@@ -63,6 +91,7 @@ impl Default for Config {
         Self {
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),
+            agent: AgentConfig::default(),
         }
     }
 }
@@ -81,6 +110,23 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             path: "wem-data/wem.db".to_string(),
+        }
+    }
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            provider: "anthropic".to_string(),
+            api_key: String::new(),
+            base_url: "https://api.anthropic.com".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 16384,
+            temperature: 0.3,
+            max_steps: 50,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            custom_headers: std::collections::HashMap::new(),
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -142,6 +188,25 @@ pub fn load() -> &'static Config {
         }
         if let Ok(path) = std::env::var("WEM_DB_PATH") {
             config.database.path = path;
+        }
+        // Agent 配置环境变量覆盖
+        if let Ok(provider) = std::env::var("WEM_AGENT_PROVIDER") {
+            config.agent.provider = provider;
+        }
+        if let Ok(key) = std::env::var("WEM_AGENT_API_KEY") {
+            config.agent.api_key = key;
+        }
+        if let Ok(url) = std::env::var("WEM_AGENT_BASE_URL") {
+            config.agent.base_url = url;
+        }
+        if let Ok(model) = std::env::var("WEM_AGENT_MODEL") {
+            config.agent.model = model;
+        }
+        // 优先从 api_key_env 指定的环境变量读 key
+        if config.agent.api_key.is_empty() && !config.agent.api_key_env.is_empty() {
+            if let Ok(key) = std::env::var(&config.agent.api_key_env) {
+                config.agent.api_key = key;
+            }
         }
         config
     })

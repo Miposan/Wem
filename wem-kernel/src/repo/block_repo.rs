@@ -11,7 +11,7 @@
 
 use rusqlite::{params, Connection};
 
-use crate::model::Block;
+use crate::block_system::model::Block;
 
 // ─── 参数结构体 ────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ pub fn get_position(
 /// 根文档 = parent_id = ROOT_ID 且 block_type = Document 的 Block。
 /// 不包含全局根块自身，也不包含其他类型的根级块（如段落等）。
 pub fn find_root_documents(conn: &Connection) -> Result<Vec<Block>, rusqlite::Error> {
-    let root_id = crate::model::ROOT_ID;
+    let root_id = crate::block_system::model::ROOT_ID;
     let mut stmt = conn.prepare(
         "SELECT * FROM blocks
          WHERE parent_id = ?1 AND id != ?1 AND status = 'normal'
@@ -173,44 +173,6 @@ pub fn find_sibling_doc_names(
         names.push(row?);
     }
     Ok(names)
-}
-
-/// 同层文档名自动去重
-///
-/// 如果同层已有同名文档，自动追加序号 `(1)`、`(2)` ...
-/// 类似文件管理器的行为。
-pub fn deduplicate_doc_name(
-    conn: &Connection,
-    parent_id: &str,
-    title: &str,
-) -> Result<String, rusqlite::Error> {
-    let existing = find_sibling_doc_names(conn, parent_id)?;
-    if !existing.contains(&title.to_string()) {
-        return Ok(title.to_string());
-    }
-    // 收集已占用的序号
-    let prefix = format!("{} (", title);
-    let mut max_seq: u32 = 0;
-    for name in &existing {
-        if name == title {
-            continue;
-        }
-        if name.starts_with(&prefix) && name.ends_with(')') {
-            let seq_str = &name[prefix.len()..name.len() - 1];
-            if let Ok(n) = seq_str.parse::<u32>() {
-                max_seq = max_seq.max(n);
-            }
-        }
-    }
-    // 从 1 开始找第一个可用的序号
-    let mut seq = 1;
-    loop {
-        let candidate = format!("{} ({})", title, seq);
-        if !existing.contains(&candidate) {
-            return Ok(candidate);
-        }
-        seq += 1;
-    }
 }
 
 pub fn find_doc_by_parent_and_title(
@@ -822,7 +784,7 @@ pub fn check_is_descendant(
 pub fn restore_from_snapshot(
     conn: &Connection,
     block_id: &str,
-    snap: &crate::model::oplog::BlockSnapshot,
+    snap: &crate::block_system::model::oplog::BlockSnapshot,
     modified: &str,
 ) -> Result<(), rusqlite::Error> {
     conn.execute(
@@ -847,7 +809,7 @@ pub fn restore_from_snapshot(
 pub fn upsert_from_snapshot(
     conn: &Connection,
     block_id: &str,
-    snap: &crate::model::oplog::BlockSnapshot,
+    snap: &crate::block_system::model::oplog::BlockSnapshot,
     modified: &str,
 ) -> Result<(), rusqlite::Error> {
     conn.execute(
@@ -950,9 +912,9 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let root = find_by_id(&conn, crate::model::ROOT_ID).unwrap();
-        assert_eq!(root.id, crate::model::ROOT_ID);
-        assert_eq!(root.parent_id, crate::model::ROOT_ID);
+        let root = find_by_id(&conn, crate::block_system::model::ROOT_ID).unwrap();
+        assert_eq!(root.id, crate::block_system::model::ROOT_ID);
+        assert_eq!(root.parent_id, crate::block_system::model::ROOT_ID);
         assert_eq!(root.position, "a0");
     }
 
@@ -972,7 +934,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        assert!(exists_normal(&conn, crate::model::ROOT_ID).unwrap());
+        assert!(exists_normal(&conn, crate::block_system::model::ROOT_ID).unwrap());
     }
 
     #[test]
@@ -988,7 +950,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        assert_eq!(get_status(&conn, crate::model::ROOT_ID).unwrap(), "normal");
+        assert_eq!(get_status(&conn, crate::block_system::model::ROOT_ID).unwrap(), "normal");
     }
 
     #[test]
@@ -996,7 +958,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        assert_eq!(get_version(&conn, crate::model::ROOT_ID).unwrap(), 1);
+        assert_eq!(get_version(&conn, crate::block_system::model::ROOT_ID).unwrap(), 1);
     }
 
     // ── insert + find_by_id ──────────────────────────────
@@ -1006,12 +968,12 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("test_block_000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("test_block_000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         let block = find_by_id(&conn, "test_block_000001").unwrap();
         assert_eq!(block.id, "test_block_000001");
-        assert_eq!(block.parent_id, crate::model::ROOT_ID);
+        assert_eq!(block.parent_id, crate::block_system::model::ROOT_ID);
         assert_eq!(block.position, "a1");
         assert_eq!(block.content, b"hello");
         assert_eq!(block.version, 1);
@@ -1022,10 +984,10 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("dup_block_0000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("dup_block_0000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
-        let p2 = make_params("dup_block_0000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2");
+        let p2 = make_params("dup_block_0000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a2");
         assert!(insert_block(&conn, &p2).is_err());
     }
 
@@ -1036,7 +998,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("raw_test_blk_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("raw_test_blk_00001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         // 软删除
@@ -1057,7 +1019,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("del_test_blk_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("del_test_blk_00001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
         update_status(&conn, "del_test_blk_00001", "deleted", "2026-01-02T00:00:00.000Z").unwrap();
 
@@ -1070,7 +1032,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("normal_test_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("normal_test_00001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         assert!(find_deleted(&conn, "normal_test_00001").is_err());
@@ -1083,7 +1045,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("upd_test_blk_00001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("upd_test_blk_00001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         let rows = update_content_and_props(
@@ -1107,7 +1069,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("status_blk_000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("status_blk_000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         let rows = update_status(&conn, "status_blk_000001", "deleted", "2026-01-02T00:00:00.000Z").unwrap();
@@ -1121,7 +1083,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        let p = make_params("skip_blk_00000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1");
+        let p = make_params("skip_blk_00000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
         insert_block(&conn, &p).unwrap();
 
         // 状态已经是 normal，再次设为 normal 应跳过
@@ -1140,10 +1102,10 @@ mod tests {
         let conn = crate::repo::lock_db(&db);
 
         // 创建两个文档
-        let doc1 = make_doc_params("move_doc_00000001", crate::model::ROOT_ID, "a1");
+        let doc1 = make_doc_params("move_doc_00000001", crate::block_system::model::ROOT_ID, "a1");
         let doc2 = InsertBlockParams {
             id: "move_doc_00000002".to_string(),
-            parent_id: crate::model::ROOT_ID.to_string(),
+            parent_id: crate::block_system::model::ROOT_ID.to_string(),
             document_id: "move_doc_00000002".to_string(),
             position: "a2".to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
@@ -1183,10 +1145,10 @@ mod tests {
         let conn = crate::repo::lock_db(&db);
 
         // 根块下已有 a0
-        insert_block(&conn, &make_params("pos_blk_00000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("pos_blk_00000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2")).unwrap();
+        insert_block(&conn, &make_params("pos_blk_00000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("pos_blk_00000002", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a2")).unwrap();
 
-        let max = get_max_position(&conn, crate::model::ROOT_ID).unwrap();
+        let max = get_max_position(&conn, crate::block_system::model::ROOT_ID).unwrap();
         assert_eq!(max, Some("a2".to_string()));
     }
 
@@ -1196,7 +1158,7 @@ mod tests {
         let conn = crate::repo::lock_db(&db);
 
         // 新创建的空文档（无子块）
-        insert_block(&conn, &make_doc_params("empty_doc_000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("empty_doc_000001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
 
         let max = get_max_position(&conn, "empty_doc_000001").unwrap();
         assert_eq!(max, None);
@@ -1207,13 +1169,13 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_params("sib_a_000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("sib_a_000000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("sib_a_000000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("sib_a_000000002", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a3")).unwrap();
 
-        let next = get_next_sibling_position(&conn, crate::model::ROOT_ID, "a1").unwrap();
+        let next = get_next_sibling_position(&conn, crate::block_system::model::ROOT_ID, "a1").unwrap();
         assert_eq!(next, Some("a3".to_string()));
 
-        let none = get_next_sibling_position(&conn, crate::model::ROOT_ID, "a3").unwrap();
+        let none = get_next_sibling_position(&conn, crate::block_system::model::ROOT_ID, "a3").unwrap();
         assert_eq!(none, None);
     }
 
@@ -1222,18 +1184,18 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_params("sib_b_000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("sib_b_000000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("sib_b_000000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("sib_b_000000002", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a3")).unwrap();
 
-        let prev = get_prev_sibling_position(&conn, crate::model::ROOT_ID, "a3").unwrap();
+        let prev = get_prev_sibling_position(&conn, crate::block_system::model::ROOT_ID, "a3").unwrap();
         assert_eq!(prev, Some("a1".to_string()));
 
         // a1 的前驱是根块 a0（根块自身 parent_id=ROOT_ID）
-        let root_prev = get_prev_sibling_position(&conn, crate::model::ROOT_ID, "a1").unwrap();
+        let root_prev = get_prev_sibling_position(&conn, crate::block_system::model::ROOT_ID, "a1").unwrap();
         assert_eq!(root_prev, Some("a0".to_string()));
 
         // a0 之前没有更小的了
-        let none = get_prev_sibling_position(&conn, crate::model::ROOT_ID, "a0").unwrap();
+        let none = get_prev_sibling_position(&conn, crate::block_system::model::ROOT_ID, "a0").unwrap();
         assert_eq!(none, None);
     }
 
@@ -1245,10 +1207,10 @@ mod tests {
         let conn = crate::repo::lock_db(&db);
 
         // 插入两个文档和一个段落
-        insert_block(&conn, &make_doc_params("rootdoc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("rootdoc_00000001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &InsertBlockParams {
             id: "rootdoc_00000002".to_string(),
-            parent_id: crate::model::ROOT_ID.to_string(),
+            parent_id: crate::block_system::model::ROOT_ID.to_string(),
             document_id: "rootdoc_00000002".to_string(),
             position: "a3".to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
@@ -1264,7 +1226,7 @@ mod tests {
             created: "2026-01-01T00:00:00.000Z".to_string(),
             modified: "2026-01-01T00:00:00.000Z".to_string(),
         }).unwrap();
-        insert_block(&conn, &make_params("para_00000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a2")).unwrap();
+        insert_block(&conn, &make_params("para_00000000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a2")).unwrap();
 
         let docs = find_root_documents(&conn).unwrap();
         // 只返回 Document 类型，段落虽 parent_id 也是 ROOT_ID 但被过滤掉
@@ -1281,7 +1243,7 @@ mod tests {
         let conn = crate::repo::lock_db(&db);
 
         // root → doc → heading → para
-        insert_block(&conn, &make_doc_params("tree_doc_0000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("tree_doc_0000001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &InsertBlockParams {
             id: "tree_hdg_0000001".to_string(),
             parent_id: "tree_doc_0000001".to_string(),
@@ -1305,7 +1267,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_params("leaf_blk_0000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("leaf_blk_0000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1")).unwrap();
 
         let desc = find_descendants(&conn, "leaf_blk_0000001").unwrap();
         assert!(desc.is_empty());
@@ -1319,24 +1281,24 @@ mod tests {
         let conn = crate::repo::lock_db(&db);
 
         // 注意：根块自身也以 parent_id=ROOT_ID 存在，position="a0"
-        insert_block(&conn, &make_params("page_a_00000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
-        insert_block(&conn, &make_params("page_a_00000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
-        insert_block(&conn, &make_params("page_a_00000003", crate::model::ROOT_ID, crate::model::ROOT_ID, "a5")).unwrap();
+        insert_block(&conn, &make_params("page_a_00000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("page_a_00000002", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("page_a_00000003", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a5")).unwrap();
 
         // 取前 2 个（含根块 a0）
-        let page1 = find_children_paginated(&conn, crate::model::ROOT_ID, None, 2).unwrap();
+        let page1 = find_children_paginated(&conn, crate::block_system::model::ROOT_ID, None, 2).unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page1[0].position, "a0"); // 根块自身
         assert_eq!(page1[1].position, "a1");
 
         // 从 a1 之后继续取
-        let page2 = find_children_paginated(&conn, crate::model::ROOT_ID, Some("a1"), 2).unwrap();
+        let page2 = find_children_paginated(&conn, crate::block_system::model::ROOT_ID, Some("a1"), 2).unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].position, "a3");
         assert_eq!(page2[1].position, "a5");
 
         // a5 之后无更多
-        let page3 = find_children_paginated(&conn, crate::model::ROOT_ID, Some("a5"), 2).unwrap();
+        let page3 = find_children_paginated(&conn, crate::block_system::model::ROOT_ID, Some("a5"), 2).unwrap();
         assert!(page3.is_empty());
     }
 
@@ -1345,7 +1307,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_doc_params("empty_par_00001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("empty_par_00001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
 
         let children = find_children_paginated(&conn, "empty_par_00001", None, 10).unwrap();
         assert!(children.is_empty());
@@ -1358,7 +1320,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_doc_params("des_doc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("des_doc_00000001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &make_params("des_chd_00000001", "des_doc_00000001", "des_doc_00000001", "a0")).unwrap();
         insert_block(&conn, &make_params("des_chd_00000002", "des_doc_00000001", "des_doc_00000001", "a1")).unwrap();
 
@@ -1376,7 +1338,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_doc_params("dd_doc_000000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("dd_doc_000000001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &make_params("dd_chd_000000001", "dd_doc_000000001", "dd_doc_000000001", "a0")).unwrap();
         insert_block(&conn, &make_params("dd_chd_000000002", "dd_doc_000000001", "dd_doc_000000001", "a1")).unwrap();
 
@@ -1399,7 +1361,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_doc_params("anc_doc_00000001", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("anc_doc_00000001", crate::block_system::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &make_params("anc_chd_00000001", "anc_doc_00000001", "anc_doc_00000001", "a0")).unwrap();
 
         assert!(check_is_descendant(&conn, "anc_doc_00000001", "anc_chd_00000001").unwrap());
@@ -1410,11 +1372,11 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_doc_params("anc_doc_00000002", crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_doc_params("anc_doc_00000002", crate::block_system::model::ROOT_ID, "a1")).unwrap();
         insert_block(&conn, &make_params("anc_chd_00000002", "anc_doc_00000002", "anc_doc_00000002", "a0")).unwrap();
 
         // ROOT 不是 doc 的后代
-        assert!(!check_is_descendant(&conn, "anc_doc_00000002", crate::model::ROOT_ID).unwrap());
+        assert!(!check_is_descendant(&conn, "anc_doc_00000002", crate::block_system::model::ROOT_ID).unwrap());
     }
 
     // ── batch_update_status_if ───────────────────────────
@@ -1430,7 +1392,7 @@ mod tests {
             insert_block(&conn, &InsertBlockParams {
                 id: id.clone(),
                 status: "deleted".to_string(),
-                ..make_params(id, crate::model::ROOT_ID, crate::model::ROOT_ID, &format!("a{}", i + 2))
+                ..make_params(id, crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, &format!("a{}", i + 2))
             }).unwrap();
         }
 
@@ -1450,9 +1412,9 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_params("gp_blk_000000001", crate::model::ROOT_ID, crate::model::ROOT_ID, "a3")).unwrap();
+        insert_block(&conn, &make_params("gp_blk_000000001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a3")).unwrap();
 
-        let pos = get_position(&conn, "gp_blk_000000001", crate::model::ROOT_ID).unwrap();
+        let pos = get_position(&conn, "gp_blk_000000001", crate::block_system::model::ROOT_ID).unwrap();
         assert_eq!(pos, "a3");
     }
 
@@ -1461,7 +1423,7 @@ mod tests {
         let db = init_test_db();
         let conn = crate::repo::lock_db(&db);
 
-        insert_block(&conn, &make_params("gp_blk_000000002", crate::model::ROOT_ID, crate::model::ROOT_ID, "a1")).unwrap();
+        insert_block(&conn, &make_params("gp_blk_000000002", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1")).unwrap();
 
         // 用错误的 parent_id 查询
         assert!(get_position(&conn, "gp_blk_000000002", "wrong_parent").is_err());

@@ -31,7 +31,7 @@ pub struct ApiResponse<T: Serialize> {
 impl<T: Serialize> ApiResponse<T> {
     /// 构造成功响应
     ///
-    /// ```rust
+    /// ```ignore
     /// ApiResponse::ok(Some(block))  // → {"code":0, "msg":"ok", "data":{...}}
     /// ApiResponse::ok(None::<()>)   // → {"code":0, "msg":"ok"}
     /// ```
@@ -113,7 +113,6 @@ impl IntoResponse for AppError {
                 None,
             ),
             AppError::Internal(m) => {
-                // 记录详细错误到日志，对客户端返回通用消息
                 tracing::error!("Internal error: {}", m);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

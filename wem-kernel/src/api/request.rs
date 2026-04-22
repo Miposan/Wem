@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::model::{BlockType, ContentType};
+use crate::block_system::model::{BlockType, ContentType};
 
 // ─── 枚举类型 ──────────────────────────────────────────────────
 

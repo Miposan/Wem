@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::model::{Block, ParseWarning};
+use crate::block_system::model::{Block, ParseWarning};
 
 // ─── Block 操作响应 ────────────────────────────────────────────
 
@@ -165,7 +165,7 @@ pub struct MergeResult {
 /// `POST /api/v1/documents/history`
 #[derive(Debug, Serialize)]
 pub struct HistoryResponse {
-    pub entries: Vec<crate::model::oplog::HistoryEntry>,
+    pub entries: Vec<crate::block_system::model::oplog::HistoryEntry>,
 }
 
 /// Undo/Redo 响应
@@ -173,5 +173,5 @@ pub struct HistoryResponse {
 /// `POST /api/v1/undo` / `POST /api/v1/redo`
 #[derive(Debug, Serialize)]
 pub struct UndoRedoResponse {
-    pub result: crate::model::oplog::UndoRedoResult,
+    pub result: crate::block_system::model::oplog::UndoRedoResult,
 }

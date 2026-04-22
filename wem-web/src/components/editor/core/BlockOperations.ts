@@ -5,7 +5,12 @@
  * 利用 reference equality 检测子树是否变化，避免不必要的重渲染。
  */
 
-import type { BlockNode } from '@/types/api'
+import type { BlockNode, BlockType } from '@/types/api'
+
+/** 安全获取 heading level，非 heading 返回 null */
+export function getHeadingLevel(bt: BlockType): number | null {
+  return bt.type === 'heading' ? (bt as { level: number }).level : null
+}
 
 // ─── 查找 ───
 
@@ -163,58 +168,6 @@ export function replaceBlockInTree(
 
 // ─── 移动（拖拽乐观更新） ───
 
-/** Heading 移动到新位置后，吸收同层级下排在其后面的兄弟节点 */
-function absorbSiblingsAfterHeading(
-  tree: BlockNode[],
-  headingId: string,
-  headingLevel: number,
-): BlockNode[] {
-  return absorbInLevel(tree, headingId, headingLevel)
-}
-
-/** 在某一层级中查找 heading 并吸收其后的兄弟 */
-function absorbInLevel(
-  level: BlockNode[],
-  headingId: string,
-  headingLevel: number,
-): BlockNode[] {
-  // 先在当前层级找 heading
-  const foundIdx = level.findIndex((b) => b.id === headingId)
-  if (foundIdx >= 0) {
-    const toAbsorb: number[] = []
-    for (let i = foundIdx + 1; i < level.length; i++) {
-      const sibling = level[i]
-      if (sibling.block_type.type === 'heading') {
-        if ((sibling.block_type as { level: number }).level <= headingLevel) break
-      }
-      toAbsorb.push(i)
-    }
-    if (toAbsorb.length === 0) return level
-
-    const heading = level[foundIdx]
-    const absorbed = toAbsorb.map((i) => level[i])
-    const newChildren = [...heading.children, ...absorbed]
-    const result = [...level]
-    result[foundIdx] = { ...heading, children: newChildren }
-    for (let i = toAbsorb.length - 1; i >= 0; i--) {
-      result.splice(toAbsorb[i], 1)
-    }
-    return result
-  }
-
-  // 不在当前层级，递归子节点
-  let changed = false
-  const result = level.map((block) => {
-    const updated = absorbInLevel(block.children, headingId, headingLevel)
-    if (updated !== block.children) {
-      changed = true
-      return { ...block, children: updated }
-    }
-    return block
-  })
-  return changed ? result : level
-}
-
 /** 在指定块之前插入新块（顶层或嵌套） */
 export function insertBefore(tree: BlockNode[], beforeId: string, newBlock: BlockNode): BlockNode[] {
   for (let i = 0; i < tree.length; i++) {
@@ -326,11 +279,6 @@ export function moveBlockInTree(
       break
   }
 
-  // heading 移动后吸收后续同级兄弟
-  if (isHeading) {
-    const headingLevel = (block.block_type as { level: number }).level
-    return absorbSiblingsAfterHeading(inserted, blockId, headingLevel)
-  }
   return inserted
 }
 
@@ -369,9 +317,7 @@ export function moveHeadingTreeInTree(
       break
   }
 
-  // heading 移动后吸收后续同级兄弟
-  const headingLevel = (block.block_type as { level: number }).level
-  return absorbSiblingsAfterHeading(inserted, blockId, headingLevel)
+  return inserted
 }
 
 
