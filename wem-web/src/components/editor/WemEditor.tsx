@@ -4,7 +4,7 @@
  * 架构：
  *   用户操作 → useTextBlock → handleAction → OperationQueue → Command
  *                                                        ↓
- *                                               API 同步 (await splitBlock/...)
+ *                                               API 同步 (await createBlock/...)
  *                                               更新 UI (flushSync + 真实数据)
  *                                               光标从 DOM 读取 (getCursorPosition)
  *                                               DOM 光标 (SelectionManager)
@@ -26,11 +26,17 @@ import {
   executeSplit,
   executeDelete,
   executeMerge,
+  executeMergeNext,
   executeFocusPrevious,
   executeFocusNext,
   executeConvertBlock,
   executeMove,
   executeMoveHeadingTree,
+  executeToggleListType,
+  executeIndentListItem,
+  executeOutdentListItem,
+  executeExitList,
+  executeExitCodeBlock,
 } from './core/Commands'
 import type { CommandContext } from './core/Commands'
 import type { BlockAction, EditorSelection } from './core/types'
@@ -39,6 +45,8 @@ import { syncBlockContent, focusBlock, findEditable } from './core/SelectionMana
 import { useSelectionManager } from './core/useSelectionManager'
 import { useBlockDrag } from './core/useBlockDrag'
 import { getSelectedBlockIdsSet } from './core/EditorSelection'
+import { BlockContextMenu } from './components/BlockContextMenu'
+import type { BlockContextMenuState, BlockContextAction } from './components/BlockContextMenu'
 
 // ─── Props ───
 
@@ -61,8 +69,15 @@ export function WemEditor({
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
   const [selection, setSelection] = useState<EditorSelection | null>(null)
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set())
+  const [contextMenuState, setContextMenuState] = useState<BlockContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    block: null,
+  })
   const treeRef = useRef<BlockNode[]>([])
   const pendingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const creatingBlankBlockRef = useRef(false)
 
   // ─── 跨块选区 ───
 
@@ -330,6 +345,13 @@ export function WemEditor({
           )
           break
         }
+        case 'merge-with-next': {
+          const { blockId } = action
+          enqueueStructuralOp(`merge-next:${blockId}`, (ctx) =>
+            executeMergeNext(ctx, { blockId }),
+          )
+          break
+        }
         case 'convert-block': {
           const { blockId, content, blockType } = action
           enqueueStructuralOp(`convert:${blockId}`, (ctx) =>
@@ -373,6 +395,41 @@ export function WemEditor({
           const { blockId, target } = action
           enqueueStructuralOp(`move-heading-tree:${blockId}`, (ctx) =>
             executeMoveHeadingTree(ctx, { blockId, target }),
+          )
+          break
+        }
+        case 'toggle-list-type': {
+          const { blockId } = action
+          enqueueStructuralOp(`toggle-list-type:${blockId}`, (ctx) =>
+            executeToggleListType(ctx, blockId),
+          )
+          break
+        }
+        case 'indent-list-item': {
+          const { blockId } = action
+          enqueueStructuralOp(`indent-list-item:${blockId}`, (ctx) =>
+            executeIndentListItem(ctx, blockId),
+          )
+          break
+        }
+        case 'outdent-list-item': {
+          const { blockId } = action
+          enqueueStructuralOp(`outdent-list-item:${blockId}`, (ctx) =>
+            executeOutdentListItem(ctx, blockId),
+          )
+          break
+        }
+        case 'exit-list': {
+          const { blockId } = action
+          enqueueStructuralOp(`exit-list:${blockId}`, (ctx) =>
+            executeExitList(ctx, blockId),
+          )
+          break
+        }
+        case 'exit-code-block': {
+          const { blockId, content } = action
+          enqueueStructuralOp(`exit-code-block:${blockId}`, (ctx) =>
+            executeExitCodeBlock(ctx, blockId, content),
           )
           break
         }
@@ -435,41 +492,182 @@ export function WemEditor({
         handleRedo()
         return
       }
+      // Ctrl+A → 全选所有块
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        const flat = flattenTree(treeRef.current)
+        if (flat.length < 2) return // 单块或空文档交给浏览器原生全选
+        const first = flat[0]
+        const last = flat[flat.length - 1]
+        e.preventDefault()
+        handleSelectionChange({
+          anchorBlockId: first.id,
+          anchorOffset: 0,
+          focusBlockId: last.id,
+          focusOffset: (last.content ?? '').length,
+        })
+        return
+      }
+      // Escape → 清除跨块选区
+      if (e.key === 'Escape') {
+        if (selection) {
+          e.preventDefault()
+          clearSelection()
+        }
+        return
+      }
     },
-    [handleUndo, handleRedo],
+    [handleUndo, handleRedo, handleSelectionChange, selection, clearSelection],
   )
 
-  // ─── 空编辑器点击 → 创建初始段落 ───
+  // ─── 空白区域点击 → 聚焦编辑入口 ───
   //
-  // 当编辑器没有块时，点击空白区域自动创建一个 paragraph block 并聚焦。
+  // 点击编辑器空白区域时，优先聚焦已有的最后一个 Paragraph。
+  // 如果文档里没有 Paragraph，则在文档末尾创建一个新的 Paragraph。
   // 通过 closest('[data-block-id]') 判断点击是否落在已有块上，避免误触发。
+
+  const focusLastBlockIfParagraph = useCallback((): boolean => {
+    const lastBlock = treeRef.current.at(-1)
+    if (!lastBlock || lastBlock.block_type.type !== 'paragraph') return false
+
+    focusBlock(lastBlock.id, (lastBlock.content ?? '').length)
+    return true
+  }, [])
+
+  const createParagraphFromBlank = useCallback(() => {
+    if (readonly || creatingBlankBlockRef.current) return
+
+    creatingBlankBlockRef.current = true
+
+    const editorId = crypto.randomUUID()
+    addPendingOperationId(editorId)
+
+    const currentTree = treeRef.current
+    const lastTopLevelBlock = currentTree.at(-1)
+
+    createBlock({
+      parent_id: documentId,
+      block_type: { type: 'paragraph' },
+      content: '',
+      after_id: lastTopLevelBlock?.id,
+      editor_id: editorId,
+    })
+      .then((created) => {
+        const newBlock: BlockNode = { ...created, children: [] }
+        setTreeSync((prev) => [...prev, newBlock])
+        requestAnimationFrame(() => focusBlock(created.id))
+      })
+      .catch((err) => console.error('[editor] 创建空白段落失败:', err))
+      .finally(() => {
+        creatingBlankBlockRef.current = false
+      })
+  }, [readonly, documentId, setTreeSync, addPendingOperationId])
 
   const handleEditorClick = useCallback(
     (e: React.MouseEvent) => {
       if (readonly) return
       // 点击在已有块上，忽略
       if ((e.target as HTMLElement).closest('[data-block-id]')) return
-      // 树不为空，忽略
-      if (treeRef.current.length > 0) return
 
-      const editorId = crypto.randomUUID()
-      addPendingOperationId(editorId)
-
-      createBlock({
-        parent_id: documentId,
-        block_type: { type: 'paragraph' },
-        content: '',
-        editor_id: editorId,
-      })
-        .then((created) => {
-          const newBlock: BlockNode = { ...created, children: [] }
-          setTreeSync(() => [newBlock])
-          requestAnimationFrame(() => focusBlock(created.id))
-        })
-        .catch((err) => console.error('[editor] 创建初始段落失败:', err))
+      if (focusLastBlockIfParagraph()) return
+      createParagraphFromBlank()
     },
-    [readonly, documentId, setTreeSync, addPendingOperationId],
+    [readonly, focusLastBlockIfParagraph, createParagraphFromBlank],
   )
+
+  // ─── 右键菜单 ───
+
+  const handleBlockContextMenu = useCallback(
+    (e: React.MouseEvent, block: BlockNode) => {
+      e.preventDefault()
+      setContextMenuState({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        block,
+      })
+    },
+    [],
+  )
+
+  const handleContextMenuClose = useCallback(() => {
+    setContextMenuState((prev) => ({ ...prev, visible: false }))
+  }, [])
+
+  const handleContextAction = useCallback(
+    (action: BlockContextAction) => {
+      switch (action.type) {
+        case 'delete':
+          handleAction({ type: 'delete', blockId: action.blockId })
+          break
+        case 'copy': {
+          const block = findBlockById(treeRef.current, action.blockId)
+          if (block) navigator.clipboard.writeText(block.content ?? '').catch(() => {})
+          break
+        }
+        case 'cut': {
+          const block = findBlockById(treeRef.current, action.blockId)
+          if (block) {
+            navigator.clipboard.writeText(block.content ?? '').catch(() => {})
+            handleAction({ type: 'delete', blockId: action.blockId })
+          }
+          break
+        }
+        case 'duplicate': {
+          const block = findBlockById(treeRef.current, action.blockId)
+          if (block) {
+            const editorId = crypto.randomUUID()
+            addPendingOperationId(editorId)
+            createBlock({
+              parent_id: documentId,
+              block_type: block.block_type,
+              content: block.content ?? '',
+              after_id: block.id,
+              editor_id: editorId,
+            })
+              .then((created) => {
+                const newBlock: BlockNode = { ...created, children: [] }
+                setTreeSync((prev) => {
+                  const flat = flattenTree(prev)
+                  const idx = flat.findIndex((b) => b.id === block.id)
+                  // 在原块同级后面插入副本
+                  const insertAfter = flat[idx]
+                  return insertBlockAfter(prev, insertAfter.id, newBlock)
+                })
+              })
+              .catch((err) => console.error('[context-menu] 复制块失败:', err))
+          }
+          break
+        }
+        case 'convert': {
+          const block = findBlockById(treeRef.current, action.blockId)
+          if (block) {
+            handleAction({
+              type: 'convert-block',
+              blockId: action.blockId,
+              content: block.content ?? '',
+              blockType: action.blockType,
+            })
+          }
+          break
+        }
+        case 'copy-id':
+          navigator.clipboard.writeText(action.blockId).catch(() => {})
+          break
+      }
+    },
+    [handleAction, documentId, setTreeSync, addPendingOperationId],
+  )
+
+  /** 在指定块后面插入新块（顶层） */
+  function insertBlockAfter(tree: BlockNode[], afterId: string, newBlock: BlockNode): BlockNode[] {
+    return tree.flatMap((node) => {
+      if (node.id === afterId) return [node, { ...newBlock, children: [] }]
+      if (node.children.length > 0) {
+        return [{ ...node, children: insertBlockAfter(node.children, afterId, newBlock) }]
+      }
+      return [node]
+    })
+  }
 
   return (
     <div
@@ -491,6 +689,12 @@ export function WemEditor({
         onContentChange={handleContentChange}
         onAction={handleAction}
         onSelectionChange={handleSelectionChange}
+        onBlockContextMenu={handleBlockContextMenu}
+      />
+      <BlockContextMenu
+        state={contextMenuState}
+        onClose={handleContextMenuClose}
+        onAction={handleContextAction}
       />
     </div>
   )

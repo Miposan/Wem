@@ -119,12 +119,12 @@ impl Default for AgentConfig {
         Self {
             provider: "anthropic".to_string(),
             api_key: String::new(),
-            base_url: "https://api.anthropic.com".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
+            base_url: "".to_string(),
+            model: "".to_string(),
             max_tokens: 16384,
             temperature: 0.3,
             max_steps: 50,
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            api_key_env: "API_KEY".to_string(),
             custom_headers: std::collections::HashMap::new(),
             mcp_servers: Vec::new(),
         }

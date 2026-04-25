@@ -50,6 +50,29 @@ export type BlockType =
   | AttributeViewBlockType
   | WidgetBlockType
 
+// ── BlockType 类型安全工厂函数 ──
+// 避免在业务代码中使用 `as BlockType` 类型断言
+
+export function makeHeadingType(level: number): HeadingBlockType {
+  return { type: 'heading', level }
+}
+
+export function makeListType(ordered: boolean): ListBlockType {
+  return { type: 'list', ordered }
+}
+
+export function makeCodeBlockType(language: string): CodeBlockBlockType {
+  return { type: 'codeBlock', language }
+}
+
+export function makeListItemType(): ListItemBlockType {
+  return { type: 'listItem' }
+}
+
+export function makeParagraphType(): ParagraphBlockType {
+  return { type: 'paragraph' }
+}
+
 export interface Block {
   id: string
   parent_id: string

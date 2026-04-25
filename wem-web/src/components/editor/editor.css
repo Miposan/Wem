@@ -1,249 +1,359 @@
 /* ═══════════════════════════════════════════════════
-   Wem Custom Editor Styles
-   自研块编辑器 — 基于 BlockNode 树 + contentEditable
+   Wem Editor
+   发布级块编辑器样式：低干扰、清晰层级、稳定拖拽反馈
    ═══════════════════════════════════════════════════ */
 
-/* ─── 根容器 ─── */
-
 .wem-editor-root {
-  min-height: 200px;
+  --wem-editor-text: var(--foreground, #171717);
+  --wem-editor-muted: var(--muted-foreground, #737373);
+  --wem-editor-border: var(--border, #e5e5e5);
+  --wem-editor-soft: color-mix(in oklab, var(--muted, #f5f5f5) 70%, transparent);
+  --wem-editor-hover: color-mix(in oklab, var(--muted, #f5f5f5) 88%, transparent);
+  --wem-editor-selected: color-mix(in oklab, var(--primary, #111827) 10%, transparent);
+  --wem-editor-accent: var(--primary, #111827);
+  --wem-editor-radius: 10px;
+  --wem-gutter-width: 52px;
+
+  position: relative;
+  min-height: 280px;
+  padding-bottom: 40vh;
+  color: var(--wem-editor-text);
   font-size: 16px;
-  line-height: 1.75;
+  line-height: 1.72;
+  letter-spacing: -0.005em;
 }
 
 /* ─── Block 外壳 ─── */
 
 .wem-block-container {
   position: relative;
+  margin: 1px 0;
+  border-radius: 6px;
 }
 
 .wem-block-content {
-  padding: 1px 0;
+  position: relative;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+}
+
+.wem-block-editable {
+  position: relative;
+  min-width: 0;
+  padding-left: 0;
+}
+
+.wem-block-editable::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--wem-gutter-width));
+  top: -2px;
+  bottom: -2px;
+  width: var(--wem-gutter-width);
 }
 
 /* ─── contentEditable 通用 ─── */
 
 .wem-block-content [contenteditable] {
+  min-height: 1.72em;
   outline: none;
-  min-height: 1em;
   caret-color: currentColor;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 4px;
 }
 
 .wem-block-content [contenteditable]:focus {
   outline: none;
 }
 
-/* Placeholder — 空 contentEditable 时显示 */
 .wem-block-content [contenteditable]:empty::before {
   content: attr(data-placeholder);
-  color: var(--color-text-3, #999);
+  color: color-mix(in oklab, var(--wem-editor-muted) 80%, transparent);
   pointer-events: none;
+}
+
+.wem-block-container:focus-within > .wem-block-content {
+  background: color-mix(in oklab, var(--muted, #f5f5f5) 34%, transparent);
+}
+
+.wem-block-container:not(:focus-within):not(.wem-block-selected):hover > .wem-block-content {
+  background: color-mix(in oklab, var(--muted, #f5f5f5) 18%, transparent);
 }
 
 /* ─── 段落 ─── */
 
 .wem-paragraph {
-  margin: 1px 0;
+  margin: 0;
+  padding: 1px 0;
 }
 
 /* ─── 标题 ─── */
 
 .wem-heading {
   margin: 0;
-  font-weight: 600;
-  line-height: 1.3;
+  font-weight: 650;
+  line-height: 1.24;
+  letter-spacing: -0.025em;
+  color: var(--wem-editor-text);
 }
 
-.wem-heading-1 { font-size: 2em; }
-.wem-heading-2 { font-size: 1.5em; }
-.wem-heading-3 { font-size: 1.25em; }
-.wem-heading-4 { font-size: 1.1em; }
-.wem-heading-5 { font-size: 1em; }
-.wem-heading-6 { font-size: 0.9em; color: var(--color-text-2, #666); }
+.wem-heading-1 { font-size: 2.05em; padding-top: 0.72em; padding-bottom: 0.18em; }
+.wem-heading-2 { font-size: 1.58em; padding-top: 0.62em; padding-bottom: 0.14em; }
+.wem-heading-3 { font-size: 1.28em; padding-top: 0.52em; padding-bottom: 0.1em; }
+.wem-heading-4 { font-size: 1.12em; padding-top: 0.42em; padding-bottom: 0.06em; }
+.wem-heading-5 { font-size: 1em; padding-top: 0.35em; padding-bottom: 0.04em; }
+.wem-heading-6 { font-size: 0.92em; padding-top: 0.3em; padding-bottom: 0.02em; color: var(--wem-editor-muted); }
 
 /* ─── 分隔线 ─── */
 
 .wem-thematic-break {
   border: none;
-  border-top: 1px solid var(--color-border, #e5e5e5);
-  margin: 12px 0;
+  border-top: 1px solid var(--wem-editor-border);
+  margin: 14px 0;
   cursor: default;
 }
 
-/* ─── 块左侧操作区（Gutter） ───
- *
- * 统一的块级操作入口，承载：折叠箭头、拖拽手柄等。
- * 位于 .wem-block-editable 内部，绝对定位于文字左侧（right: 100%）。
- * 宽度自适应内容（按钮数量），紧贴文字边缘。
- * 默认隐藏，hover 时通过 ::before 扩展检测区触发显示。
- */
+/* ─── 引用块 ─── */
 
-.wem-block-editable {
-  position: relative;               /* gutter 的定位锚点 */
-  min-width: 0;
+.wem-blockquote {
+  margin: 6px 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid color-mix(in oklab, var(--wem-editor-muted) 55%, transparent);
+  color: color-mix(in oklab, var(--wem-editor-text) 72%, var(--wem-editor-muted));
 }
 
-/* 扩展 hover 检测区到左侧，方便鼠标滑入 gutter */
-.wem-block-editable::before {
-  content: '';
-  position: absolute;
-  left: -32px;
-  top: 0;
-  bottom: 0;
-  width: 32px;
+/* ─── 代码块 ─── */
+
+.wem-codeblock {
+  position: relative;
+  margin: 10px 0;
+  overflow: hidden;
+  border: 1px solid var(--wem-editor-border);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--muted, #f5f5f5) 72%, var(--background, #fff));
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--border, #e5e5e5) 55%, transparent);
 }
 
-.wem-block-gutter {
-  position: absolute;
-  right: 100%;                     /* 紧贴 editable 左边缘 */
-  top: 0;
-  height: 1lh;                     /* 与首行文字等高，align-items: center 实现垂直居中 */
+.wem-codeblock-header {
   display: flex;
-  flex-direction: row;
   align-items: center;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 0.15s;
-  pointer-events: none;
+  justify-content: flex-end;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-bottom: 1px solid color-mix(in oklab, var(--wem-editor-border) 70%, transparent);
+  user-select: none;
 }
 
-/* hover editable 区域或 gutter 内按钮获焦时显示 */
-.wem-block-editable:hover > .wem-block-gutter,
-.wem-block-gutter:focus-within {
-  opacity: 1;
-  pointer-events: auto;
+.wem-codeblock-lang-select {
+  height: 22px;
+  padding: 0 22px 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: none;
+  background: transparent;
+  color: var(--wem-editor-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
 }
 
-/* 已折叠的块始终显示 gutter（折叠箭头需要可见） */
-.wem-block-collapsed .wem-block-gutter {
-  opacity: 1;
-  pointer-events: auto;
+.wem-codeblock-lang-select:hover {
+  border-color: var(--wem-editor-border);
+  background: var(--background, #fff);
 }
 
-/* ─── Gutter 通用按钮 ─── */
+.wem-codeblock-lang-select:focus-visible {
+  border-color: var(--wem-editor-accent);
+}
 
-.wem-gutter-btn {
-  display: flex;
+.wem-codeblock-lang-label {
+  color: var(--wem-editor-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* 代码块折叠按钮 */
+.wem-codeblock-collapse-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border: none;
-  background: none;
+  margin-left: auto;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wem-editor-muted);
   cursor: pointer;
-  color: var(--color-text-3, #999);
-  border-radius: 3px;
-  line-height: 1;
   font-size: 10px;
-  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-.wem-gutter-btn:hover {
-  background: var(--color-fill-3, #f0f0f0);
-  color: var(--color-text-1, #333);
+.wem-codeblock-collapse-btn:hover {
+  border-color: var(--wem-editor-border);
+  background: var(--background, #fff);
+  color: var(--wem-editor-text);
 }
 
-/* ─── 折叠箭头（Gutter 内） ─── */
-
-.wem-collapse-arrow {
-  display: inline-block;
-  transition: transform 0.15s ease;
-  transform: rotate(90deg);        /* 展开：箭头朝下 */
+/* 折叠时 header 样式调整 */
+.wem-codeblock-collapsed .wem-codeblock-header {
+  border-bottom: none;
 }
 
-.wem-collapse-arrow.collapsed {
-  transform: rotate(0deg);          /* 折叠：箭头朝右 */
+.wem-codeblock-collapse-hint {
+  color: var(--wem-editor-muted);
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 4px;
 }
 
-/* ─── 子块容器 ─── */
-
-.wem-block-children {
-  padding-left: 24px;
+/* 折叠时隐藏编辑器 */
+.wem-codeblock-collapsed .wem-codeblock-editor {
+  display: none;
 }
 
-/* heading 子块不缩进：heading 是语义容器而非视觉层级 */
-.wem-block-container[data-block-type="heading"] > .wem-block-children {
+.wem-codeblock-editor {
+  padding: 10px 0;
+  min-height: 1.72em;
+}
+
+.wem-codeblock-editor .cm-editor {
+  height: auto;
+  background: transparent;
+}
+
+.wem-codeblock-editor .cm-scroller {
+  overflow: visible;
+}
+
+/* ─── 列表 ─── */
+
+.wem-block-container[data-block-type="list"] > .wem-block-content {
+  display: none;
+}
+
+.wem-block-container[data-block-type="list"] > .wem-block-children {
   padding-left: 0;
 }
 
-/* heading 间距放在 content 层，使 gutter 与文字对齐 */
-.wem-block-container[data-block-type="heading"] > .wem-block-content {
-  padding-top: 0.6em;
-  padding-bottom: 0.3em;
+.wem-list-item {
+  position: relative;
+  margin: 0;
+  padding: 1px 0 1px 1.75em;
 }
 
-/* heading gutter 匹配标题行高和字号，使 1lh 与首行文字等高 */
-.wem-block-container[data-block-type="heading"] .wem-block-gutter {
-  line-height: 1.3;
-}
-.wem-block-container[data-heading-level="1"] .wem-block-gutter { font-size: 2em; }
-.wem-block-container[data-heading-level="2"] .wem-block-gutter { font-size: 1.5em; }
-.wem-block-container[data-heading-level="3"] .wem-block-gutter { font-size: 1.25em; }
-.wem-block-container[data-heading-level="4"] .wem-block-gutter { font-size: 1.1em; }
-.wem-block-container[data-heading-level="5"] .wem-block-gutter { font-size: 1em; }
-.wem-block-container[data-heading-level="6"] .wem-block-gutter { font-size: 0.9em; }
-
-/* ─── 未知块 ─── */
-
-.wem-unknown-block {
-  padding: 8px 12px;
-  border: 1px dashed var(--color-border, #e5e5e5);
-  border-radius: 4px;
-  margin: 4px 0;
+/* 列表引导线 — 每个 ListItem 左侧的细竖线 */
+.wem-block-container[data-block-type="listItem"] > .wem-block-children {
+  position: relative;
 }
 
-/* ─── Focus 高亮 ─── */
-
-.wem-block-container:focus-within > .wem-block-content {
-  border-radius: 3px;
+.wem-block-container[data-block-type="listItem"] > .wem-block-children::before {
+  content: '';
+  position: absolute;
+  left: 0.55em;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--wem-editor-border) 80%, transparent);
+  transition: background-color 0.15s ease;
 }
 
-/* ─── Inline Marks（Phase 3 预留） ─── */
-
-.wem-editor-root strong {
-  font-weight: 600;
+.wem-block-container[data-block-type="listItem"]:hover > .wem-block-children::before {
+  background: color-mix(in oklab, var(--wem-editor-muted) 60%, transparent);
 }
 
-.wem-editor-root em {
-  font-style: italic;
+.wem-block-container[data-block-type="list"][data-list-ordered="false"] > .wem-block-children > .wem-block-container > .wem-block-content .wem-list-item::before {
+  content: '•';
+  position: absolute;
+  left: 0.42em;
+  color: var(--wem-editor-muted);
 }
 
-.wem-editor-root u {
-  text-decoration: underline;
+.wem-block-container[data-block-type="list"][data-list-ordered="true"] {
+  counter-reset: wem-list-item;
 }
 
-.wem-editor-root s {
-  text-decoration: line-through;
+.wem-block-container[data-block-type="list"][data-list-ordered="true"] > .wem-block-children > .wem-block-container {
+  counter-increment: wem-list-item;
 }
 
-.wem-editor-root code {
-  background: var(--color-fill-3, #f0f0f0);
-  border-radius: 3px;
-  padding: 2px 6px;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 0.875em;
+.wem-block-container[data-block-type="list"][data-list-ordered="true"] > .wem-block-children > .wem-block-container > .wem-block-content .wem-list-item::before {
+  content: counter(wem-list-item) '.';
+  position: absolute;
+  left: 0;
+  min-width: 1.35em;
+  color: var(--wem-editor-muted);
+  text-align: right;
 }
 
-.wem-editor-root a {
-  color: var(--primary-6, #1890ff);
-  text-decoration: underline;
+/* ─── Gutter ─── */
+
+.wem-block-gutter {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 0.2em;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 3;
+}
+
+.wem-block-editable:hover > .wem-block-gutter,
+.wem-block-content:focus-within .wem-block-gutter,
+.wem-block-gutter:focus-within,
+.wem-block-collapsed .wem-block-gutter {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.wem-gutter-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--background, #fff) 78%, transparent);
+  color: var(--wem-editor-muted);
   cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-/* ─── 跨块选中高亮 ─── */
-
-.wem-block-selected > .wem-block-content {
-  background: var(--color-primary-light-1, rgba(22, 119, 255, 0.08));
-  border-radius: 3px;
+.wem-gutter-btn:hover {
+  border-color: var(--wem-editor-border);
+  background: var(--background, #fff);
+  color: var(--wem-editor-text);
 }
 
-/* 选中期间禁止 contentEditable 的光标闪烁 */
-.wem-block-selected .wem-block-editable [contenteditable] {
-  caret-color: transparent;
+.wem-list-toggle-btn {
+  font-size: 12px;
+  letter-spacing: -1px;
 }
 
-/* ─── 拖拽手柄（Gutter 内） ─── */
+.wem-collapse-arrow {
+  display: inline-block;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.wem-collapse-arrow.collapsed {
+  transform: rotate(0deg);
+}
 
 .wem-drag-handle {
   cursor: grab;
@@ -255,19 +365,43 @@
   cursor: grabbing;
 }
 
-/* ─── 拖拽中状态 ─── */
+/* ─── 子块容器 ─── */
+
+.wem-block-children {
+  padding-left: 24px;
+}
+
+.wem-block-container[data-block-type="heading"] > .wem-block-children {
+  padding-left: 0;
+}
+
+.wem-block-container[data-block-type="listItem"] > .wem-block-children {
+  padding-left: 1.75em;
+}
+
+/* ─── 未知块 ─── */
+
+.wem-unknown-block {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--wem-editor-border);
+  border-radius: 8px;
+  background: var(--wem-editor-soft);
+}
+
+/* ─── 选区 / 拖拽 ─── */
+
+.wem-block-selected > .wem-block-content {
+  background: var(--wem-editor-selected);
+}
+
+.wem-block-selected .wem-block-editable [contenteditable] {
+  caret-color: transparent;
+}
 
 .wem-block-dragging {
-  opacity: 0.35;
+  opacity: 0.38;
 }
-
-/* ─── 放置目标高亮 ─── */
-
-.wem-block-drop-target {
-  /* 占位：未来可加额外视觉反馈 */
-}
-
-/* ─── 放置指示线（before / after） ─── */
 
 .wem-drop-indicator {
   position: relative;
@@ -282,56 +416,112 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--primary-6, #1890ff);
+  border-radius: 999px;
+  background: var(--wem-editor-accent);
 }
 
 .wem-drop-indicator::after {
   content: '';
   position: absolute;
   left: -3px;
-  top: -3px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--primary-6, #1890ff);
+  background: var(--wem-editor-accent);
 }
 
-/* before: 线条在块的上方 */
-.wem-drop-indicator-before::before {
-  top: -1px;
-}
-.wem-drop-indicator-before::after {
-  top: -4px;
+.wem-drop-indicator-before::before { top: -1px; }
+.wem-drop-indicator-before::after { top: -4px; }
+.wem-drop-indicator-after::before { bottom: -1px; }
+.wem-drop-indicator-after::after { bottom: -4px; }
+
+/* ─── 文本选区 ─── */
+
+.wem-editor-root ::selection {
+  background: color-mix(in oklab, var(--wem-editor-accent) 22%, transparent);
 }
 
-/* after: 线条在块的下方 */
-.wem-drop-indicator-after::before {
-  bottom: -1px;
-}
-.wem-drop-indicator-after::after {
-  bottom: -4px;
-}
+/* ─── Inline Marks（预留） ─── */
 
-/* ─── 放置指示区（child — 嵌套容器） ─── */
+.wem-editor-root strong { font-weight: 650; }
+.wem-editor-root em { font-style: italic; }
+.wem-editor-root u { text-decoration: underline; }
+.wem-editor-root s { text-decoration: line-through; }
 
-.wem-drop-indicator-child {
-  position: relative;
-  height: 4px;
-  margin-left: 24px;
-  background: var(--primary-6, #1890ff);
-  border-radius: 2px;
-  opacity: 0.6;
-  pointer-events: none;
+.wem-editor-root code {
+  padding: 0.12em 0.35em;
+  border-radius: 5px;
+  background: var(--wem-editor-soft);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.88em;
 }
 
-/* 嵌套容器拖入指示（左侧竖线） */
-.wem-drop-indicator-nest {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--primary-6, #1890ff);
-  pointer-events: none;
-  z-index: 10;
+.wem-editor-root a {
+  color: color-mix(in oklab, var(--primary, #111827) 88%, #2563eb);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.dark .wem-editor-root {
+  --wem-editor-soft: color-mix(in oklab, var(--muted, #262626) 80%, transparent);
+  --wem-editor-hover: color-mix(in oklab, var(--muted, #262626) 92%, transparent);
+  --wem-editor-selected: color-mix(in oklab, var(--primary, #fafafa) 14%, transparent);
+}
+
+.dark .wem-codeblock {
+  background: color-mix(in oklab, var(--muted, #262626) 82%, var(--background, #171717));
+}
+
+.dark .wem-gutter-btn,
+.dark .wem-codeblock-lang-select:hover {
+  background: color-mix(in oklab, var(--background, #171717) 78%, transparent);
+}
+
+/* 暗色模式列表引导线 */
+.dark .wem-block-container[data-block-type="listItem"] > .wem-block-children::before {
+  background: color-mix(in oklab, var(--border, #404040) 70%, transparent);
+}
+
+/* 暗色模式 CM6 适配 */
+.dark .wem-codeblock-editor .cm-editor {
+  color: var(--foreground, #e5e5e5);
+}
+
+.dark .wem-codeblock-editor .cm-gutters {
+  border-color: color-mix(in oklab, var(--border, #404040) 50%, transparent);
+  color: var(--muted-foreground, #a3a3a3);
+}
+
+.dark .wem-codeblock-editor .cm-activeLineGutter {
+  background: color-mix(in oklab, var(--muted, #262626) 60%, transparent);
+}
+
+.dark .wem-codeblock-editor .cm-activeLine {
+  background: color-mix(in oklab, var(--muted, #262626) 30%, transparent);
+}
+
+/* ─── 打印样式 ─── */
+
+@media print {
+  .wem-editor-root {
+    padding-bottom: 0;
+    min-height: auto;
+  }
+
+  .wem-block-gutter,
+  .wem-codeblock-collapse-btn,
+  .wem-drop-indicator {
+    display: none !important;
+  }
+
+  .wem-block-container:focus-within > .wem-block-content,
+  .wem-block-container:not(:focus-within):not(.wem-block-selected):hover > .wem-block-content {
+    background: transparent;
+  }
+
+  .wem-block-selected > .wem-block-content {
+    background: transparent;
+    box-shadow: none;
+  }
 }

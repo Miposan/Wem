@@ -314,23 +314,36 @@ fn is_list_item(line: &str) -> bool {
     is_unordered_list_item(line) || is_ordered_list_item(line)
 }
 
+/// 计算列表标记的字符宽度（从 trimmed 行首算起）
+///
+/// - 无序列表 `"- "` / `"* "` / `"+ "` → 2
+/// - 有序列表 `"1. "` → 3, `"10. "` → 4, 依此类推
+fn list_marker_width(trimmed: &str, ordered: bool) -> usize {
+    if !ordered {
+        // "- " / "* " / "+ " — 始终 2 字符
+        2
+    } else {
+        // 数字部分 + ". " (2 字符)
+        let digit_len = trimmed
+            .bytes()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        // 如果有 ". " 后缀则 digit_len + 2，否则仅 digit_len（容错）
+        if trimmed.get(digit_len..).map_or(false, |r| r.starts_with(". ")) {
+            digit_len + 2
+        } else {
+            digit_len
+        }
+    }
+}
+
 /// 剥离列表标记，返回纯文本内容
 ///
 /// `ordered` 参数由调用方已经判断，避免重复检测。
 fn strip_list_marker(line: &str, ordered: bool) -> String {
     let trimmed = line.trim_start();
-    if !ordered {
-        // 无序列表："- " / "* " / "+ " → 跳过 2 字符
-        trimmed.get(2..).unwrap_or(trimmed).to_string()
-    } else {
-        // 有序列表："1. " → 找到 ". " 跳过
-        let dot_pos = trimmed.find(". ").unwrap_or(trimmed.len());
-        if dot_pos < trimmed.len() {
-            trimmed[dot_pos + 2..].to_string()
-        } else {
-            trimmed.to_string()
-        }
-    }
+    let width = list_marker_width(trimmed, ordered);
+    trimmed.get(width..).unwrap_or(trimmed).to_string()
 }
 
 // ─── 解析上下文 ────────────────────────────────────────────
@@ -617,7 +630,8 @@ fn parse_list(scanner: &mut LineScanner, state: &mut ParserState) {
 
         // 消费列表项行
         let item_line = scanner.advance().unwrap();
-        let item_text = strip_list_marker(item_line, ordered);
+        let ordered_item = is_ordered_list_item(item_line);
+        let item_text = strip_list_marker(item_line, ordered_item);
 
         let item_id = state.add_block(
             BlockType::ListItem,
@@ -661,8 +675,11 @@ fn parse_list(scanner: &mut LineScanner, state: &mut ParserState) {
         }
 
         if !nested_lines.is_empty() {
-            // 去除嵌套缩进（base_indent + 2 = 列表标记宽度）
-            let dedent = base_indent + 2;
+            // 去除嵌套缩进：base_indent + 当前列表项的实际标记宽度
+            let item_trimmed = item_line.trim_start();
+            let item_indent = indent_of(item_line);
+            let marker_width = list_marker_width(item_trimmed, ordered_item);
+            let dedent = item_indent + marker_width;
             let dedented: Vec<String> = nested_lines
                 .iter()
                 .map(|l| {

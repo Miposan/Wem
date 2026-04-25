@@ -10,8 +10,9 @@
  * - 后端是唯一真相源，前端 UI 仅用于即时反馈
  */
 
-import type { BlockNode, BlockType } from '@/types/api'
-import { deleteBlock, splitBlock, mergeBlock, updateBlock, moveBlock, moveTree } from '@/api/client'
+import type { BlockNode, BlockType, ListBlockType } from '@/types/api'
+import { makeListType, makeListItemType } from '@/types/api'
+import { deleteBlock, createBlock, mergeBlock, updateBlock, moveBlock, moveTree } from '@/api/client'
 import {
   flattenTree,
   findBlockById,
@@ -26,6 +27,10 @@ import {
   moveHeadingTreeInTree,
 } from './BlockOperations'
 import { focusBlock, focusBlockEnd, getCursorPosition, syncBlockContent } from './SelectionManager'
+
+function pendingBlockId(): string {
+  return `_pending:${crypto.randomUUID()}`
+}
 
 // ─── Types ───
 
@@ -73,13 +78,8 @@ export interface ConvertParams {
 
 /** Move 参数（块拖拽移动） */
 export interface MoveParams {
-  /** 被移动的块 ID */
   blockId: string
-  /** 放置目标 */
-  target: {
-    blockId: string
-    position: 'before' | 'after' | 'child'
-  }
+  target: { blockId: string; position: 'before' | 'after' }
 }
 
 // ─── Commands ───
@@ -108,12 +108,38 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
   ctx.cancelPendingSave(targetId)
 
   const isHeading = block.block_type.type === 'heading'
+  const isListItem = block.block_type.type === 'listItem'
+
+  // ── 确定新块的类型和插入策略 ──
+  // ListItem split → 新块也是 ListItem（同列表内的兄弟）
+  // Heading split → 新块是 Paragraph，作为 heading 的子块
+  // 其他 → 同类型兄弟块
   const newBlockType: BlockType =
     isHeading ? { type: 'paragraph' } : { ...block.block_type }
 
+  // 空的 ListItem split → 退出列表（不创建新 ListItem）
+  // 在空 ListItem 里按 Enter 的语义是"结束列表"
+  if (isListItem && text.length === 0) {
+    // 删除当前空 ListItem，在 List 后面创建一个 Paragraph
+    const prev = findPrevBlock(tree, targetId)
+    ctx.setTreeSync((prevTree) => removeBlock(prevTree, targetId))
+    if (prev) focusBlockEnd(prev.id)
+
+    try {
+      await deleteBlock(targetId, ctx.editorId)
+      // refetch 以处理"List 变空后应自动删除"等后端逻辑
+      await ctx.refetchDocument()
+    } catch (err) {
+      console.error('[split] 退出列表失败，回滚:', err)
+      ctx.refetchDocument()
+    }
+    return
+  }
+
   // ── 乐观更新：立即更新 UI ──
-  const placeholderId = `_pending:${Date.now()}`
+  const placeholderId = pendingBlockId()
   const placeholder: BlockNode = {
+    ...block,
     id: placeholderId,
     block_type: newBlockType,
     content: contentAfter,
@@ -132,27 +158,35 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
   // 光标移到占位块开头
   requestAnimationFrame(() => focusBlock(placeholderId))
 
-  // ── 后台 API：后端生成真实 ID ──
+  // ── 后台 API：update + insert 组合（替代显式 split）──
   try {
-    const { updated_block, new_block } = await splitBlock(targetId, {
-      content_before: contentBefore,
-      content_after: contentAfter,
-      new_block_type: newBlockType,
-      nest_under_parent: isHeading || undefined,
+    // 1. 更新当前块内容（截断为前半段）
+    const updated = await updateBlock(targetId, {
+      content: contentBefore,
+      editor_id: ctx.editorId,
+    })
+
+    // 2. 创建新块
+    //    Heading → parent_id=targetId（子块）
+    //    ListItem → parent_id=同 List（兄弟）
+    //    其他 → parent_id=同父（兄弟）
+    const newBlock = await createBlock({
+      parent_id: isHeading ? targetId : block.parent_id,
+      block_type: newBlockType,
+      content: contentAfter,
+      ...(isHeading ? {} : { after_id: targetId }),
       editor_id: ctx.editorId,
     })
 
     // 用后端真实数据替换占位块 + 同步当前块内容
-    const realBlock: BlockNode = { ...new_block, children: [] }
+    const realBlock: BlockNode = { ...newBlock, children: [] }
     ctx.setTreeSync((prev) => {
-      // 先替换占位块为真实块
       const withReal = replaceBlockInTree(prev, placeholderId, realBlock)
-      // 再同步当前块内容（后端可能有调整）
-      return updateBlockInTree(withReal, targetId, { content: updated_block.content })
+      return updateBlockInTree(withReal, targetId, { content: updated.content })
     })
 
-    syncBlockContent(targetId, updated_block.content)
-    focusBlock(new_block.id)
+    syncBlockContent(targetId, updated.content)
+    focusBlock(newBlock.id)
   } catch (err) {
     console.error('[split] 拆分块失败，回滚:', err)
     ctx.refetchDocument()
@@ -236,6 +270,52 @@ export async function executeMerge(ctx: CommandContext, params: MergeParams): Pr
 }
 
 /**
+ * MergeNext — 将下一个块的内容合并到当前块（Delete 键在末尾触发）
+ *
+ * 与 executeMerge 方向相反：当前块保留，下一个块的内容追加到末尾。
+ * 后端 merge API 仅支持 previous 方向，所以这里用 updateBlock + deleteBlock 组合实现。
+ */
+export async function executeMergeNext(ctx: CommandContext, params: MergeParams): Promise<void> {
+  const tree = ctx.getTree()
+  const block = findBlockById(tree, params.blockId)
+  if (!block) return
+
+  const next = findNextBlock(tree, params.blockId)
+  if (!next) return
+
+  const mergedContent = (block.content ?? '') + (next.content ?? '')
+  const mergePoint = (block.content ?? '').length
+
+  ctx.cancelPendingSave(params.blockId)
+  ctx.cancelPendingSave(next.id)
+
+  // ── 乐观更新：立即合并 UI ──
+  ctx.setTreeSync((prevTree) => {
+    const updated = updateBlockInTree(prevTree, params.blockId, { content: mergedContent })
+    return removeBlock(updated, next.id)
+  })
+  syncBlockContent(params.blockId, mergedContent)
+  focusBlock(params.blockId, mergePoint)
+
+  // ── 后台 API ──
+  try {
+    const updated = await updateBlock(params.blockId, {
+      content: mergedContent,
+      editor_id: ctx.editorId,
+    })
+    await deleteBlock(next.id, ctx.editorId)
+
+    ctx.setTreeSync((prevTree) =>
+      updateBlockInTree(prevTree, params.blockId, { content: updated.content }),
+    )
+    syncBlockContent(params.blockId, updated.content ?? '')
+  } catch (err) {
+    console.error('[merge-next] 合并下一块失败，回滚:', err)
+    ctx.refetchDocument()
+  }
+}
+
+/**
  * Focus Previous — 聚焦前一个块末尾
  */
 export function executeFocusPrevious(ctx: CommandContext, blockId: string): void {
@@ -256,6 +336,7 @@ export function executeFocusNext(ctx: CommandContext, blockId: string): void {
  *
  * 乐观更新：先在 UI 中更新 block_type + content，后台调 API，用真实数据同步。
  * heading 相关的类型变化会触发后端自动嵌套（reparent），此时 refetch 整棵树。
+ * list 相关的类型变化需要创建 ListItem 子块，也需 refetch。
  */
 export async function executeConvertBlock(
   ctx: CommandContext,
@@ -263,13 +344,122 @@ export async function executeConvertBlock(
 ): Promise<void> {
   ctx.cancelPendingSave(params.blockId)
 
-  // 检查旧类型是否为 heading（用于判断是否需要 refetch 整棵树）
+  // 检查旧类型（用于判断是否需要 refetch 整棵树）
   const oldBlock = findBlockById(ctx.getTree(), params.blockId)
-  const wasHeading = oldBlock?.block_type.type === 'heading'
-  const becomesHeading = params.blockType.type === 'heading'
-  // heading 相关的类型变化会触发后端自动嵌套（reparent），需要 refetch 整棵树
-  const needsRefetch = wasHeading || becomesHeading
+  if (!oldBlock) return
 
+  const wasHeading = oldBlock.block_type.type === 'heading'
+  const becomesHeading = params.blockType.type === 'heading'
+  const becomesList = params.blockType.type === 'list'
+  const becomesThematicBreak = params.blockType.type === 'thematicBreak'
+  // heading / list 变化涉及结构性改动，需要 refetch 整棵树
+  const needsRefetch = wasHeading || becomesHeading || becomesList
+
+  // ── List 转换特殊处理 ──
+  // Paragraph → List：前端仅做乐观更新 + 调用 updateBlock。
+  // 后端 on_type_changed 会自动创建 ListItem 子块（迁移 content），无需前端 createBlock。
+  if (becomesList) {
+    const listContent = params.content
+
+    // 1. 乐观更新：将当前块变为空 List 容器，插入一个 placeholder ListItem
+    //    等 refetchDocument 后用后端真实数据替换
+    const placeholderId = pendingBlockId()
+    const placeholder: BlockNode = {
+      ...oldBlock,
+      id: placeholderId,
+      block_type: makeListItemType(),
+      content: listContent,
+      children: [],
+    }
+
+    ctx.setTreeSync((prev) => {
+      const updated = updateBlockInTree(prev, params.blockId, {
+        content: '',
+        block_type: params.blockType,
+      })
+      return insertAsFirstChild(updated, params.blockId, placeholder)
+    })
+
+    requestAnimationFrame(() => focusBlock(placeholderId, listContent.length))
+
+    // 2. 后台 API — 仅 updateBlock，后端 on_type_changed 自动创建 ListItem
+    try {
+      await updateBlock(params.blockId, {
+        block_type: params.blockType,
+        content: '',
+        editor_id: ctx.editorId,
+      })
+
+      // refetch 获取后端自动创建的 ListItem，替换 placeholder
+      await ctx.refetchDocument()
+
+      // refetch 后 List 的第一个 ListItem 就是真实 ID，聚焦它
+      const tree = ctx.getTree()
+      const listBlock = findBlockById(tree, params.blockId)
+      if (listBlock && listBlock.children.length > 0) {
+        focusBlock(listBlock.children[0].id, listContent.length)
+      }
+    } catch (err) {
+      console.error('[convert] 转换列表失败，回滚:', err)
+      ctx.refetchDocument()
+    }
+    return
+  }
+
+  // ── ThematicBreak 转换特殊处理 ──
+  // 分割线不可编辑，转换后立即在其后创建一个 Paragraph，保持连续输入体验。
+  if (becomesThematicBreak) {
+    const placeholderId = pendingBlockId()
+    const placeholder: BlockNode = {
+      ...oldBlock,
+      id: placeholderId,
+      block_type: { type: 'paragraph' },
+      content: '',
+      children: [],
+    }
+
+    ctx.setTreeSync((prev) => {
+      const updated = updateBlockInTree(prev, params.blockId, {
+        content: '',
+        block_type: params.blockType,
+      })
+      return insertAfter(updated, params.blockId, placeholder)
+    })
+    requestAnimationFrame(() => focusBlock(placeholderId))
+
+    try {
+      const updated = await updateBlock(params.blockId, {
+        block_type: params.blockType,
+        content: '',
+        editor_id: ctx.editorId,
+      })
+      const paragraph = await createBlock({
+        parent_id: oldBlock.parent_id,
+        after_id: params.blockId,
+        block_type: { type: 'paragraph' },
+        content: '',
+        editor_id: ctx.editorId,
+      })
+
+      const realBlock: BlockNode = { ...paragraph, children: [] }
+      ctx.setTreeSync((prev) => {
+        const withReal = replaceBlockInTree(prev, placeholderId, realBlock)
+        return updateBlockInTree(withReal, params.blockId, {
+          content: updated.content,
+          block_type: updated.block_type,
+          version: updated.version,
+          modified: updated.modified,
+        })
+      })
+      focusBlock(paragraph.id)
+    } catch (err) {
+      console.error('[convert] 转换分割线失败，回滚:', err)
+      ctx.refetchDocument()
+    }
+    return
+  }
+
+  // ── CodeBlock / Heading / 其他普通转换 ──
   // ── 乐观更新：立即更新 UI ──
   ctx.setTreeSync((prev) =>
     updateBlockInTree(prev, params.blockId, {
@@ -332,20 +522,10 @@ export async function executeMove(ctx: CommandContext, params: MoveParams): Prom
 
   // 构建 moveBlock API 请求参数
   const moveReq: Record<string, string> = { editor_id: ctx.editorId ?? '' }
-
-  switch (target.position) {
-    case 'before':
-    case 'after': {
-      if (target.position === 'before') {
-        moveReq.before_id = target.blockId
-      } else {
-        moveReq.after_id = target.blockId
-      }
-      break
-    }
-    case 'child':
-      moveReq.target_parent_id = target.blockId
-      break
+  if (target.position === 'before') {
+    moveReq.before_id = target.blockId
+  } else {
+    moveReq.after_id = target.blockId
   }
 
   // ── 后台 API + refetch 修正 ──
@@ -360,9 +540,9 @@ export async function executeMove(ctx: CommandContext, params: MoveParams): Prom
 }
 
 /**
- * MoveHeadingTree — 折叠 heading 子树整体拖拽移动
+ * MoveHeadingTree — 折叠 heading / list 子树整体拖拽移动
  *
- * 乐观更新：先在 UI 中移动整棵子树（纯前端树操作），后台调 API，失败则 refetch 回滚。
+ * 乐观更新：先在 UI 中移动整棵子树（纯前端树操作），后台调 moveTree API，失败则 refetch 回滚。
  * 后端的吸收逻辑（heading 移动后自动吸收后续同级节点）由 refetch 修正。
  */
 export async function executeMoveHeadingTree(
@@ -386,31 +566,260 @@ export async function executeMoveHeadingTree(
   ctx.setTreeSync((prev) => moveHeadingTreeInTree(prev, blockId, target))
   focusBlock(blockId)
 
-  // 构建 moveTree API 请求参数（只有 before_id / after_id，无 target_parent_id）
+  // 构建 moveTree API 请求参数
   const moveReq: Record<string, string> = { editor_id: ctx.editorId ?? '' }
-
-  switch (target.position) {
-    case 'before':
-      moveReq.before_id = target.blockId
-      break
-    case 'after':
-      moveReq.after_id = target.blockId
-      break
-    case 'child':
-      // 作为目标块的第一个子块 → 用 after_id 指向目标块
-      // 后端会把 heading 子树放到目标块之后（作为目标块的子节点）
-      moveReq.after_id = target.blockId
-      break
+  if (target.position === 'before') {
+    moveReq.before_id = target.blockId
+  } else {
+    moveReq.after_id = target.blockId
   }
 
   // ── 后台 API + refetch 修正 ──
   try {
     await moveTree(blockId, moveReq)
-    // moveTree 涉及吸收逻辑，refetch 确保与后端一致
     await ctx.refetchDocument()
     focusBlock(blockId)
   } catch (err) {
     console.error('[move-tree] 移动子树失败，回滚:', err)
     ctx.refetchDocument()
   }
+}
+
+/**
+ * ToggleListType — 切换 List 块的有序/无序类型
+ */
+export async function executeToggleListType(
+  ctx: CommandContext,
+  blockId: string,
+): Promise<void> {
+  const tree = ctx.getTree()
+  const block = findBlockById(tree, blockId)
+  if (!block || block.block_type.type !== 'list') return
+
+  const currentOrdered = (block.block_type as ListBlockType).ordered
+  const newType = makeListType(!currentOrdered)
+
+  ctx.cancelPendingSave(blockId)
+
+  // 乐观更新
+  ctx.setTreeSync((prev) =>
+    updateBlockInTree(prev, blockId, { block_type: newType }),
+  )
+
+  try {
+    await updateBlock(blockId, {
+      block_type: newType,
+      editor_id: ctx.editorId,
+    })
+  } catch (err) {
+    console.error('[toggle-list-type] 切换列表类型失败，回滚:', err)
+    ctx.refetchDocument()
+  }
+}
+
+/**
+ * IndentListItem — 将当前 ListItem 缩进到前一个 ListItem 的子列表下。
+ */
+export async function executeIndentListItem(
+  ctx: CommandContext,
+  blockId: string,
+): Promise<void> {
+  const tree = ctx.getTree()
+  const block = findBlockById(tree, blockId)
+  if (!block || block.block_type.type !== 'listItem') return
+
+  const parentList = findParentList(tree, blockId)
+  if (!parentList || parentList.block_type.type !== 'list') return
+
+  const index = parentList.children.findIndex((child) => child.id === blockId)
+  if (index <= 0) return
+
+  const previousItem = parentList.children[index - 1]
+  const existingChildList = previousItem.children.find((child) => child.block_type.type === 'list')
+  const ordered = (parentList.block_type as ListBlockType).ordered
+
+  ctx.cancelPendingSave(blockId)
+
+  try {
+    let targetListId = existingChildList?.id
+    if (!targetListId) {
+      const childList = await createBlock({
+        parent_id: previousItem.id,
+        block_type: makeListType(ordered),
+        content: '',
+        editor_id: ctx.editorId,
+      })
+      targetListId = childList.id
+    }
+
+    await moveBlock(blockId, {
+      target_parent_id: targetListId,
+      editor_id: ctx.editorId ?? '',
+    })
+
+    await ctx.refetchDocument()
+    focusBlock(blockId)
+  } catch (err) {
+    console.error('[indent-list-item] 缩进列表项失败，回滚:', err)
+    ctx.refetchDocument()
+  }
+}
+
+/**
+ * OutdentListItem — 将当前 ListItem 提升到父级 ListItem 之后。
+ */
+export async function executeOutdentListItem(
+  ctx: CommandContext,
+  blockId: string,
+): Promise<void> {
+  const tree = ctx.getTree()
+  const block = findBlockById(tree, blockId)
+  if (!block || block.block_type.type !== 'listItem') return
+
+  const parentList = findParentList(tree, blockId)
+  if (!parentList) return
+
+  const parentItem = findParentListItem(tree, parentList.id)
+  ctx.cancelPendingSave(blockId)
+
+  try {
+    if (parentItem) {
+      await moveBlock(blockId, {
+        after_id: parentItem.id,
+        editor_id: ctx.editorId ?? '',
+      })
+    } else {
+      await executeExitList(ctx, blockId)
+      return
+    }
+
+    await ctx.refetchDocument()
+    focusBlock(blockId)
+  } catch (err) {
+    console.error('[outdent-list-item] 反缩进列表项失败，回滚:', err)
+    ctx.refetchDocument()
+  }
+}
+
+/**
+ * ExitList — 空 ListItem 按 Enter：删除该项并在外层 List 后创建 Paragraph。
+ */
+export async function executeExitList(
+  ctx: CommandContext,
+  blockId: string,
+): Promise<void> {
+  const tree = ctx.getTree()
+  const block = findBlockById(tree, blockId)
+  if (!block || block.block_type.type !== 'listItem') return
+
+  const parentList = findParentList(tree, blockId)
+  if (!parentList) return
+
+  ctx.cancelPendingSave(blockId)
+
+  try {
+    await deleteBlock(blockId, ctx.editorId)
+    const paragraph = await createBlock({
+      parent_id: parentList.parent_id,
+      after_id: parentList.id,
+      block_type: { type: 'paragraph' },
+      content: '',
+      editor_id: ctx.editorId,
+    })
+
+    await ctx.refetchDocument()
+    focusBlock(paragraph.id)
+  } catch (err) {
+    console.error('[exit-list] 退出列表失败，回滚:', err)
+    ctx.refetchDocument()
+  }
+}
+
+/**
+ * ExitCodeBlock — Ctrl/Cmd+Enter：在代码块后创建一个 Paragraph。
+ */
+export async function executeExitCodeBlock(
+  ctx: CommandContext,
+  blockId: string,
+  content: string,
+): Promise<void> {
+  const tree = ctx.getTree()
+  const block = findBlockById(tree, blockId)
+  if (!block || block.block_type.type !== 'codeBlock') return
+
+  ctx.cancelPendingSave(blockId)
+
+  const placeholderId = pendingBlockId()
+  const placeholder: BlockNode = {
+    ...block,
+    id: placeholderId,
+    block_type: { type: 'paragraph' },
+    content: '',
+    children: [],
+  }
+
+  ctx.setTreeSync((prev) => {
+    const updated = updateBlockInTree(prev, blockId, { content })
+    return insertAfter(updated, blockId, placeholder)
+  })
+  requestAnimationFrame(() => focusBlock(placeholderId))
+
+  try {
+    const updated = await updateBlock(blockId, {
+      content,
+      editor_id: ctx.editorId,
+    })
+    const paragraph = await createBlock({
+      parent_id: block.parent_id,
+      after_id: blockId,
+      block_type: { type: 'paragraph' },
+      content: '',
+      editor_id: ctx.editorId,
+    })
+
+    const realBlock: BlockNode = { ...paragraph, children: [] }
+    ctx.setTreeSync((prev) => {
+      const withReal = replaceBlockInTree(prev, placeholderId, realBlock)
+      return updateBlockInTree(withReal, blockId, { content: updated.content })
+    })
+    focusBlock(paragraph.id)
+  } catch (err) {
+    console.error('[exit-code-block] 退出代码块失败，回滚:', err)
+    ctx.refetchDocument()
+  }
+}
+
+/** 查找 ListItem 所属的 List 父容器 */
+function findParentList(tree: BlockNode[], listItemBlockId: string): BlockNode | null {
+  for (const node of tree) {
+    const found = findParentListInSubtree(node, listItemBlockId)
+    if (found) return found
+  }
+  return null
+}
+
+function findParentListInSubtree(parent: BlockNode, targetId: string): BlockNode | null {
+  for (const child of parent.children) {
+    if (child.id === targetId && parent.block_type.type === 'list') {
+      return parent
+    }
+    const found = findParentListInSubtree(child, targetId)
+    if (found) return found
+  }
+  return null
+}
+
+/** 查找指定块的直接父块 */
+function findParentBlock(tree: BlockNode[], childId: string): BlockNode | null {
+  for (const node of tree) {
+    if (node.children.some((child) => child.id === childId)) return node
+    const found = findParentBlock(node.children, childId)
+    if (found) return found
+  }
+  return null
+}
+
+function findParentListItem(tree: BlockNode[], listBlockId: string): BlockNode | null {
+  const parent = findParentBlock(tree, listBlockId)
+  return parent?.block_type.type === 'listItem' ? parent : null
 }

@@ -290,7 +290,7 @@ export function moveBlockInTree(
 export function moveHeadingTreeInTree(
   tree: BlockNode[],
   blockId: string,
-  target: { blockId: string; position: 'before' | 'after' | 'child' },
+  target: { blockId: string; position: 'before' | 'after' },
 ): BlockNode[] {
   const block = findBlockById(tree, blockId)
   if (!block) return tree
@@ -304,20 +304,10 @@ export function moveHeadingTreeInTree(
   const newTree = removeBlock(tree, blockId)
 
   // 整棵子树插入到目标位置
-  let inserted: BlockNode[]
-  switch (target.position) {
-    case 'before':
-      inserted = insertBefore(newTree, target.blockId, block)
-      break
-    case 'after':
-      inserted = insertAfter(newTree, target.blockId, block)
-      break
-    case 'child':
-      inserted = insertAsFirstChild(newTree, target.blockId, block)
-      break
+  if (target.position === 'before') {
+    return insertBefore(newTree, target.blockId, block)
   }
-
-  return inserted
+  return insertAfter(newTree, target.blockId, block)
 }
 
 

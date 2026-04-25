@@ -98,7 +98,18 @@ fn split_block_inner(
     };
 
     // 5. 确定新块的 block_type
-    let new_block_type = req.new_block_type.unwrap_or(BlockType::Paragraph);
+    //    前端未指定时，后端根据上下文推断：
+    //    - 在 List 下的块（ListItem）→ 新块也是 ListItem
+    //    - 其他 → 默认 Paragraph
+    let new_block_type = req.new_block_type.unwrap_or_else(|| {
+        // 检查 parent 是否为 List 类型，如果是则新块默认为 ListItem
+        if let Ok(parent) = repo::find_by_id(&conn, &new_parent_id) {
+            if matches!(parent.block_type, BlockType::List { .. }) {
+                return BlockType::ListItem;
+            }
+        }
+        BlockType::Paragraph
+    });
 
     // 6. 创建新块
     let new_id = generate_block_id();
@@ -216,6 +227,15 @@ fn merge_block_inner(
             (parent, true)
         }
     };
+
+    // 2.5 类型约束：不能合并到 List 容器块（List 不应有 content）
+    //    List 容器块的 content 始终为空，合并文本进去违反数据模型。
+    //    正确的语义是“退出列表”，由前端通过 delete + create 组合实现。
+    if matches!(target.block_type, BlockType::List { .. }) {
+        return Err(AppError::BadRequest(
+            "不能合并到 List 容器块。ListItem 在列表首位时应使用“退出列表”操作".to_string()
+        ));
+    }
 
     // 3. 合并内容
     let target_text = String::from_utf8_lossy(&target.content);

@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ─── Block RPC ────────────────────────────────
         // Block 级操作：CRUD + 移动 + 恢复 + 拆分/合并 + 批量 + 导出
-        .route("/api/v1/blocks", post(handler::create_block))
+        .route("/api/v1/blocks/create", post(handler::create_block))
         .route("/api/v1/blocks/get", post(handler::get_block))
         .route("/api/v1/blocks/update", post(handler::update_block))
         .route("/api/v1/blocks/delete", post(handler::delete_block))

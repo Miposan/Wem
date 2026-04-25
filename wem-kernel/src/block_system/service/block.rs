@@ -27,6 +27,7 @@ use crate::util::now_iso;
 use super::heading::HeadingOps;
 use super::document::DocumentOps;
 use super::paragraph::ParagraphOps;
+use super::list::{ListOps, ListItemOps};
 
 pub(crate) fn use_tree_move(block_type: &BlockType) -> bool {
     match block_type {
@@ -76,6 +77,8 @@ pub(crate) fn dispatch_flat_list_move(
 pub(crate) fn validate_on_create(block_type: &BlockType) -> Result<(), AppError> {
     match block_type {
         BlockType::Heading { .. } => HeadingOps::validate_on_create(block_type),
+        BlockType::List { .. } => ListOps::validate_on_create(block_type),
+        BlockType::ListItem => ListItemOps::validate_on_create(block_type),
         _ => Ok(()),
     }
 }
@@ -109,8 +112,16 @@ pub(crate) fn on_type_changed(
     new_type: &BlockType,
 ) -> Result<(), AppError> {
     match (&old_block.block_type, new_type) {
+        // 涉及 Heading 的转换
         (BlockType::Heading { .. }, _) | (_, BlockType::Heading { .. }) => {
             HeadingOps::on_type_changed(conn, block_id, old_block, new_type)
+        }
+        // 涉及 List 的转换（X → List 或 List → X）
+        (BlockType::List { .. }, _) => {
+            ListOps::on_type_changed(conn, block_id, old_block, new_type)
+        }
+        (_, BlockType::List { .. }) => {
+            ListOps::on_type_changed(conn, block_id, old_block, new_type)
         }
         _ => Ok(()),
     }
@@ -137,6 +148,10 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
         // 2. 验证 parent 存在且未删除
         let parent = repo::find_by_id(&conn, &req.parent_id)
             .map_err(|_| AppError::BadRequest(format!("父块 {} 不存在或已删除", req.parent_id)))?;
+
+        // 2.5 父子类型约束校验（ListItem 必须在 List 下、List 子块必须是 ListItem）
+        super::list::validate_parent_child_constraint(&parent, &req.block_type)?;
+        super::list::validate_list_child_type(&parent.block_type, &req.block_type)?;
 
         // 3. 推断 document_id
         let document_id = derive_document_id(&parent);
@@ -347,6 +362,8 @@ pub fn delete_block(db: &Db, id: &str, editor_id: Option<String>) -> Result<Dele
             .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", id)))?;
 
         let document_id = current.document_id.clone();
+        let parent_id_before_delete = current.parent_id.clone();
+        let deleted_list_item = matches!(current.block_type, BlockType::ListItem);
 
         // 将子块 reparent 到被删块的父级，保持原有顺序
         let child_ids: Vec<String> = repo::find_children(&conn, id)
@@ -363,6 +380,10 @@ pub fn delete_block(db: &Db, id: &str, editor_id: Option<String>) -> Result<Dele
         let now = now_iso();
         repo::update_status(&conn, id, "deleted", &now)
             .map_err(|e| AppError::Internal(format!("软删除失败: {}", e)))?;
+
+        if deleted_list_item {
+            let _ = super::list::cleanup_empty_list(&conn, &parent_id_before_delete)?;
+        }
 
         let new_version = repo::get_version(&conn, id)
             .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)))?;
@@ -668,6 +689,13 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
             }
         }
 
+        let target_parent = repo::find_by_id(&conn, &target_parent_id)
+            .map_err(|_| AppError::BadRequest(format!(
+                "目标父块 {} 不存在或已删除", target_parent_id
+            )))?;
+        super::list::validate_parent_child_constraint(&target_parent, &current.block_type)?;
+        super::list::validate_list_child_type(&target_parent.block_type, &current.block_type)?;
+
         // 5. 计算新 position
         let new_position = match (req.before_id.as_deref(), req.after_id.as_deref()) {
             (Some(_), _) | (_, Some(_)) => position::calculate_move_position(
@@ -705,6 +733,10 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
             new_position: &new_position,
             parent_changed,
         })?;
+
+        if parent_changed && matches!(current.block_type, BlockType::ListItem) {
+            let _ = super::list::cleanup_empty_list(&conn, &current.parent_id)?;
+        }
 
         // 8. 记录历史
         let after = repo::find_by_id_raw(&conn, id)
@@ -1818,7 +1850,7 @@ mod tests {
         }).unwrap();
 
         // p2 is placed after h2, so heading will absorb it
-        let p2 = create_block(&db, CreateBlockReq {
+        let _p2 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Paragraph,
             content: "p2".to_string(),
@@ -1839,7 +1871,6 @@ mod tests {
         // h2 should have absorbed p2 (and p1) after move
         let conn = crate::repo::lock_db(&db);
         let h2_children = crate::repo::block_repo::find_children(&conn, &h2.id).unwrap();
-        let doc_children = crate::repo::block_repo::find_children(&conn, &doc.id).unwrap();
         drop(conn);
 
         // doc should only have h2 now, h2 should have the others

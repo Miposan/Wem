@@ -17,6 +17,7 @@ pub mod block;
 pub mod document;
 pub mod event;
 pub mod heading;
+pub mod list;
 pub mod oplog;
 pub mod paragraph;
 pub mod position;

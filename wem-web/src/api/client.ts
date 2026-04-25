@@ -125,7 +125,7 @@ export function exportDocument(id: string, format = 'markdown') {
 // ---------- Block ----------
 
 export function createBlock(req: CreateBlockReq) {
-  return post<Block>('/blocks', req)
+  return post<Block>('/blocks/create', req)
 }
 
 export function getBlock(id: string, includeDeleted = false) {

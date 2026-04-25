@@ -13,7 +13,7 @@ export interface EditorSelection {
 // ─── Drag-Drop ───
 
 /** 拖拽放置目标位置 */
-export type DropPosition = 'before' | 'after' | 'child'
+export type DropPosition = 'before' | 'after'
 
 /** 当前拖拽放置目标 */
 export interface DropTarget {
@@ -38,16 +38,27 @@ export type BlockAction =
   | { type: 'split' }
   | { type: 'delete'; blockId: string }
   | { type: 'merge-with-previous'; blockId: string }
+  | { type: 'merge-with-next'; blockId: string }
   | { type: 'focus-previous'; blockId: string }
   | { type: 'focus-next'; blockId: string }
   /** Markdown 快捷键转换块类型（如 `## ` → heading），同时更新内容 */
   | { type: 'convert-block'; blockId: string; content: string; blockType: BlockType }
   /** 跨块选区删除 */
   | { type: 'delete-range'; blockIds: string[] }
-  /** 块拖拽移动（普通块 / 无子节点的 heading） */
+  /** 块拖拽移动 */
   | { type: 'move-block'; blockId: string; target: DropTarget }
-  /** heading 子树整体拖拽移动（折叠 heading + 其下属内容） */
+  /** 折叠的 heading / list 整棵子树拖拽移动（后端 moveTree API） */
   | { type: 'move-heading-tree'; blockId: string; target: DropTarget }
+  /** 切换 List 的有序/无序类型 */
+  | { type: 'toggle-list-type'; blockId: string }
+  /** 列表项缩进（Tab）：在当前 ListItem 下创建子 List + ListItem */
+  | { type: 'indent-list-item'; blockId: string }
+  /** 列表项反缩进（Shift+Tab）：提升到上级 List 或退出列表 */
+  | { type: 'outdent-list-item'; blockId: string }
+  /** 退出列表（空 ListItem 按 Enter）：删除 ListItem，在 List 后创建 Paragraph */
+  | { type: 'exit-list'; blockId: string }
+  /** 退出代码块（Ctrl/Cmd+Enter）：在代码块后创建 Paragraph */
+  | { type: 'exit-code-block'; blockId: string; content: string }
 
 // ─── Component Props ───
 
@@ -79,6 +90,8 @@ export interface BlockRendererProps {
   onAction: (action: BlockAction) => void
   onToggleCollapse: (blockId: string) => void
   onSelectionChange: (selection: EditorSelection | null) => void
+  /** 右键菜单回调 */
+  onBlockContextMenu?: BlockContextMenuHandler
 }
 
 /** 拖拽事件处理函数（由 useBlockDrag 返回，传入 BlockContainer） */
@@ -89,3 +102,9 @@ export interface DragHandlers {
   onDrop: (e: React.DragEvent, blockId: string) => void
   onDragEnd: (e: React.DragEvent) => void
 }
+
+/** 右键菜单处理函数 */
+export type BlockContextMenuHandler = (
+  e: React.MouseEvent,
+  block: BlockNode,
+) => void
