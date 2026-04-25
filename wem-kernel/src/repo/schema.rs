@@ -32,7 +32,7 @@ PRAGMA synchronous = NORMAL;
 
 /// blocks 表建表语句
 ///
-/// 16 个字段 + 外键约束 + UNIQUE 约束
+/// 15 个字段 + 外键约束 + UNIQUE 约束
 pub const CREATE_BLOCKS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS blocks (
     id              TEXT PRIMARY KEY,                -- 20 位 Block ID
@@ -40,11 +40,10 @@ CREATE TABLE IF NOT EXISTS blocks (
     document_id     TEXT NOT NULL,                   -- 所属文档 ID（文档块指向自身）
     position        TEXT NOT NULL,                   -- Fractional Index（字符串，字典序排序）
     block_type      TEXT NOT NULL,                   -- JSON: {"type":"heading","level":2}
-    content_type    TEXT NOT NULL,                   -- markdown / empty / query
     content         BLOB DEFAULT X'',                -- 块内容（空值用 X''）
     properties      TEXT DEFAULT '{}',               -- JSON 属性
     version         INTEGER NOT NULL DEFAULT 1,      -- 乐观锁版本号
-    status          TEXT NOT NULL DEFAULT 'normal',   -- normal / draft / deleted
+    status          TEXT NOT NULL DEFAULT 'normal',   -- normal / deleted
     schema_version  INTEGER NOT NULL DEFAULT 1,      -- 格式迁移版本
     author          TEXT NOT NULL DEFAULT 'system',   -- 创建者（不可变）
     owner_id        TEXT,                            -- 当前所有者 user_id（可变）

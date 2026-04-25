@@ -46,6 +46,7 @@ impl ContextManager {
         messages: &mut Vec<Message>,
         system: &str,
         provider: &dyn Provider,
+        model: Option<&str>,
     ) -> Result<(), String> {
         if messages.len() <= 4 {
             return Ok(());
@@ -67,8 +68,13 @@ impl ContextManager {
             summary_text
         ))];
 
-        match provider.complete(system, &summary_prompt, 0.3).await {
+        // 摘要也走当前会话模型（如果有覆盖），避免上下文压缩和主对话模型不一致。
+        match provider
+            .complete(system, &summary_prompt, 0.3, model)
+            .await
+        {
             Ok(summary) => {
+                // 用一条“摘要消息”替代旧历史，给最近对话腾出上下文窗口。
                 let summary_msg = Message::user(format!("[Summary of earlier conversation: {}]", summary));
                 messages.insert(0, summary_msg);
             }

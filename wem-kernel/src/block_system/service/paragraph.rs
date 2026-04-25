@@ -71,13 +71,15 @@ fn split_block_inner(
     let new_content = req.content_before.into_bytes();
     let properties_json = helpers::to_json(&current.properties);
 
-    let rows = repo::update_content_and_props(
-        &conn, id, &new_content, &properties_json, &now,
+    let rows = repo::update_block_fields(
+        &conn, id, &new_content, &properties_json, None, &now, Some(current.version),
     )
     .map_err(|e| AppError::Internal(format!("更新 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Block {} 不存在", id)));
+        return Err(AppError::VersionConflict(format!(
+            "Block {} 版本冲突（期望版本 {}）", id, current.version
+        )));
     }
 
     // 3. 查询更新后的原块
@@ -97,7 +99,6 @@ fn split_block_inner(
 
     // 5. 确定新块的 block_type
     let new_block_type = req.new_block_type.unwrap_or(BlockType::Paragraph);
-    let content_type = new_block_type.default_content_type();
 
     // 6. 创建新块
     let new_id = generate_block_id();
@@ -109,7 +110,6 @@ fn split_block_inner(
         document_id,
         position,
         block_type: helpers::to_json(&new_block_type),
-        content_type: content_type.as_str().to_string(),
         content: req.content_after.into_bytes(),
         properties: "{}".to_string(),
         version: 1,
@@ -226,19 +226,20 @@ fn merge_block_inner(
     let now = now_iso();
     let properties_json = helpers::to_json(&target.properties);
 
-    let rows = repo::update_content_and_props(
+    let rows = repo::update_block_fields(
         &conn,
         &target.id,
         merged_content.as_bytes(),
         &properties_json,
+        None,
         &now,
+        Some(target.version),
     )
     .map_err(|e| AppError::Internal(format!("更新合并目标块失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!(
-            "合并目标 Block {} 不存在",
-            target.id
+        return Err(AppError::VersionConflict(format!(
+            "合并目标 Block {} 版本冲突（期望版本 {}）", target.id, target.version
         )));
     }
 
@@ -272,7 +273,7 @@ fn merge_block_inner(
         for child in &children {
             let t = now_iso();
             repo::update_parent_position_document_id(
-                &conn, &child.id, reparent_target_id, &pos, &new_document_id, &t,
+                &conn, &child.id, reparent_target_id, &pos, &new_document_id, &t, None,
             )
             .map_err(|e| AppError::Internal(format!("Reparent 子块失败: {}", e)))?;
             pos = position::generate_after(&pos);

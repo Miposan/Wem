@@ -418,7 +418,6 @@ fn build_block(
         parent_id,
         document_id,
         position,
-        content_type: block_type.default_content_type(),
         block_type,
         content,
         properties,
@@ -1077,7 +1076,7 @@ fn serialize_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block_system::model::{BlockStatus, BlockType, ContentType};
+    use crate::block_system::model::{BlockStatus, BlockType};
     use crate::block_system::parser::types::ParseOptions;
 
     /// 辅助：解析 Markdown 文本，返回 (root, children)
@@ -1188,7 +1187,6 @@ mod tests {
         let (root, children) = parse_md("Hello world");
         let para = find_by_type(&children, &BlockType::Paragraph);
         assert_eq!(para.content, b"Hello world");
-        assert_eq!(para.content_type, ContentType::Markdown);
         assert_eq!(para.parent_id, root.id);
     }
 
@@ -1216,7 +1214,6 @@ mod tests {
 
         let code = find_by_type(&children, &BlockType::CodeBlock { language: "rust".to_string() });
         assert_eq!(code.content, b"fn main() {}");
-        assert_eq!(code.content_type, ContentType::Markdown);
     }
 
     #[test]
@@ -1270,7 +1267,6 @@ mod tests {
         let (_, children) = parse_md(md);
 
         let tb = find_by_type(&children, &BlockType::ThematicBreak);
-        assert_eq!(tb.content_type, ContentType::Empty);
         assert!(tb.content.is_empty());
     }
 
@@ -1499,7 +1495,6 @@ Final paragraph.
             document_id: "doc1".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
-            content_type: ContentType::Markdown,
             content: Vec::new(),
             properties: {
                 let mut m = HashMap::new();
@@ -1529,7 +1524,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: {
                 let mut m = HashMap::new();
@@ -1559,7 +1553,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: ContentType::Markdown,
             content: b"Hello world".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1585,7 +1578,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::CodeBlock { language: "rust".to_string() },
-            content_type: ContentType::Markdown,
             content: b"fn main() {}".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1613,7 +1605,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::MathBlock,
-            content_type: ContentType::Markdown,
             content: b"E = mc^2".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1640,7 +1631,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::ThematicBreak,
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1666,7 +1656,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Image { url: "https://example.com/img.png".to_string() },
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: {
                 let mut m = HashMap::new();
@@ -1696,7 +1685,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::List { ordered: false },
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1714,7 +1702,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::ListItem,
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1732,7 +1719,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: ContentType::Markdown,
             content: b"item 1".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1758,7 +1744,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::List { ordered: true },
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1776,7 +1761,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::ListItem,
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1794,7 +1778,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: ContentType::Markdown,
             content: b"first".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1820,7 +1803,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Blockquote,
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1838,7 +1820,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: ContentType::Markdown,
             content: b"quoted text".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1866,7 +1847,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Audio { url: "https://example.com/audio.mp3".to_string() },
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1899,7 +1879,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Video { url: "https://example.com/video.mp4".to_string() },
-            content_type: ContentType::Empty,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,
@@ -1929,7 +1908,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: ContentType::Markdown,
             content: b"should be skipped".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1955,7 +1933,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: ContentType::Markdown,
             content: b"content".to_vec(),
             properties: HashMap::new(),
             version: 1,
@@ -1984,7 +1961,6 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
-            content_type: ContentType::Markdown,
             content: Vec::new(),
             properties: {
                 let mut m = HashMap::new();
@@ -2087,7 +2063,6 @@ Final paragraph.
             document_id: id.to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
-            content_type: ContentType::Markdown,
             content: Vec::new(),
             properties: HashMap::new(),
             version: 1,

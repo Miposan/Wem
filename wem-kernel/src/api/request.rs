@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::block_system::model::{BlockType, ContentType};
+use crate::block_system::model::BlockType;
 
 // ─── 枚举类型 ──────────────────────────────────────────────────
 
@@ -35,8 +35,6 @@ pub struct CreateBlockReq {
     pub parent_id: String,
     /// Block 类型（必填）
     pub block_type: BlockType,
-    /// 内容格式（可选，不传则根据 block_type 自动推断）
-    pub content_type: Option<ContentType>,
     /// 块内容（可选，默认为空字符串）
     #[serde(default)]
     pub content: String,
@@ -245,8 +243,6 @@ pub enum BatchOp {
         parent_id: String,
         /// Block 类型
         block_type: BlockType,
-        /// 内容格式（可选）
-        content_type: Option<ContentType>,
         /// 块内容（可选）
         #[serde(default)]
         content: String,

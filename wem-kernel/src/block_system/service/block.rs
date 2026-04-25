@@ -123,9 +123,8 @@ pub(crate) fn on_type_changed(
 /// 流程：
 /// 1. 验证 parent_id 存在且未删除
 /// 2. 根据 after_id 计算 position（插入指定位置或追加末尾）
-/// 3. 推断 content_type（如果请求未指定）
-/// 4. 生成 20 位 ID + 时间戳
-/// 5. INSERT INTO blocks
+/// 3. 生成 20 位 ID + 时间戳
+/// 4. INSERT INTO blocks
 ///
 pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
     let editor_id = req.editor_id.clone();
@@ -146,24 +145,17 @@ pub fn create_block(db: &Db, req: CreateBlockReq) -> Result<Block, AppError> {
         let position =
             position::calculate_insert_position(&conn, &req.parent_id, req.after_id.as_deref())?;
 
-        // 5. 推断 content_type
-        let content_type = req
-            .content_type
-            .clone()
-            .unwrap_or_else(|| req.block_type.default_content_type());
-
-        // 6. 生成 ID 和时间戳
+        // 5. 生成 ID 和时间戳
         let id = generate_block_id();
         let now = now_iso();
 
-        // 7. INSERT（通过 repository）
+        // 6. INSERT（通过 repository）
         repo::insert_block(&conn, &InsertBlockParams {
             id: id.clone(),
             parent_id: req.parent_id,
             document_id: document_id.clone(),
             position,
             block_type: to_json(&req.block_type),
-            content_type: content_type.as_str().to_string(),
             content: req.content.into_bytes(),
             properties: to_json(&req.properties),
             version: 1,
@@ -267,7 +259,7 @@ fn update_block_inner(
     // 2.5 类型特化内容调整
     adjust_content_on_update(&conn, &current, &mut new_content)?;
 
-    // 3. 计算新 block_type 和 content_type
+    // 3. 计算新 block_type
     let new_block_type = req.block_type.clone().unwrap_or(current.block_type.clone());
 
     // 4. 计算新 properties（merge 或 replace）
@@ -275,12 +267,7 @@ fn update_block_inner(
     let properties_json = to_json(&new_properties);
 
     // 5. 写入数据库
-    let new_content_type = req.block_type
-        .as_ref()
-        .map(|bt| bt.default_content_type())
-        .unwrap_or(current.content_type.clone());
-
-    write_block_updates(conn, id, &req.block_type, &new_content, &properties_json, &new_block_type, new_content_type.as_str())?;
+    write_block_updates(conn, id, &req.block_type, &new_content, &properties_json, &new_block_type, current.version)?;
 
     // 6. 类型变更后处理（仅 block_type 变化时）
     if req.block_type.is_some() {
@@ -311,7 +298,7 @@ fn write_block_updates(
     new_content: &[u8],
     properties_json: &str,
     new_block_type: &BlockType,
-    new_content_type: &str,
+    expected_version: u64,
 ) -> Result<(), AppError> {
     let now = now_iso();
     let block_type_changed = block_type_req.is_some();
@@ -320,17 +307,20 @@ fn write_block_updates(
         let bt_str = to_json(new_block_type);
         repo::update_block_fields(
             conn, id, new_content, properties_json,
-            Some(&bt_str), Some(new_content_type), &now,
+            Some(&bt_str), &now, Some(expected_version),
         )
     } else {
-        repo::update_content_and_props(
-            conn, id, new_content, properties_json, &now,
+        repo::update_block_fields(
+            conn, id, new_content, properties_json,
+            None, &now, Some(expected_version),
         )
     }
     .map_err(|e| AppError::Internal(format!("更新 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Block {} 不存在或已删除", id)));
+        return Err(AppError::VersionConflict(format!(
+            "Block {} 版本冲突（期望版本 {}）", id, expected_version
+        )));
     }
 
     Ok(())
@@ -698,12 +688,14 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
         // 6. UPDATE block
         let now = now_iso();
         let rows = repo::update_parent_position(
-            &conn, id, &target_parent_id, &new_position, &now,
+            &conn, id, &target_parent_id, &new_position, &now, Some(current.version),
         )
         .map_err(|e| AppError::Internal(format!("移动 Block 失败: {}", e)))?;
 
         if rows == 0 {
-            return Err(AppError::NotFound(format!("Block {} 不存在或已删除", id)));
+            return Err(AppError::VersionConflict(format!(
+                "Block {} 版本冲突（期望版本 {}）", id, current.version
+            )));
         }
 
         // 7. 类型特化后置处理
@@ -825,7 +817,9 @@ pub(crate) fn move_tree<H: TreeMoveOps>(
 
         let rows = H::execute_move(&conn, id, &resolved_target, &new_position, &current)?;
         if rows == 0 {
-            return Err(AppError::NotFound(format!("Block {} 不存在或已删除", id)));
+            return Err(AppError::VersionConflict(format!(
+                "Block {} 版本冲突（期望版本 {}）", id, current.version
+            )));
         }
 
         H::post_move(&conn, &current, &resolved_target, &new_position)?;
@@ -883,7 +877,6 @@ mod tests {
         let req = CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "Hello world".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -906,7 +899,6 @@ mod tests {
         let req1 = CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "first".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -918,7 +910,6 @@ mod tests {
         let req2 = CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "second".to_string(),
             properties: HashMap::new(),
             after_id: Some(block1.id.clone()),
@@ -936,7 +927,6 @@ mod tests {
         let req = CreateBlockReq {
             parent_id: "nonexistent0000000".to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "test".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -960,7 +950,6 @@ mod tests {
         let req = CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "fetch me".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1051,7 +1040,6 @@ mod tests {
         let created = create_block(&db, CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "original".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1080,7 +1068,6 @@ mod tests {
         let created = create_block(&db, CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "test".to_string(),
             properties: props,
             after_id: None,
@@ -1111,7 +1098,6 @@ mod tests {
         let created = create_block(&db, CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "test".to_string(),
             properties: props,
             after_id: None,
@@ -1142,7 +1128,6 @@ mod tests {
         let created = create_block(&db, CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "delete me".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1171,7 +1156,6 @@ mod tests {
         let heading = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: None,
             content: "Section".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1181,7 +1165,6 @@ mod tests {
         let child = create_block(&db, CreateBlockReq {
             parent_id: heading.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "child content".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1235,7 +1218,6 @@ mod tests {
         let created = create_block(&db, CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "restore me".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1259,7 +1241,6 @@ mod tests {
         let created = create_block(&db, CreateBlockReq {
             parent_id: crate::block_system::model::ROOT_ID.to_string(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "normal".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1356,7 +1337,6 @@ mod tests {
         let child = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: None,
             content: "Section".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1390,7 +1370,6 @@ mod tests {
             create_block(&db, CreateBlockReq {
                 parent_id: doc.id.clone(),
                 block_type: BlockType::Paragraph,
-                content_type: None,
                 content: format!("para {}", i),
                 properties: HashMap::new(),
                 after_id: None,
@@ -1672,7 +1651,6 @@ mod tests {
         let heading = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: None,
             content: "My Section".to_string(),
             properties: props,
             after_id: None,
@@ -1694,7 +1672,6 @@ mod tests {
         let p1 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p1".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1704,7 +1681,6 @@ mod tests {
         let h2 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: None,
             content: "Section".to_string(),
             properties: HashMap::new(),
             after_id: Some(p1.id.clone()),
@@ -1714,7 +1690,6 @@ mod tests {
         let p2 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p2".to_string(),
             properties: HashMap::new(),
             after_id: Some(h2.id.clone()),
@@ -1753,7 +1728,6 @@ mod tests {
         let h2 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: None,
             content: "Section".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1763,7 +1737,6 @@ mod tests {
         let p1 = create_block(&db, CreateBlockReq {
             parent_id: h2.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p1".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1773,7 +1746,6 @@ mod tests {
         let p2 = create_block(&db, CreateBlockReq {
             parent_id: h2.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p2".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1783,7 +1755,6 @@ mod tests {
         let p3 = create_block(&db, CreateBlockReq {
             parent_id: h2.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p3".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1831,7 +1802,6 @@ mod tests {
         let p1 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p1".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1841,7 +1811,6 @@ mod tests {
         let h2 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
-            content_type: None,
             content: "Section".to_string(),
             properties: HashMap::new(),
             after_id: None,
@@ -1852,7 +1821,6 @@ mod tests {
         let p2 = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Paragraph,
-            content_type: None,
             content: "p2".to_string(),
             properties: HashMap::new(),
             after_id: Some(h2.id.clone()),

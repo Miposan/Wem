@@ -204,7 +204,12 @@ impl Provider for AnthropicProvider {
         messages: &[Message],
         tools: &[ToolDef],
         temperature: f32,
+        model: Option<&str>,
     ) -> Result<StreamResult, ProviderError> {
+        let selected_model = model
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(&self.model);
+
         let anthropic_tools: Vec<AnthropicTool> = tools
             .iter()
             .map(|t| AnthropicTool {
@@ -215,7 +220,7 @@ impl Provider for AnthropicProvider {
             .collect();
 
         let body = MessagesRequest {
-            model: self.model.clone(),
+            model: selected_model.to_string(),
             max_tokens: self.max_tokens,
             system: system.to_string(),
             messages: Self::convert_messages(messages),
@@ -345,9 +350,14 @@ impl Provider for AnthropicProvider {
         system: &str,
         messages: &[Message],
         temperature: f32,
+        model: Option<&str>,
     ) -> Result<String, ProviderError> {
+        let selected_model = model
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(&self.model);
+
         let body = MessagesRequest {
-            model: self.model.clone(),
+            model: selected_model.to_string(),
             max_tokens: self.max_tokens,
             system: system.to_string(),
             messages: Self::convert_messages(messages),

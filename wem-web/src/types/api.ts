@@ -55,11 +55,10 @@ export interface Block {
   parent_id: string
   position: string
   block_type: BlockType
-  content_type: string
   content: string
   properties: Record<string, string>
   version: number
-  status: 'normal' | 'draft' | 'deleted'
+  status: 'normal' | 'deleted'
   schema_version: number
   encrypted: boolean
   created: string
@@ -95,7 +94,6 @@ export interface DocumentChildrenResult {
 export interface CreateBlockReq {
   parent_id: string
   block_type: BlockType
-  content_type?: string
   content?: string
   properties?: Record<string, string>
   after_id?: string
@@ -133,7 +131,6 @@ export interface BatchCreateOp {
   temp_id: string
   parent_id: string
   block_type: BlockType
-  content_type?: string
   content?: string
   properties?: Record<string, string>
   after_id?: string

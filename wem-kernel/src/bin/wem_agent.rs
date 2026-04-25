@@ -308,6 +308,9 @@ async fn print_events(event_tx: tokio::sync::broadcast::Sender<AgentEvent>) {
                 AgentEvent::StepProgress { step, max_steps } => {
                     eprintln!("\n  --- step {}/{} ---", step + 1, max_steps);
                 }
+                AgentEvent::PhaseChanged { phase } => {
+                    tracing::debug!("loop phase: {}", phase);
+                }
                 AgentEvent::PermissionRequired { tool_name, .. } => {
                     eprintln!("\n  [permission required: {} (auto-denied in CLI)]", tool_name);
                 }

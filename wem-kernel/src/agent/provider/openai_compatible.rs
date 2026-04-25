@@ -194,7 +194,12 @@ impl Provider for OpenAICompatibleProvider {
         messages: &[Message],
         tools: &[ToolDef],
         temperature: f32,
+        model: Option<&str>,
     ) -> Result<StreamResult, ProviderError> {
+        let selected_model = model
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(&self.model);
+
         let mut chat_messages = Self::convert_messages(messages);
         chat_messages.insert(
             0,
@@ -205,7 +210,7 @@ impl Provider for OpenAICompatibleProvider {
         );
 
         let request = CreateChatCompletionRequest {
-            model: self.model.clone(),
+            model: selected_model.to_string(),
             messages: chat_messages,
             temperature: if temperature > 0.0 { Some(temperature) } else { None },
             max_completion_tokens: Some(self.max_tokens),
@@ -305,7 +310,12 @@ impl Provider for OpenAICompatibleProvider {
         system: &str,
         messages: &[Message],
         temperature: f32,
+        model: Option<&str>,
     ) -> Result<String, ProviderError> {
+        let selected_model = model
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(&self.model);
+
         let mut chat_messages = Self::convert_messages(messages);
         chat_messages.insert(
             0,
@@ -316,7 +326,7 @@ impl Provider for OpenAICompatibleProvider {
         );
 
         let request = CreateChatCompletionRequest {
-            model: self.model.clone(),
+            model: selected_model.to_string(),
             messages: chat_messages,
             temperature: if temperature > 0.0 { Some(temperature) } else { None },
             max_completion_tokens: Some(self.max_tokens),

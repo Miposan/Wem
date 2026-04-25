@@ -11,7 +11,7 @@ use crate::error::AppError;
 use crate::block_system::model::Block;
 use crate::block_system::model::BlockType;
 use crate::block_system::model::event::BlockEvent;
-use crate::block_system::model::oplog::{Change, ChangeType, Operation};
+use crate::block_system::model::oplog::{Action, BlockSnapshot, Change, ChangeType, Operation};
 use crate::repo::block_repo as repo;
 use crate::repo::block_repo::InsertBlockParams;
 use crate::repo::Db;
@@ -101,7 +101,6 @@ pub fn create_document(
             document_id: doc_id.clone(),
             position,
             block_type: block_type_json,
-            content_type: "markdown".to_string(),
             content: final_title.into_bytes(),
             properties: properties_json,
             version: 1,
@@ -125,7 +124,6 @@ pub fn create_document(
             document_id: doc_id.clone(),
             position: para_position,
             block_type: para_block_type,
-            content_type: "markdown".to_string(),
             content: Vec::new(),
             properties: "{}".to_string(),
             version: 1,
@@ -249,12 +247,14 @@ impl TreeMoveOps for DocumentTreeMove {
             let title = String::from_utf8_lossy(&current.content);
             let deduped = deduplicate_doc_name(conn, target_parent_id, &title)?;
             if deduped != title {
-                repo::update_content_and_props(
+                repo::update_block_fields(
                     conn,
                     &current.id,
                     &deduped.into_bytes(),
                     &helpers::to_json(&current.properties),
+                    None,
                     &now_iso(),
+                    Some(current.version),
                 )?;
             }
         }
@@ -267,10 +267,10 @@ impl TreeMoveOps for DocumentTreeMove {
         id: &str,
         target_parent_id: &str,
         new_position: &str,
-        _current: &Block,
+        current: &Block,
     ) -> Result<u64, AppError> {
         let now = now_iso();
-        repo::update_parent_position(conn, id, target_parent_id, new_position, &now)
+        repo::update_parent_position(conn, id, target_parent_id, new_position, &now, Some(current.version))
             .map_err(|e| AppError::Internal(format!("移动 Document 失败: {}", e)))
     }
 
@@ -335,6 +335,25 @@ pub fn import_text(db: &Db, req: crate::api::request::ImportTextReq) -> Result<c
         for child in &parse_result.children {
             insert_block_from_model(&conn, child)?;
         }
+
+        // 记录导入操作到 oplog（支持 undo）
+        let document_id = root.document_id.clone();
+        let op = oplog::new_operation(Action::Import, &document_id, req.editor_id.clone());
+        let mut changes = Vec::with_capacity(parse_result.blocks_created);
+        changes.push(oplog::new_change(
+            &op.id, &root.id, ChangeType::Created,
+            None,
+            Some(BlockSnapshot::from_block(&root)),
+        ));
+        for child in &parse_result.children {
+            changes.push(oplog::new_change(
+                &op.id, &child.id, ChangeType::Created,
+                None,
+                Some(BlockSnapshot::from_block(child)),
+            ));
+        }
+        oplog::record_operation(&conn, &op, &changes)?;
+
         Ok(())
     })?;
 
@@ -362,7 +381,6 @@ fn insert_block_from_model(conn: &rusqlite::Connection, block: &Block) -> Result
             document_id: block.document_id.clone(),
             position: block.position.clone(),
             block_type: helpers::to_json(&block.block_type),
-            content_type: block.content_type.as_str().to_string(),
             content: block.content.clone(),
             properties: helpers::to_json(&block.properties),
             version: block.version,

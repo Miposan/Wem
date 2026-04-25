@@ -3,7 +3,6 @@
 //! Block 是系统中唯一的实体。Document、Paragraph、Heading 都是 Block。
 //! 这个文件定义了 Block 的完整结构、类型枚举和 ID 生成器。
 //!
-//! 参考 01-block-model.md §1~§6
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
@@ -59,9 +58,7 @@ pub struct Block {
     pub position: String,
     /// Block 类型（Paragraph、Heading、Document 等）
     pub block_type: BlockType,
-    /// 内容格式（Markdown / Empty / Query）
-    pub content_type: ContentType,
-    /// 块内容（格式取决于 content_type）
+    /// 块内容（格式由 block_type 决定：叶子块和 Document 为 Markdown，其余为空）
     #[serde(with = "content_serde", default)]
     pub content: Vec<u8>,
     /// 自定义属性（JSON key-value）
@@ -69,7 +66,7 @@ pub struct Block {
     pub properties: HashMap<String, String>,
     /// 乐观锁版本号（每次更新 +1）
     pub version: u64,
-    /// 状态：normal / draft / deleted
+    /// 状态：normal / deleted
     pub status: BlockStatus,
     /// 格式版本号（支持未来格式迁移）
     pub schema_version: u32,
@@ -89,12 +86,11 @@ pub struct Block {
 impl Block {
     /// 从数据库行构造 Block
     ///
-    /// 查询必须使用 `SELECT *` 或包含全部 16 个字段。
-    /// 枚举类型（BlockType、ContentType、BlockStatus）会从字符串自动解析。
+    /// 查询必须使用 `SELECT *` 或包含全部 15 个字段。
+    /// 枚举类型（BlockType、BlockStatus）会从字符串自动解析。
     pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         // 需要特殊转换的字段先读取原始字符串
         let block_type_str: String = row.get("block_type")?;
-        let content_type_str: String = row.get("content_type")?;
         let status_str: String = row.get("status")?;
 
         Ok(Block {
@@ -104,13 +100,6 @@ impl Block {
             position: row.get("position")?,
             block_type: serde_json::from_str(&block_type_str)
                 .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?,
-            content_type: ContentType::from_str(&content_type_str).ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, content_type_str)),
-                )
-            })?,
             content: row.get("content")?,
             properties: {
                 let json: String = row.get("properties")?;
@@ -195,62 +184,6 @@ pub enum BlockType {
     AttributeView { av_id: String },
     /// 自定义组件块
     Widget,
-}
-
-impl BlockType {
-    /// 根据 BlockType 推断默认 ContentType
-    ///
-    /// - Document + 叶子块 → Markdown
-    /// - 容器块（除 Document）+ 资源块 → Empty
-    /// - Embed → Query
-    pub fn default_content_type(&self) -> ContentType {
-        match self {
-            Self::Document
-            | Self::Paragraph
-            | Self::CodeBlock { .. }
-            | Self::MathBlock => ContentType::Markdown,
-            Self::ThematicBreak => ContentType::Empty,
-            Self::Embed => ContentType::Query,
-            _ => ContentType::Empty,
-        }
-    }
-
-}
-
-// ─── ContentType 枚举 ─────────────────────────────────────────
-
-/// 内容格式
-///
-/// - Markdown：叶子块和 Document 的文本内容（wem Markdown 方言）
-/// - Empty：容器块（除 Document 外）和资源块均无文本内容
-/// - Query：Embed 块，content 存查询语句
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentType {
-    Markdown,
-    Empty,
-    Query,
-}
-
-impl ContentType {
-    /// 转为数据库存储字符串
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Markdown => "markdown",
-            Self::Empty => "empty",
-            Self::Query => "query",
-        }
-    }
-
-    /// 从数据库字符串解析
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "markdown" => Some(Self::Markdown),
-            "empty" => Some(Self::Empty),
-            "query" => Some(Self::Query),
-            _ => None,
-        }
-    }
 }
 
 // ─── BlockStatus 枚举 ────────────────────────────────────────

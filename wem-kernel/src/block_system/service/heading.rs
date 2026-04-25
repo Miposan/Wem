@@ -248,7 +248,7 @@ fn reconstruct_tree(
 
             if parent_changed || pos_changed {
                 repo::update_parent_position_document_id(
-                    conn, &block.id, parent_id, &pos, &new_doc_id, &now,
+                    conn, &block.id, parent_id, &pos, &new_doc_id, &now, Some(block.version),
                 )
                 .map_err(|e| AppError::Internal(format!("重建树失败: {}", e)))?;
             }

@@ -35,7 +35,12 @@ impl PermissionGate {
         if self.approved.contains(&cache_key) {
             return Permission::Auto;
         }
-        self.check(tool_name, args)
+        let result = self.check(tool_name, args);
+        // Auto 结果也缓存：同一 tool+args 组合不需要重复检查
+        if result == Permission::Auto {
+            self.approved.insert(cache_key);
+        }
+        result
     }
 
     pub fn approve(&mut self, tool_name: &str, args: &serde_json::Value) {

@@ -22,30 +22,13 @@ pub async fn get_block_history(
 ) -> Result<Json<ApiResponse<HistoryResponse>>, AppError> {
     let limit = req.limit.clamp(1, 500);
 
-    let entries = if let Some(id) = req.id {
-        // 按 Block ID 查询
-        let block_id = id;
-        let changes = tokio::task::spawn_blocking(move || {
+    let entries = if let Some(block_id) = req.id {
+        // 按 Block ID 查询（service 层已返回完整的 HistoryEntry）
+        tokio::task::spawn_blocking(move || {
             oplog::get_block_history(&db, &block_id, limit)
         })
         .await
-        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
-
-        // 将 Change 列表包装成简化的 HistoryEntry
-        changes
-            .into_iter()
-            .map(|c| crate::block_system::model::oplog::HistoryEntry {
-                operation_id: c.operation_id,
-                action: c.change_type.as_str().to_string(),
-                description: None,
-                timestamp: String::new(), // Change 不含 timestamp，由 Batch 提供
-                undone: false,
-                changes: vec![crate::block_system::model::oplog::ChangeSummary {
-                    block_id: c.block_id,
-                    change_type: c.change_type.as_str().to_string(),
-                }],
-            })
-            .collect()
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??
     } else if let Some(doc_id) = req.document_id {
         // 按文档查询历史
         tokio::task::spawn_blocking(move || oplog::get_history(&db, &doc_id, limit, req.offset))

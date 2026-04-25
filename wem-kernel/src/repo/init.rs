@@ -15,6 +15,20 @@ use super::schema;
 /// 数据库连接的线程安全包装
 pub type Db = Arc<Mutex<Connection>>;
 
+/// 获取数据库锁，自动恢复被毒化的 Mutex
+///
+/// 如果某个线程在持有锁期间 panic，Mutex 会被标记为"毒化"，
+/// 后续 `.lock().unwrap()` 会 panic。这里恢复毒化锁以保证服务可用。
+pub fn lock_db(db: &Db) -> std::sync::MutexGuard<'_, Connection> {
+    match db.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("数据库 Mutex 被毒化，恢复中...");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// 初始化文件数据库
 ///
 /// 1. 确保数据库文件目录存在
@@ -129,15 +143,14 @@ fn ensure_root_block(conn: &Connection) -> Result<(), AppError> {
 
     conn.execute(
         "INSERT INTO blocks (
-            id, parent_id, document_id, position, block_type, content_type,
+            id, parent_id, document_id, position, block_type,
             content, properties, version, status, schema_version,
             author, encrypted, created, modified
-        ) VALUES (?1, ?1, ?1, ?2, ?3, ?4, X'', '{}', 1, 'normal', 1, 'system', 0, ?5, ?5)",
+        ) VALUES (?1, ?1, ?1, ?2, ?3, X'', '{}', 1, 'normal', 1, 'system', 0, ?4, ?4)",
         rusqlite::params![
             ROOT_ID,
             "a0",
             "{\"type\":\"document\"}",
-            "markdown",
             now,
         ],
     )

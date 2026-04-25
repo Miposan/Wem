@@ -90,9 +90,15 @@ impl ToolRegistry {
 
     pub fn tool_defs(&self, allowed: &[String]) -> Vec<ToolDef> {
         let allowed_set: HashSet<&str> = allowed.iter().map(String::as_str).collect();
-        self.tools
+        let mut entries: Vec<_> = self
+            .tools
             .iter()
             .filter(|(name, _)| allowed_set.is_empty() || allowed_set.contains(name.as_str()))
+            .collect();
+        entries.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+
+        entries
+            .into_iter()
             .map(|(_, tool)| ToolDef {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
@@ -103,14 +109,22 @@ impl ToolRegistry {
 
     pub fn tool_prompts(&self, allowed: &[String]) -> Vec<(&str, &str)> {
         let allowed_set: HashSet<&str> = allowed.iter().map(String::as_str).collect();
-        self.tools
+        let mut entries: Vec<_> = self
+            .tools
             .iter()
             .filter(|(name, _)| allowed_set.is_empty() || allowed_set.contains(name.as_str()))
+            .collect();
+        entries.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+
+        entries
+            .into_iter()
             .map(|(_, tool)| (tool.name(), tool.prompt()))
             .collect()
     }
 
     pub fn all_names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        let mut names: Vec<String> = self.tools.keys().cloned().collect();
+        names.sort_unstable();
+        names
     }
 }

@@ -51,6 +51,8 @@ impl<T: Serialize> ApiResponse<T> {
 pub const CODE_BAD_REQUEST: i32 = 40001;
 /// Block 不存在
 pub const CODE_NOT_FOUND: i32 = 40401;
+/// 版本冲突（乐观锁：客户端版本与当前版本不一致）
+pub const CODE_VERSION_CONFLICT: i32 = 40901;
 /// 循环引用（移动 Block 时目标父块是被移动块的后代）
 pub const CODE_CYCLE_REFERENCE: i32 = 40902;
 /// 内部错误（数据库异常等不可预期错误）
@@ -74,6 +76,10 @@ pub enum AppError {
     /// Block 不存在，携带 Block ID 方便排查
     #[error("Block not found: {0}")]
     NotFound(String),
+
+    /// 版本冲突（乐观锁失败：当前版本与期望版本不一致）
+    #[error("Version conflict: {0}")]
+    VersionConflict(String),
 
     /// 移动操作导致循环引用
     #[error("Cycle reference detected")]
@@ -104,6 +110,12 @@ impl IntoResponse for AppError {
                 StatusCode::NOT_FOUND,
                 CODE_NOT_FOUND,
                 format!("Block not found: {}", id),
+                None,
+            ),
+            AppError::VersionConflict(detail) => (
+                StatusCode::CONFLICT,
+                CODE_VERSION_CONFLICT,
+                format!("Version conflict: {}", detail),
                 None,
             ),
             AppError::CycleReference => (

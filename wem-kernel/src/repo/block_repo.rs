@@ -17,7 +17,7 @@ use crate::block_system::model::Block;
 
 /// INSERT 操作所需的全部字段
 ///
-/// 将 16 个独立参数打包成一个结构体，提高可读性。
+/// 将 15 个独立参数打包成一个结构体，提高可读性。
 /// service 层构建此结构体后传给 `insert_block()`。
 pub struct InsertBlockParams {
     pub id: String,
@@ -25,7 +25,6 @@ pub struct InsertBlockParams {
     pub document_id: String,
     pub position: String,
     pub block_type: String,      // JSON 序列化后的 BlockType
-    pub content_type: String,    // "markdown" / "empty" / "query"
     pub content: Vec<u8>,        // BLOB
     pub properties: String,      // JSON 字符串
     pub version: u64,            // 通常为 1
@@ -383,18 +382,17 @@ pub fn insert_block(conn: &Connection, p: &InsertBlockParams) -> Result<(), rusq
     conn.execute(
         "INSERT INTO blocks (
             id, parent_id, document_id, position,
-            block_type, content_type, content, properties,
+            block_type, content, properties,
             version, status, schema_version,
             author, owner_id, encrypted,
             created, modified
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             p.id,
             p.parent_id,
             p.document_id,
             p.position,
             p.block_type,
-            p.content_type,
             p.content,
             p.properties,
             p.version,
@@ -412,51 +410,54 @@ pub fn insert_block(conn: &Connection, p: &InsertBlockParams) -> Result<(), rusq
 
 /// 更新 Block 内容、属性、类型
 ///
-/// `UPDATE blocks SET content=?, properties=?, block_type=?, content_type=?, modified=?, version=version+1 WHERE id=?`
-///
-/// 如果 `block_type` 为 None，则不更新 block_type 和 content_type 字段。
-/// 返回受影响行数（0 表示不存在）
+/// 如果 `block_type` 为 Some，则同时更新 block_type 字段。
+/// `expected_version` 为 Some 时检查乐观锁，为 None 时跳过版本检查（内部操作）。
+/// 返回受影响行数（0 表示不存在或版本冲突）
 pub fn update_block_fields(
     conn: &Connection,
     id: &str,
     content: &[u8],
     properties: &str,
     block_type: Option<&str>,
-    content_type: Option<&str>,
     modified: &str,
+    expected_version: Option<u64>,
 ) -> Result<u64, rusqlite::Error> {
-    let rows = match (block_type, content_type) {
-        (Some(bt), Some(ct)) => conn.execute(
-            "UPDATE blocks SET content = ?1, properties = ?2, block_type = ?3, content_type = ?4, modified = ?5, version = version + 1
-             WHERE id = ?6",
-            params![content, properties, bt, ct, modified, id],
-        )?,
-        _ => conn.execute(
-            "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1
-             WHERE id = ?4",
-            params![content, properties, modified, id],
-        )?,
+    let rows = if let Some(bt) = block_type {
+        let sql = if expected_version.is_some() {
+            "UPDATE blocks SET content = ?1, properties = ?2, block_type = ?3, modified = ?4, version = version + 1 WHERE id = ?5 AND version = ?6"
+        } else {
+            "UPDATE blocks SET content = ?1, properties = ?2, block_type = ?3, modified = ?4, version = version + 1 WHERE id = ?5"
+        };
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(content.to_vec()),
+            Box::new(properties.to_string()),
+            Box::new(bt.to_string()),
+            Box::new(modified.to_string()),
+            Box::new(id.to_string()),
+        ];
+        if let Some(v) = expected_version {
+            params_vec.push(Box::new(v as i64));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        conn.execute(sql, param_refs.as_slice())?
+    } else {
+        let sql = if expected_version.is_some() {
+            "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1 WHERE id = ?4 AND version = ?5"
+        } else {
+            "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1 WHERE id = ?4"
+        };
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(content.to_vec()),
+            Box::new(properties.to_string()),
+            Box::new(modified.to_string()),
+            Box::new(id.to_string()),
+        ];
+        if let Some(v) = expected_version {
+            params_vec.push(Box::new(v as i64));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        conn.execute(sql, param_refs.as_slice())?
     };
-    Ok(rows as u64)
-}
-
-/// 更新 Block 内容和属性（不含 block_type）
-///
-/// `UPDATE blocks SET content=?, properties=?, modified=?, version=version+1 WHERE id=?`
-///
-/// 返回受影响行数（0 表示不存在）
-pub fn update_content_and_props(
-    conn: &Connection,
-    id: &str,
-    content: &[u8],
-    properties: &str,
-    modified: &str,
-) -> Result<u64, rusqlite::Error> {
-    let rows = conn.execute(
-        "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1
-         WHERE id = ?4",
-        params![content, properties, modified, id],
-    )?;
     Ok(rows as u64)
 }
 
@@ -502,29 +503,34 @@ pub fn update_status_if_not(
 
 /// 更新 Block 的 parent_id 和 position（移动操作）
 ///
-/// `UPDATE blocks SET parent_id=?, position=?, modified=?, version=version+1 WHERE id=?`
-///
-/// 返回受影响行数（0 表示不存在）
+/// `expected_version` 为 Some 时检查乐观锁，为 None 时跳过（内部操作）。
+/// 返回受影响行数（0 表示不存在或版本冲突）
 pub fn update_parent_position(
     conn: &Connection,
     id: &str,
     parent_id: &str,
     position: &str,
     modified: &str,
+    expected_version: Option<u64>,
 ) -> Result<u64, rusqlite::Error> {
-    let rows = conn.execute(
-        "UPDATE blocks SET parent_id = ?1, position = ?2, modified = ?3, version = version + 1
-         WHERE id = ?4",
-        params![parent_id, position, modified, id],
-    )?;
+    let rows = if let Some(v) = expected_version {
+        conn.execute(
+            "UPDATE blocks SET parent_id = ?1, position = ?2, modified = ?3, version = version + 1 WHERE id = ?4 AND version = ?5",
+            params![parent_id, position, modified, id, v as i64],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE blocks SET parent_id = ?1, position = ?2, modified = ?3, version = version + 1 WHERE id = ?4",
+            params![parent_id, position, modified, id],
+        )?
+    };
     Ok(rows as u64)
 }
 
 /// 更新 Block 的 parent_id、position 和 document_id（reparent 操作）
 ///
-/// `UPDATE blocks SET parent_id=?, position=?, document_id=?, modified=?, version=version+1 WHERE id=?`
-///
-/// 返回受影响行数（0 表示不存在）
+/// `expected_version` 为 Some 时检查乐观锁，为 None 时跳过（内部操作）。
+/// 返回受影响行数（0 表示不存在或版本冲突）
 pub fn update_parent_position_document_id(
     conn: &Connection,
     id: &str,
@@ -532,12 +538,19 @@ pub fn update_parent_position_document_id(
     position: &str,
     document_id: &str,
     modified: &str,
+    expected_version: Option<u64>,
 ) -> Result<u64, rusqlite::Error> {
-    let rows = conn.execute(
-        "UPDATE blocks SET parent_id = ?1, position = ?2, document_id = ?3, modified = ?4, version = version + 1
-         WHERE id = ?5",
-        params![parent_id, position, document_id, modified, id],
-    )?;
+    let rows = if let Some(v) = expected_version {
+        conn.execute(
+            "UPDATE blocks SET parent_id = ?1, position = ?2, document_id = ?3, modified = ?4, version = version + 1 WHERE id = ?5 AND version = ?6",
+            params![parent_id, position, document_id, modified, id, v as i64],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE blocks SET parent_id = ?1, position = ?2, document_id = ?3, modified = ?4, version = version + 1 WHERE id = ?5",
+            params![parent_id, position, document_id, modified, id],
+        )?
+    };
     Ok(rows as u64)
 }
 
@@ -790,12 +803,12 @@ pub fn restore_from_snapshot(
     conn.execute(
         "UPDATE blocks SET
             parent_id = ?1, document_id = ?2, position = ?3,
-            block_type = ?4, content_type = ?5, content = ?6,
-            properties = ?7, status = ?8, modified = ?9
-         WHERE id = ?10",
+            block_type = ?4, content = ?5,
+            properties = ?6, status = ?7, modified = ?8
+         WHERE id = ?9",
         params![
             snap.parent_id, snap.document_id, snap.position,
-            snap.block_type, snap.content_type, snap.content,
+            snap.block_type, snap.content,
             snap.properties, snap.status, modified, block_id,
         ],
     )?;
@@ -814,23 +827,22 @@ pub fn upsert_from_snapshot(
 ) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO blocks (
-            id, parent_id, document_id, position, block_type, content_type,
+            id, parent_id, document_id, position, block_type,
             content, properties, version, status, schema_version,
             author, encrypted, created, modified
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, 1, 'system', 0, ?10, ?10)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, 1, 'system', 0, ?9, ?9)
         ON CONFLICT (id) DO UPDATE SET
             parent_id = excluded.parent_id,
             document_id = excluded.document_id,
             position = excluded.position,
             block_type = excluded.block_type,
-            content_type = excluded.content_type,
             content = excluded.content,
             properties = excluded.properties,
             status = excluded.status,
             modified = excluded.modified",
         params![
             block_id, snap.parent_id, snap.document_id, snap.position,
-            snap.block_type, snap.content_type, snap.content,
+            snap.block_type, snap.content,
             snap.properties, snap.status, modified,
         ],
     )?;
@@ -869,7 +881,6 @@ mod tests {
             document_id: document_id.to_string(),
             position: position.to_string(),
             block_type: r#"{"type":"paragraph"}"#.to_string(),
-            content_type: "markdown".to_string(),
             content: b"hello".to_vec(),
             properties: "{}".to_string(),
             version: 1,
@@ -891,7 +902,6 @@ mod tests {
             document_id: id.to_string(), // 文档块的 document_id 指向自身
             position: position.to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
-            content_type: "markdown".to_string(),
             content: b"My Doc".to_vec(),
             properties: r#"{"title":"My Doc"}"#.to_string(),
             version: 1,
@@ -1038,30 +1048,6 @@ mod tests {
         assert!(find_deleted(&conn, "normal_test_00001").is_err());
     }
 
-    // ── update_content_and_props（乐观锁）─────────────────
-
-    #[test]
-    fn update_content_and_props_success() {
-        let db = init_test_db();
-        let conn = crate::repo::lock_db(&db);
-
-        let p = make_params("upd_test_blk_00001", crate::block_system::model::ROOT_ID, crate::block_system::model::ROOT_ID, "a1");
-        insert_block(&conn, &p).unwrap();
-
-        let rows = update_content_and_props(
-            &conn,
-            "upd_test_blk_00001",
-            b"updated",
-            r#"{"key":"value"}"#,
-            "2026-01-02T00:00:00.000Z",
-        ).unwrap();
-        assert_eq!(rows, 1);
-
-        let block = find_by_id_raw(&conn, "upd_test_blk_00001").unwrap();
-        assert_eq!(block.content, b"updated");
-        assert_eq!(block.version, 2);
-    }
-
     // ── update_status / update_status_if_not ──────────────
 
     #[test]
@@ -1109,7 +1095,6 @@ mod tests {
             document_id: "move_doc_00000002".to_string(),
             position: "a2".to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
-            content_type: "markdown".to_string(),
             content: b"Doc B".to_vec(),
             properties: r#"{"title":"Doc B"}"#.to_string(),
             version: 1,
@@ -1127,7 +1112,7 @@ mod tests {
         // 将 doc2 移动到 doc1 下
         let rows = update_parent_position(
             &conn, "move_doc_00000002", "move_doc_00000001", "a0",
-            "2026-01-02T00:00:00.000Z",
+            "2026-01-02T00:00:00.000Z", None,
         ).unwrap();
         assert_eq!(rows, 1);
 
@@ -1214,7 +1199,6 @@ mod tests {
             document_id: "rootdoc_00000002".to_string(),
             position: "a3".to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
-            content_type: "markdown".to_string(),
             content: b"Doc 2".to_vec(),
             properties: r#"{"title":"Doc 2"}"#.to_string(),
             version: 1,

@@ -3,7 +3,7 @@
 //! 单次最多 50 条 Block 操作，在同一事务内执行。
 //! create 操作支持 temp_id，后续操作可用 temp_id 引用该块。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::request::{BatchOp, BatchReq, PropertiesMode};
 use crate::api::response::{BatchOpResult, BatchResult};
@@ -37,7 +37,7 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
     let editor_id_for_event = req.editor_id.clone();
     let conn = crate::repo::lock_db(db);
 
-    let (result, doc_id) = run_in_transaction(&conn, || {
+    let result = run_in_transaction(&conn, || {
 
     let mut id_map: HashMap<String, String> = HashMap::new();
     let mut results: Vec<BatchOpResult> = Vec::with_capacity(req.operations.len());
@@ -56,7 +56,6 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                 temp_id,
                 parent_id,
                 block_type,
-                content_type,
                 content,
                 properties,
                 after_id,
@@ -68,7 +67,6 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
                     &conn,
                     &resolved_parent,
                     block_type,
-                    content_type.as_ref(),
                     &content,
                     &properties,
                     resolved_after.as_deref(),
@@ -230,28 +228,51 @@ pub fn batch_operations(db: &Db, req: BatchReq) -> Result<BatchResult, AppError>
         }
     }
 
-    let mut doc_id = String::new();
+    let mut affected_doc_ids: HashSet<String> = HashSet::new();
     if !pending_changes.is_empty() {
-        doc_id = pending_changes.first()
-            .and_then(|c| c.before.as_ref().map(|s| s.document_id.clone()))
-            .or_else(|| pending_changes.first().and_then(|c| c.after.as_ref().map(|s| s.document_id.clone())))
-            .unwrap_or_default();
-        let mut final_op = operation;
-        final_op.document_id = doc_id.clone();
-        oplog::record_operation(&conn, &final_op, &pending_changes)?;
+        // 从所有变更中收集受影响的文档 ID
+        for change in &pending_changes {
+            if let Some(ref snap) = change.before {
+                affected_doc_ids.insert(snap.document_id.clone());
+            }
+            if let Some(ref snap) = change.after {
+                affected_doc_ids.insert(snap.document_id.clone());
+            }
+        }
+
+        // 按文档分组变更，为每个文档创建独立的 Operation
+        let mut changes_by_doc: HashMap<String, Vec<crate::block_system::model::oplog::Change>> = HashMap::new();
+        for change in pending_changes {
+            let doc_id = change.before.as_ref()
+                .map(|s| s.document_id.clone())
+                .or_else(|| change.after.as_ref().map(|s| s.document_id.clone()))
+                .unwrap_or_default();
+            changes_by_doc.entry(doc_id).or_default().push(change);
+        }
+
+        for (doc_id, doc_changes) in changes_by_doc {
+            let per_doc_op = oplog::new_operation(
+                Action::BatchOps, &doc_id, req.editor_id.clone(),
+            );
+            oplog::record_operation(&conn, &per_doc_op, &doc_changes)?;
+        }
     }
 
-    Ok((BatchResult { id_map, results }, doc_id))
+    let doc_ids_vec: Vec<String> = affected_doc_ids.into_iter().collect();
+    Ok((BatchResult { id_map, results }, doc_ids_vec))
     })?;
 
-    if !doc_id.is_empty() {
+    // result 是 (BatchResult, Vec<String>) 元组
+    let (batch_result, affected_doc_ids) = result;
+
+    for doc_id in &affected_doc_ids {
         event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
-            document_id: doc_id,
-            editor_id: editor_id_for_event,
+            document_id: doc_id.clone(),
+            editor_id: editor_id_for_event.clone(),
         });
     }
 
-    Ok(result)
+    Ok(batch_result)
 }
 
 // ─── 批量操作的内部实现（在已有 conn 上操作，不获取锁）──────────
@@ -260,7 +281,6 @@ fn batch_create_block(
     conn: &rusqlite::Connection,
     parent_id: &str,
     block_type: BlockType,
-    content_type: Option<&crate::block_system::model::ContentType>,
     content: &str,
     properties: &HashMap<String, String>,
     after_id: Option<&str>,
@@ -273,9 +293,6 @@ fn batch_create_block(
     let document_id = derive_document_id(&parent);
 
     let position = position::calculate_insert_position(conn, parent_id, after_id)?;
-    let ct = content_type
-        .map(|ct| ct.as_str().to_string())
-        .unwrap_or_else(|| block_type.default_content_type().as_str().to_string());
 
     let id = generate_block_id();
     let now = now_iso();
@@ -286,7 +303,6 @@ fn batch_create_block(
         document_id,
         position,
         block_type: to_json(&block_type),
-        content_type: ct,
         content: content.as_bytes().to_vec(),
         properties: to_json(properties),
         version: 1,
@@ -321,13 +337,15 @@ fn batch_update_block(
     let properties_json = to_json(&new_properties);
 
     let now = now_iso();
-    let rows = repo::update_content_and_props(
-        conn, id, &new_content, &properties_json, &now,
+    let rows = repo::update_block_fields(
+        conn, id, &new_content, &properties_json, None, &now, Some(current.version),
     )
     .map_err(|e| AppError::Internal(format!("批量更新 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Block {} 不存在或已删除", id)));
+        return Err(AppError::VersionConflict(format!(
+            "Block {} 版本冲突（期望版本 {}）", id, current.version
+        )));
     }
 
     repo::get_version(conn, id)
@@ -402,12 +420,14 @@ fn batch_move_block(
 
     let now = now_iso();
     let rows = repo::update_parent_position(
-        conn, id, &target_parent, &new_position, &now,
+        conn, id, &target_parent, &new_position, &now, Some(current.version),
     )
     .map_err(|e| AppError::Internal(format!("批量移动 Block 失败: {}", e)))?;
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Block {} 不存在或已删除", id)));
+        return Err(AppError::VersionConflict(format!(
+            "Block {} 版本冲突（期望版本 {}）", id, current.version
+        )));
     }
 
     super::block::on_moved(conn, &MoveContext {

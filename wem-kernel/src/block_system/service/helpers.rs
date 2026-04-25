@@ -150,11 +150,11 @@ pub(crate) fn reparent_children_to(
     for child_id in anchor_child_ids {
         if let Some(ref doc_id) = new_document_id {
             repo::update_parent_position_document_id(
-                conn, child_id, new_parent_id, &pos, doc_id, &now,
+                conn, child_id, new_parent_id, &pos, doc_id, &now, None,
             )
         } else {
             repo::update_parent_position(
-                conn, child_id, new_parent_id, &pos, &now,
+                conn, child_id, new_parent_id, &pos, &now, None,
             )
         }
         .map_err(|e| AppError::Internal(format!("reparent 子块 {} 失败: {}", child_id, e)))?;

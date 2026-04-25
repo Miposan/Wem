@@ -126,7 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/agent/sessions/list", post(agent_handler::list_sessions))
         .route("/api/v1/agent/sessions/{id}", post(agent_handler::destroy_session))
         .route("/api/v1/agent/sessions/{id}/chat", post(agent_handler::chat))
+        .route("/api/v1/agent/sessions/{id}/events", get(agent_handler::events))
         .route("/api/v1/agent/sessions/{id}/abort", post(agent_handler::abort_session))
+        .route("/api/v1/agent/sessions/{id}/permission", post(agent_handler::resolve_permission))
         .with_state(agent_state);
 
     let app = block_routes
@@ -190,7 +192,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   POST   /api/v1/agent/sessions/list");
     println!("   POST   /api/v1/agent/sessions/{{id}}");
     println!("   POST   /api/v1/agent/sessions/{{id}}/chat");
+    println!("   GET    /api/v1/agent/sessions/{{id}}/events  [SSE]");
     println!("   POST   /api/v1/agent/sessions/{{id}}/abort");
+    println!("   POST   /api/v1/agent/sessions/{{id}}/permission");
 
     // 启动 HTTP 服务器
     axum::serve(listener, app).await?;

@@ -143,6 +143,7 @@ pub trait Provider: Send + Sync {
         messages: &[Message],
         tools: &[ToolDef],
         temperature: f32,
+        model: Option<&str>,
     ) -> Result<StreamResult, ProviderError>;
 
     /// 非流式调用（Context Manager 摘要用）
@@ -151,5 +152,6 @@ pub trait Provider: Send + Sync {
         system: &str,
         messages: &[Message],
         temperature: f32,
+        model: Option<&str>,
     ) -> Result<String, ProviderError>;
 }

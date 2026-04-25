@@ -223,19 +223,51 @@ pub fn get_history(
 }
 
 /// 查询单个 Block 的变更历史
+///
+/// 返回涉及该 Block 的所有 Operation，按时间倒序排列。
+/// 每个 Operation 对应一个 [`HistoryEntry`]，只包含与目标 Block 相关的 Change。
 pub fn get_block_history(
     db: &Db,
     block_id: &str,
     limit: u32,
-) -> Result<Vec<Change>, AppError> {
+) -> Result<Vec<HistoryEntry>, AppError> {
     let conn = crate::repo::lock_db(db);
 
     // 验证 Block 存在（含已删除）
     let _ = block_repo::find_by_id_raw(&conn, block_id)
         .map_err(|_| AppError::NotFound(format!("Block {} 不存在或已删除", block_id)))?;
 
-    oplog_repo::find_block_history(&conn, block_id, limit)
-        .map_err(|e| AppError::Internal(format!("查询 Block 历史失败: {}", e)))
+    let ops = oplog_repo::find_block_operations(&conn, block_id, limit)
+        .map_err(|e| AppError::Internal(format!("查询 Block 历史失败: {}", e)))?;
+
+    let mut entries = Vec::with_capacity(ops.len());
+    for op in ops {
+        let changes = oplog_repo::find_operation_changes(&conn, &op.id)
+            .map_err(|e| AppError::Internal(format!("查询 operation changes 失败: {}", e)))?;
+
+        // 只保留与目标 Block 相关的 changes
+        let related: Vec<_> = changes
+            .into_iter()
+            .filter(|c| c.block_id == block_id)
+            .collect();
+
+        entries.push(HistoryEntry {
+            operation_id: op.id,
+            action: op.action.as_str().to_string(),
+            description: op.description,
+            timestamp: op.timestamp,
+            undone: op.undone,
+            changes: related
+                .into_iter()
+                .map(|c| ChangeSummary {
+                    block_id: c.block_id,
+                    change_type: c.change_type.as_str().to_string(),
+                })
+                .collect(),
+        });
+    }
+
+    Ok(entries)
 }
 
 // ─── 内部辅助 ──────────────────────────────────────────────────

@@ -166,24 +166,28 @@ pub fn find_operation_changes(
     Ok(changes)
 }
 
-/// 查询 Block 的变更历史（跨 Operation）
-pub fn find_block_history(
+/// 查询涉及指定 Block 的 Operation 列表
+///
+/// 通过 JOIN changes 表找到所有包含该 Block 的 Operation，
+/// 按时间倒序排列，用于构建 Block 级别的变更历史。
+pub fn find_block_operations(
     conn: &Connection,
     block_id: &str,
     limit: u32,
-) -> Result<Vec<Change>, rusqlite::Error> {
+) -> Result<Vec<Operation>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, operation_id, block_id, change_type, before_data, after_data
-         FROM changes
-         WHERE block_id = ?1
-         ORDER BY id DESC
+        "SELECT DISTINCT o.id, o.document_id, o.action, o.description, o.timestamp, o.undone, o.editor_id
+         FROM operations o
+         INNER JOIN changes c ON c.operation_id = o.id
+         WHERE c.block_id = ?1
+         ORDER BY o.timestamp DESC
          LIMIT ?2",
     )?;
-    let changes: Vec<Change> = stmt
-        .query_map(params![block_id, limit], change_from_row)?
+    let ops: Vec<Operation> = stmt
+        .query_map(params![block_id, limit], operation_from_row)?
         .filter_map(|r| r.ok())
         .collect();
-    Ok(changes)
+    Ok(ops)
 }
 
 // ─── GC 清理 ───────────────────────────────────────────────────

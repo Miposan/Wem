@@ -459,7 +459,6 @@ export function WemEditor({
         parent_id: documentId,
         block_type: { type: 'paragraph' },
         content: '',
-        content_type: 'markdown',
         editor_id: editorId,
       })
         .then((created) => {
