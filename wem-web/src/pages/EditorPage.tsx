@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { getDocument, updateBlock } from '@/api/client'
 import type { BlockNode } from '@/types/api'
 import { WemEditor } from '@/components/editor'
@@ -23,6 +23,7 @@ type DocData =
 export default function EditorPage({ documentId, onTocItemsChange, onNavigate }: Props) {
   const [doc, setDoc] = useState<DocData>({ status: 'idle' })
   const { updateTab } = useTabStore()
+  const tocTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   const handleTitleBlur = useCallback(
     (e: React.FocusEvent<HTMLHeadingElement>) => {
@@ -33,6 +34,8 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
           properties_mode: 'merge',
         }).catch((err) => console.error('标题保存失败:', err))
         updateTab(documentId, { title: newTitle })
+        // 通知侧边栏文档树更新标题
+        window.dispatchEvent(new CustomEvent('wem:doc-title-change', { detail: { id: documentId, title: newTitle } }))
       }
     },
     [documentId, updateTab],
@@ -55,11 +58,18 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
     [documentId, updateTab],
   )
 
-  // 加载文档（只包含异步 setState，符合 React 19 规范）
+  /** 编辑器树变更 → 防抖更新 TOC */
+  const handleTreeChange = useCallback((tree: BlockNode[]) => {
+    if (tocTimerRef.current) clearTimeout(tocTimerRef.current)
+    tocTimerRef.current = setTimeout(() => {
+      onTocItemsChange?.(extractTocItems(tree))
+    }, 200)
+  }, [onTocItemsChange])
+
+  // 加载文档
   useEffect(() => {
     if (!documentId) return
     let cancelled = false
-    // 异步加载数据，所有 setState 都在 .then 回调中
     getDocument(documentId)
       .then((res) => {
         if (cancelled) return
@@ -73,9 +83,9 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
         if (!cancelled) setDoc({ status: 'error', docId: documentId, error: err })
       })
     return () => { cancelled = true }
-  }, [documentId, onTocItemsChange])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentId])
 
-  // 无文档时显示空状态
   if (!documentId) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -87,7 +97,6 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
     )
   }
 
-  // 正在加载
   if (doc.status === 'loading' || (doc.status === 'idle' && documentId)) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -96,7 +105,6 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
     )
   }
 
-  // 加载出错
   if (doc.status === 'error') {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -105,7 +113,6 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
     )
   }
 
-  // 文档尚未加载完成（docId 不匹配）
   if (doc.status !== 'loaded' || doc.docId !== documentId) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -118,15 +125,12 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-background rounded-tl-md shadow-[inset_1px_1px_3px_rgba(0,0,0,0.03)]">
-      {/* Breadcrumb — 固定在顶部，标签栏下方 */}
       {onNavigate && documentId && (
         <Breadcrumb documentId={documentId} onNavigate={onNavigate} />
       )}
 
-      {/* 编辑器主区域 */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-8 py-12">
-          {/* Document Icon (Emoji) */}
           <div className="mb-4 relative">
             <EmojiPicker value={icon} onChange={handleIconChange}>
               {({ onClick, ref }) => (
@@ -142,7 +146,6 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
             </EmojiPicker>
           </div>
 
-          {/* Document Title */}
           <h1
             className="text-3xl font-bold mb-8 outline-none"
             contentEditable
@@ -159,11 +162,11 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
             {title}
           </h1>
 
-          {/* Wem Editor */}
           <WemEditor
             blocks={tree}
             documentId={documentId!}
             placeholder="输入内容，或输入 / 插入块…"
+            onTreeChange={handleTreeChange}
           />
         </div>
       </main>

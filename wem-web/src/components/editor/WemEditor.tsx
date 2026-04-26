@@ -48,6 +48,9 @@ import { useBlockDrag } from './core/useBlockDrag'
 import { getSelectedBlockIdsSet } from './core/EditorSelection'
 import { BlockContextMenu } from './components/BlockContextMenu'
 import type { BlockContextMenuState, BlockContextAction } from './components/BlockContextMenu'
+import { SlashMenuProvider } from './core/SlashMenuContext'
+import type { SlashMenuItem } from './core/SlashMenuContext'
+import { SlashCommandMenu } from './components/SlashCommandMenu'
 
 // ─── Props ───
 
@@ -56,6 +59,7 @@ export interface WemEditorProps {
   documentId: string
   readonly?: boolean
   placeholder?: string
+  onTreeChange?: (tree: BlockNode[]) => void
 }
 
 // ─── Main Component ───
@@ -65,6 +69,7 @@ export function WemEditor({
   documentId,
   readonly = false,
   placeholder = '输入 / 插入块…',
+  onTreeChange,
 }: WemEditorProps) {
   const [tree, setTreeState] = useState<BlockNode[]>([])
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
@@ -170,14 +175,16 @@ export function WemEditor({
     flushSync(() => {
       setTreeState(next)
     })
-  }, [])
+    onTreeChange?.(next)
+  }, [onTreeChange])
 
   /** 异步更新（不用 flushSync），用于内容变更的乐观更新 */
   const setTreeAsync = useCallback((updater: (prev: BlockNode[]) => BlockNode[]) => {
     const next = updater(treeRef.current)
     treeRef.current = next
     setTreeState(next)
-  }, [])
+    onTreeChange?.(next)
+  }, [onTreeChange])
 
   // ─── 折叠控制 ───
 
@@ -444,6 +451,22 @@ export function WemEditor({
           )
           break
         }
+        case 'add-block-after': {
+          const { blockId } = action
+          enqueueStructuralOp(`add-after:${blockId}`, async (ctx) => {
+            const created = await createBlock({
+              parent_id: documentId,
+              block_type: { type: 'paragraph' },
+              content: '',
+              after_id: blockId,
+              editor_id: ctx.editorId,
+            })
+            const newBlock: BlockNode = { ...created, children: [] }
+            ctx.setTreeSync((prev) => insertAfter(prev, blockId, newBlock))
+            requestAnimationFrame(() => focusBlock(created.id))
+          })
+          break
+        }
         // 导航操作 → 无 API 调用，无需队列
         case 'focus-previous':
           executeFocusPrevious(makeContext(), action.blockId)
@@ -678,33 +701,54 @@ export function WemEditor({
     [handleAction, documentId, setTreeSync, addPendingOperationId],
   )
 
+  // ── 斜杠菜单选中回调（由 SlashCommandMenu 调用，传入上下文数据） ──
+  const handleSlashSelect = useCallback(
+    (item: SlashMenuItem, blockId: string, slashOffset: number, filterLen: number) => {
+      const block = findBlockById(treeRef.current, blockId)
+      if (!block) return
+      const text = block.content ?? ''
+      const newContent = text.slice(0, slashOffset) + text.slice(slashOffset + 1 + filterLen)
+      handleAction({
+        type: 'convert-block',
+        blockId,
+        content: newContent,
+        blockType: item.blockType,
+      })
+      setTimeout(() => focusBlock(blockId, 0), 0)
+    },
+    [handleAction],
+  )
+
   return (
-    <div
-      className="wem-editor-root"
-      onClick={handleEditorClick}
-      onKeyDown={handleEditorKeyDown}
-      {...selectionHandlers}
-    >
-      <BlockTreeRenderer
-        blocks={tree}
-        readonly={readonly}
-        placeholder={placeholder}
-        collapsedIds={collapsedIds}
-        selection={selection}
-        selectedBlockIds={selectedBlockIds}
-        dragState={dragState}
-        dragHandlers={dragHandlers}
-        onToggleCollapse={handleToggleCollapse}
-        onContentChange={handleContentChange}
-        onAction={handleAction}
-        onSelectionChange={handleSelectionChange}
-        onBlockContextMenu={handleBlockContextMenu}
-      />
-      <BlockContextMenu
-        state={contextMenuState}
-        onClose={handleContextMenuClose}
-        onAction={handleContextAction}
-      />
-    </div>
+    <SlashMenuProvider>
+      <div
+        className="wem-editor-root"
+        onClick={handleEditorClick}
+        onKeyDown={handleEditorKeyDown}
+        {...selectionHandlers}
+      >
+        <BlockTreeRenderer
+          blocks={tree}
+          readonly={readonly}
+          placeholder={placeholder}
+          collapsedIds={collapsedIds}
+          selection={selection}
+          selectedBlockIds={selectedBlockIds}
+          dragState={dragState}
+          dragHandlers={dragHandlers}
+          onToggleCollapse={handleToggleCollapse}
+          onContentChange={handleContentChange}
+          onAction={handleAction}
+          onSelectionChange={handleSelectionChange}
+          onBlockContextMenu={handleBlockContextMenu}
+        />
+        <BlockContextMenu
+          state={contextMenuState}
+          onClose={handleContextMenuClose}
+          onAction={handleContextAction}
+        />
+      </div>
+      <SlashCommandMenu onSelect={handleSlashSelect} />
+    </SlashMenuProvider>
   )
 }

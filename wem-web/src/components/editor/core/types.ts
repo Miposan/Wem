@@ -59,6 +59,8 @@ export type BlockAction =
   | { type: 'exit-list'; blockId: string }
   /** 退出代码块（Ctrl/Cmd+Enter）：在代码块后创建 Paragraph */
   | { type: 'exit-code-block'; blockId: string; content: string }
+  /** 在指定块后面插入新段落（+ 按钮触发） */
+  | { type: 'add-block-after'; blockId: string }
 
 // ─── Component Props ───
 

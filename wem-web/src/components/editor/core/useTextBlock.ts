@@ -2,10 +2,22 @@ import { useCallback, useEffect, useRef } from 'react'
 import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType } from '@/types/api'
 import type { BlockType } from '@/types/api'
 import type { TextBlockProps } from './types'
+import { useSlashMenu, type SlashMenuItem } from './SlashMenuContext'
+import { focusBlock } from './SelectionManager'
 
 /** 空块按 Enter/Backspace 应转为 paragraph 而非删除的类型 */
 function shouldConvertWhenEmpty(blockType: string): boolean {
   return blockType === 'heading' || blockType === 'blockquote'
+}
+
+function getCursorOffset(el: HTMLElement): number {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return 0
+  const range = sel.getRangeAt(0)
+  const preRange = range.cloneRange()
+  preRange.selectNodeContents(el)
+  preRange.setEnd(range.startContainer, range.startOffset)
+  return preRange.toString().length
 }
 
 /**
@@ -15,13 +27,12 @@ function shouldConvertWhenEmpty(blockType: string): boolean {
  * - mount/块切换时同步 DOM 内容
  * - input → onContentChange
  * - 键盘操作 → onAction（Enter/Backspace/ArrowUp/ArrowDown）
+ * - 斜杠命令菜单（/ 触发）
  */
 export function useTextBlock({ block, onContentChange, onAction, selectedBlockIds }: TextBlockProps) {
   const ref = useRef<HTMLElement>(null)
 
   // ── IME 组合输入守卫 ──
-  // 中文/日文等输入法打拼音阶段不应触发 save，
-  // 否则中间文本（如 "nihao"）会被 debounce 发送到后端。
   const isComposing = useRef(false)
 
   const handleCompositionStart = useCallback(() => {
@@ -30,7 +41,6 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
   const handleCompositionEnd = useCallback(() => {
     isComposing.current = false
-    // compositionend 后立即提交最终文本
     const el = ref.current
     if (!el) return
     onContentChange(block.id, el.textContent || '')
@@ -44,10 +54,37 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     if (el.textContent !== text) {
       el.textContent = text
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.id])
 
+  // ── 斜杠命令 ──
+
+  const slashMenu = useSlashMenu()
+  const slashPending = useRef(false)
+  const slashPendingOffset = useRef(0)
+
+  const handleSlashSelect = useCallback((item: SlashMenuItem) => {
+    const el = ref.current
+    if (!el || !slashMenu) return
+    const text = el.textContent || ''
+    const offset = slashMenu.state.slashOffset
+    const filterLen = slashMenu.state.filter.length
+    const before = text.slice(0, offset)
+    const after = text.slice(offset + 1 + filterLen)
+    const newContent = before + after
+    el.textContent = newContent
+    slashMenu.close()
+    onAction({
+      type: 'convert-block',
+      blockId: block.id,
+      content: newContent,
+      blockType: item.blockType,
+    })
+    setTimeout(() => focusBlock(block.id, 0), 0)
+  }, [block.id, onAction, slashMenu])
+
   // ── 粘贴 → 剥离格式，仅保留纯文本 ──
+
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const text = e.clipboardData.getData('text/plain')
     if (!text) return
@@ -56,20 +93,65 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
   }, [])
 
   const handleInput = useCallback(() => {
-    // IME 组合输入中，跳过（等 compositionend 统一提交）
     if (isComposing.current) return
     const el = ref.current
     if (!el) return
+
     onContentChange(block.id, el.textContent || '')
-  }, [block.id, onContentChange])
+
+    // 斜杠命令：首次输入 / 触发菜单
+    if (slashPending.current) {
+      slashPending.current = false
+      const sel = window.getSelection()
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0)
+        let rect = range.getBoundingClientRect()
+        // 空块时光标 rect 可能为零，回退到元素位置
+        if (rect.width === 0 && rect.height === 0) {
+          rect = el.getBoundingClientRect()
+        }
+        slashMenu?.trigger({
+          blockId: block.id,
+          x: rect.left,
+          y: rect.bottom,
+          slashOffset: slashPendingOffset.current,
+        })
+      }
+      return
+    }
+
+    // 斜杠菜单已打开：更新过滤文字
+    if (slashMenu?.state.visible && slashMenu.state.blockId === block.id) {
+      const text = el.textContent || ''
+      const offset = getCursorOffset(el)
+      if (text[slashMenu.state.slashOffset] !== '/') {
+        slashMenu.close()
+      } else {
+        slashMenu.setFilter(text.slice(slashMenu.state.slashOffset + 1, offset))
+      }
+    }
+  }, [block.id, onContentChange, slashMenu])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const el = ref.current
       if (!el) return
 
-      // IME 组合输入中，跳过所有键处理（等 compositionend）
       if (isComposing.current) return
+
+      // ── 斜杠菜单键盘交互 ──
+      if (slashMenu?.state.visible && slashMenu.state.blockId === block.id) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); slashMenu.navigate('down'); return }
+        if (e.key === 'ArrowUp') { e.preventDefault(); slashMenu.navigate('up'); return }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          const item = slashMenu.filteredItems[slashMenu.state.selectedIndex]
+          if (item) handleSlashSelect(item)
+          return
+        }
+        if (e.key === 'Escape') { e.preventDefault(); slashMenu.close(); return }
+        // 其他键继续传递给正常处理（用于更新过滤文字）
+      }
 
       // ── 跨块选区 Backspace / Delete → delete-range ──
       if ((e.key === 'Backspace' || e.key === 'Delete') && selectedBlockIds.size > 1) {
@@ -84,7 +166,6 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       const range = sel.getRangeAt(0)
       const text = el.textContent || ''
 
-      // 计算光标偏移
       const preRange = range.cloneRange()
       preRange.selectNodeContents(el)
       preRange.setEnd(range.startContainer, range.startOffset)
@@ -94,136 +175,92 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       const atEnd = offset === text.length
       const isEmpty = text.length === 0
 
-      // ── 有选区时：Backspace/Delete 交给浏览器原生处理 ──
       if (!sel.isCollapsed && (e.key === 'Backspace' || e.key === 'Delete')) {
-        // 原生删除选中文本，不走到边界逻辑
         return
       }
 
       // ListItem: Tab / Shift+Tab 调整列表层级
       if (e.key === 'Tab' && block.block_type.type === 'listItem') {
         e.preventDefault()
-        onAction({
-          type: e.shiftKey ? 'outdent-list-item' : 'indent-list-item',
-          blockId: block.id,
-        })
+        onAction({ type: e.shiftKey ? 'outdent-list-item' : 'indent-list-item', blockId: block.id })
         return
+      }
+
+      // ── / 触发斜杠菜单 ──
+      if (e.key === '/') {
+        slashPending.current = true
+        slashPendingOffset.current = offset
+        // 不阻止默认行为，让 / 插入到文本中，在 handleInput 中触发菜单
       }
 
       // ── Markdown 快捷键（仅对 paragraph 块生效）──
       if (e.key === ' ' && block.block_type.type === 'paragraph') {
         const beforeCursor = text.slice(0, offset)
 
-        // # + Space → Heading
         const headingMatch = beforeCursor.match(/^(#{1,6})$/)
         if (headingMatch) {
           e.preventDefault()
-          const level = headingMatch[1].length
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({
-            type: 'convert-block',
-            blockId: block.id,
-            content: rest,
-            blockType: makeHeadingType(level),
-          })
+          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeHeadingType(headingMatch[1].length) })
           return
         }
 
-        // - + Space 或 * + Space → 无序列表
         const ulMatch = beforeCursor.match(/^[-*]$/)
         if (ulMatch) {
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({
-            type: 'convert-block',
-            blockId: block.id,
-            content: rest,
-            blockType: makeListType(false),
-          })
+          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(false) })
           return
         }
 
-        // 1. + Space → 有序列表
         const olMatch = beforeCursor.match(/^(\d+)\.$/)
         if (olMatch) {
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({
-            type: 'convert-block',
-            blockId: block.id,
-            content: rest,
-            blockType: makeListType(true),
-          })
+          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(true) })
           return
         }
 
-        // > + Space → 引用块
         if (beforeCursor === '>') {
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({
-            type: 'convert-block',
-            blockId: block.id,
-            content: rest,
-            blockType: { type: 'blockquote' } as BlockType,
-          })
+          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: { type: 'blockquote' } as BlockType })
           return
         }
       }
 
-      // ``` + Space → CodeBlock（注意 ``` 末尾可能带语言名如 ```rust）
+      // ``` + Space → CodeBlock
       if (e.key === ' ' && block.block_type.type === 'paragraph') {
         const beforeCursor = text.slice(0, offset)
         const codeMatch = beforeCursor.match(/^```(\w*)$/)
         if (codeMatch) {
           e.preventDefault()
-          const language = codeMatch[1] || 'text'
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({
-            type: 'convert-block',
-            blockId: block.id,
-            content: rest,
-            blockType: makeCodeBlockType(language),
-          })
+          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeCodeBlockType(codeMatch[1] || 'text') })
           return
         }
-
-        // $$ + Space → MathBlock
         if (beforeCursor === '$$') {
           e.preventDefault()
           el.textContent = ''
-          onAction({
-            type: 'convert-block',
-            blockId: block.id,
-            content: '',
-            blockType: makeMathBlockType(),
-          })
+          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: makeMathBlockType() })
           return
         }
       }
 
       // --- / *** / ___ + Enter → 分割线
       if (
-        e.key === 'Enter' &&
-        !e.shiftKey &&
-        !e.ctrlKey &&
-        !e.metaKey &&
+        e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey &&
         block.block_type.type === 'paragraph' &&
         /^(---|\*\*\*|___)$/.test(text.trim())
       ) {
         e.preventDefault()
         el.textContent = ''
-        onAction({
-          type: 'convert-block',
-          blockId: block.id,
-          content: '',
-          blockType: { type: 'thematicBreak' } as BlockType,
-        })
+        onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'thematicBreak' } as BlockType })
         return
       }
 
@@ -260,38 +297,10 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         return
       }
 
-      // ArrowUp at start → 上一块
-      if (e.key === 'ArrowUp' && atStart) {
-        e.preventDefault()
-        onAction({ type: 'focus-previous', blockId: block.id })
-        return
-      }
-
-      // ArrowDown at end → 下一块
-      if (e.key === 'ArrowDown' && atEnd) {
-        e.preventDefault()
-        onAction({ type: 'focus-next', blockId: block.id })
-        return
-      }
-
-      // ArrowLeft at start → 上一块末尾
-      if (e.key === 'ArrowLeft' && atStart) {
-        e.preventDefault()
-        onAction({ type: 'focus-previous', blockId: block.id })
-        return
-      }
-
-      // ArrowRight at end → 下一块开头
-      if (e.key === 'ArrowRight' && atEnd) {
-        e.preventDefault()
-        onAction({ type: 'focus-next', blockId: block.id })
-        return
-      }
-
-      // Home → 光标移到块首（浏览器原生处理）
-      // End → 光标移到块末（浏览器原生处理）
-      // Ctrl+Home → 已由浏览器滚动到页面顶部
-      // Ctrl+End → 已由浏览器滚动到页面底部
+      if (e.key === 'ArrowUp' && atStart) { e.preventDefault(); onAction({ type: 'focus-previous', blockId: block.id }); return }
+      if (e.key === 'ArrowDown' && atEnd) { e.preventDefault(); onAction({ type: 'focus-next', blockId: block.id }); return }
+      if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); onAction({ type: 'focus-previous', blockId: block.id }); return }
+      if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); onAction({ type: 'focus-next', blockId: block.id }); return }
 
       // Delete at end → 与下一块合并
       if (e.key === 'Delete' && atEnd && !isEmpty) {
@@ -300,7 +309,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         return
       }
 
-      // Delete at end of empty → 转换或删除块
+      // Delete at end of empty
       if (e.key === 'Delete' && atEnd && isEmpty) {
         e.preventDefault()
         if (block.block_type.type === 'listItem') {
@@ -313,7 +322,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         return
       }
     },
-    [block.id, onAction, selectedBlockIds],
+    [block.id, block.block_type.type, onAction, selectedBlockIds, slashMenu, handleSlashSelect],
   )
 
   return { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd }

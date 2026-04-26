@@ -82,6 +82,16 @@ function toDocTreeNode(doc: Block, loaded = false): DocTreeNode {
   return { doc, children: [], loaded }
 }
 
+/** 更新树中指定文档的标题 */
+function updateDocTitle(tree: DocTreeNode[], id: string, title: string): DocTreeNode[] {
+  return tree.map((node) => {
+    if (node.doc.id === id) {
+      return { ...node, doc: { ...node.doc, properties: { ...node.doc.properties, title } } }
+    }
+    return { ...node, children: updateDocTitle(node.children, id, title) }
+  })
+}
+
 // ─── 文档项组件 ───
 
 function DocItem({
@@ -199,6 +209,16 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
       .then((docs) => setTree(docs.map((d) => toDocTreeNode(d))))
       .catch(console.error)
       .finally(() => setLoading(false))
+  }, [])
+
+  // 监听文档标题变更（由 EditorPage 触发）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { id, title } = (e as CustomEvent).detail
+      setTree((prev) => updateDocTitle(prev, id, title))
+    }
+    window.addEventListener('wem:doc-title-change', handler)
+    return () => window.removeEventListener('wem:doc-title-change', handler)
   }, [])
 
   // 展开/折叠切换

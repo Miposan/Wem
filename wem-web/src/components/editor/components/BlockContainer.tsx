@@ -13,7 +13,7 @@ import { EmbedBlock } from '../blocks/EmbedBlock'
 import { AudioBlock } from '../blocks/AudioBlock'
 import { getHeadingLevel } from '../core/BlockOperations'
 import { UnknownBlock } from '../blocks/UnknownBlock'
-import { ChevronRight, GripVertical, List, ListOrdered } from 'lucide-react'
+import { ChevronRight, GripVertical, List, ListOrdered, Plus } from 'lucide-react'
 import { focusBlock } from '../core/SelectionManager'
 
 // ─── Block Type → Component 路由 ───
@@ -169,6 +169,17 @@ export function BlockContainer({
         <div className="wem-block-editable">
           {/* 块左侧操作区（折叠、拖拽等） — 绝对定位于 editable 左侧，紧贴文字 */}
           <div className="wem-block-gutter" contentEditable={false}>
+            {/* + 按钮：在当前块后添加新段落 */}
+            {!props.readonly && (
+              <button
+                className="wem-gutter-btn wem-add-btn"
+                onClick={() => props.onAction({ type: 'add-block-after', blockId: block.id })}
+                title="添加块"
+                tabIndex={-1}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
             {collapsible && (
               <button
                 className="wem-gutter-btn"
