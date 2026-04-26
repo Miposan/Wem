@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let tools = std::sync::Arc::new(registry);
         let runtime = std::sync::Arc::new(AgentRuntime::new(
-            std::sync::Arc::new(SessionManager::new()),
+            std::sync::Arc::new(SessionManager::with_db(db.clone())),
             provider,
             tools,
             200_000,

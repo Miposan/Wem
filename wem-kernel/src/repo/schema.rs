@@ -154,3 +154,41 @@ pub const CREATE_SNAPSHOTS_INDEXES: &[&str] = &[
     // 按文档查快照列表
     "CREATE INDEX IF NOT EXISTS idx_snapshots_document ON snapshots(document_id, timestamp DESC);",
 ];
+
+// ─── agent_sessions 表 ────────────────────────────────────────────
+
+/// Agent 会话表（持久化 AI 对话上下文）
+pub const CREATE_AGENT_SESSIONS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id          TEXT PRIMARY KEY,                -- UUID v4
+    model       TEXT NOT NULL DEFAULT '',         -- 模型名（空=使用 Provider 默认）
+    temperature REAL NOT NULL DEFAULT 0.3,
+    max_steps   INTEGER NOT NULL DEFAULT 50,
+    working_dir TEXT NOT NULL DEFAULT '.',         -- 工作目录
+    created_at  TEXT NOT NULL,                   -- ISO 8601
+    updated_at  TEXT NOT NULL                    -- ISO 8601
+);
+"#;
+
+pub const CREATE_AGENT_SESSIONS_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated ON agent_sessions(updated_at DESC);",
+];
+
+// ─── agent_messages 表 ────────────────────────────────────────────
+
+/// Agent 消息表（每条对话消息）
+pub const CREATE_AGENT_MESSAGES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    seq         INTEGER NOT NULL,               -- 消息序号（会话内递增）
+    role        TEXT NOT NULL,                   -- system / user / assistant
+    content     TEXT NOT NULL,                   -- JSON: Vec<ContentBlock>
+    created_at  TEXT NOT NULL,                   -- ISO 8601
+    FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+);
+"#;
+
+pub const CREATE_AGENT_MESSAGES_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, seq);",
+];

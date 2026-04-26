@@ -6,6 +6,7 @@
 pub mod block_repo;
 pub(crate) mod init;
 pub mod oplog_repo;
+pub mod session_repo;
 mod schema;
 
 pub use init::{Db, init_db, init_memory_db, lock_db};

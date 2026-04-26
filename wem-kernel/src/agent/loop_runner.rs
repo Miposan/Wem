@@ -24,6 +24,7 @@ pub struct AgentLoop {
     context_manager: ContextManager,
     event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
     cancel: tokio_util::sync::CancellationToken,
+    persist_fn: Arc<dyn Fn(&str, &[Message]) + Send + Sync>,
 }
 
 struct PendingToolCall {
@@ -106,6 +107,7 @@ impl AgentLoop {
         event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
         cancel: tokio_util::sync::CancellationToken,
         max_context_tokens: u32,
+        persist_fn: Arc<dyn Fn(&str, &[Message]) + Send + Sync>,
     ) -> Self {
         Self {
             provider,
@@ -115,6 +117,7 @@ impl AgentLoop {
             context_manager: ContextManager::new(max_context_tokens),
             event_tx,
             cancel,
+            persist_fn,
         }
     }
 
@@ -144,10 +147,10 @@ impl AgentLoop {
         let (session_id, max_steps) = {
             let mut s = session.lock().await;
             s.push_message(Message::user(user_msg));
-            // 与 runtime 的并发保护形成双保险，避免外部绕过 runtime 直接调用 run。
             s.set_state(SessionState::Running);
             (s.id.clone(), s.config.max_steps)
         };
+        self.persist(&session_id, session).await;
 
         self.advance_phase(&mut phase, LoopPhase::PreparingTurn)?;
 
@@ -176,6 +179,7 @@ impl AgentLoop {
             self.persist_assistant_message(session, &output).await;
 
             if output.tool_calls.is_empty() {
+                self.persist(&session_id, session).await;
                 self.advance_phase(&mut phase, LoopPhase::Completed)?;
                 self.finish_completed(session).await;
                 return Ok(());
@@ -194,6 +198,7 @@ impl AgentLoop {
                 .await;
 
             self.persist_tool_results(session, results).await;
+            self.persist(&session_id, session).await;
             self.advance_phase(&mut phase, LoopPhase::PreparingTurn)?;
         }
 
@@ -365,7 +370,6 @@ impl AgentLoop {
 
     async fn finish_completed(&self, session: &Arc<Mutex<Session>>) {
         let mut s = session.lock().await;
-        // 请求结束后必须回收 active_request_id，避免后续幂等判断失真。
         s.finish_request();
         s.set_state(SessionState::Completed);
         let _ = self.event_tx.send(AgentEvent::Done);
@@ -377,6 +381,12 @@ impl AgentLoop {
         s.finish_request();
         s.set_state(SessionState::Completed);
         let _ = self.event_tx.send(AgentEvent::Done);
+    }
+
+    /// 将会话消息持久化到 SQLite
+    async fn persist(&self, session_id: &str, session: &Arc<Mutex<Session>>) {
+        let msgs = session.lock().await.messages.clone();
+        (self.persist_fn)(session_id, &msgs);
     }
 
     async fn fail_session(&self, session: &Arc<Mutex<Session>>, err: AgentError) -> AgentError {

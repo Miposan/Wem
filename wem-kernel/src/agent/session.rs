@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::provider::Message;
+use crate::repo::Db;
 
 // ─── 会话状态 ──────────────────────────────────────────────────
 
@@ -207,19 +208,61 @@ struct ActiveSession {
 
 pub struct SessionManager {
     sessions: DashMap<String, ActiveSession>,
+    db: Option<Db>,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
-        Self {
-            sessions: DashMap::new(),
+        Self { sessions: DashMap::new(), db: None }
+    }
+
+    pub fn with_db(db: Db) -> Self {
+        let mgr = Self { sessions: DashMap::new(), db: Some(db) };
+        mgr.restore_from_db();
+        mgr
+    }
+
+    /// 启动时从 SQLite 恢复已有会话
+    fn restore_from_db(&self) {
+        let Some(ref db) = self.db else { return };
+        let conn = crate::repo::lock_db(db);
+        match crate::repo::session_repo::list_sessions(&conn) {
+            Ok(rows) => {
+                for (id, config, _created_at) in rows {
+                    let messages = crate::repo::session_repo::load_messages(&conn, &id)
+                        .unwrap_or_default();
+                    let mut session = Session::new(config);
+                    session.id = id.clone();
+                    session.messages = messages;
+                    let (event_tx, _) = broadcast::channel(256);
+                    self.sessions.insert(id, ActiveSession {
+                        session: Arc::new(Mutex::new(session)),
+                        cancel: CancellationToken::new(),
+                        event_tx,
+                    });
+                }
+                let count = self.sessions.len();
+                if count > 0 {
+                    println!("💬 已恢复 {} 个 Agent 会话", count);
+                }
+            }
+            Err(e) => eprintln!("⚠️  恢复 Agent 会话失败: {}", e),
         }
     }
 
     pub fn create_session(&self, config: SessionConfig) -> String {
-        let session = Session::new(config);
+        let session = Session::new(config.clone());
         let id = session.id.clone();
         let (event_tx, _) = broadcast::channel(256);
+
+        // 持久化到 SQLite
+        if let Some(ref db) = self.db {
+            let conn = crate::repo::lock_db(db);
+            let now = crate::util::now_iso();
+            if let Err(e) = crate::repo::session_repo::insert_session(&conn, &id, &config, &now) {
+                eprintln!("⚠️  持久化 Agent 会话失败: {}", e);
+            }
+        }
 
         self.sessions.insert(id.clone(), ActiveSession {
             session: Arc::new(Mutex::new(session)),
@@ -246,10 +289,33 @@ impl SessionManager {
         if let Some(entry) = self.sessions.get(id) {
             entry.cancel.cancel();
         }
-        self.sessions.remove(id).is_some()
+        let removed = self.sessions.remove(id).is_some();
+        // 从 SQLite 删除
+        if removed {
+            if let Some(ref db) = self.db {
+                let conn = crate::repo::lock_db(db);
+                if let Err(e) = crate::repo::session_repo::delete_session(&conn, id) {
+                    eprintln!("⚠️  删除 Agent 会话记录失败: {}", e);
+                }
+            }
+        }
+        removed
     }
 
     pub fn list_sessions(&self) -> Vec<String> {
         self.sessions.iter().map(|e| e.key().clone()).collect()
+    }
+
+    /// 持久化指定会话的全部消息
+    pub fn save_messages(&self, session_id: &str, messages: &[Message]) {
+        let Some(ref db) = self.db else { return };
+        let conn = crate::repo::lock_db(db);
+        let now = crate::util::now_iso();
+        if let Err(e) = crate::repo::session_repo::replace_messages(&conn, session_id, messages, &now) {
+            eprintln!("⚠️  持久化 Agent 消息失败: {}", e);
+        }
+        if let Err(e) = crate::repo::session_repo::touch_session(&conn, session_id, &now) {
+            eprintln!("⚠️  更新 Agent 会话时间戳失败: {}", e);
+        }
     }
 }

@@ -102,6 +102,20 @@ fn init_connection(conn: &Connection, enable_pragmas: bool) -> Result<(), AppErr
             .map_err(|e| AppError::Internal(format!("建 snapshots 索引失败: {}", e)))?;
     }
 
+    conn.execute_batch(schema::CREATE_AGENT_SESSIONS_TABLE)
+        .map_err(|e| AppError::Internal(format!("建 agent_sessions 表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_AGENT_SESSIONS_INDEXES {
+        conn.execute_batch(idx_sql)
+            .map_err(|e| AppError::Internal(format!("建 agent_sessions 索引失败: {}", e)))?;
+    }
+
+    conn.execute_batch(schema::CREATE_AGENT_MESSAGES_TABLE)
+        .map_err(|e| AppError::Internal(format!("建 agent_messages 表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_AGENT_MESSAGES_INDEXES {
+        conn.execute_batch(idx_sql)
+            .map_err(|e| AppError::Internal(format!("建 agent_messages 索引失败: {}", e)))?;
+    }
+
     ensure_root_block(conn)?;
 
     Ok(())

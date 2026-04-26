@@ -17,6 +17,7 @@ pub struct AgentRuntime {
     provider: Arc<dyn Provider>,
     tools: Arc<ToolRegistry>,
     max_context_tokens: u32,
+    persist_fn: Arc<dyn Fn(&str, &[crate::agent::provider::Message]) + Send + Sync>,
 }
 
 impl AgentRuntime {
@@ -26,11 +27,17 @@ impl AgentRuntime {
         tools: Arc<ToolRegistry>,
         max_context_tokens: u32,
     ) -> Self {
+        let sm = session_manager.clone();
+        let persist_fn: Arc<dyn Fn(&str, &[crate::agent::provider::Message]) + Send + Sync> =
+            Arc::new(move |session_id: &str, messages: &[crate::agent::provider::Message]| {
+                sm.save_messages(session_id, messages);
+            });
         Self {
             session_manager,
             provider,
             tools,
             max_context_tokens,
+            persist_fn,
         }
     }
 
@@ -140,6 +147,7 @@ impl AgentRuntime {
             event_tx,
             cancel,
             self.max_context_tokens,
+            self.persist_fn.clone(),
         );
 
         tokio::spawn(async move {
