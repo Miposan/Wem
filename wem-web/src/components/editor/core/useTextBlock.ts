@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from 'react'
 import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType, makeParagraphType } from '@/types/api'
 import type { TextBlockProps } from './types'
 import { useSlashMenuDispatch, type SlashMenuItem } from './SlashMenuContext'
-import type { SlashMenuState } from './SlashMenuContext'
 import { focusBlock } from './SelectionManager'
 import { inlineMarkdownToHtml, domToMarkdown, toggleInlineWrap, removeAllFormats, normalizeInline, removeTextRange, renderMathInElement } from './InlineParser'
 

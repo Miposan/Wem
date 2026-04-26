@@ -11,19 +11,6 @@ import type { EditorSelection } from './types'
 import { flattenTree } from './BlockOperations'
 
 /**
- * 判断两个块的 DFS 前序顺序
- *
- * @returns -1 if a 在 b 之前, 1 if a 在 b 之后, 0 if 相同
- */
-export function compareBlockOrder(tree: BlockNode[], aId: string, bId: string): number {
-  if (aId === bId) return 0
-  const flat = flattenTree(tree)
-  const aIdx = flat.findIndex((b) => b.id === aId)
-  const bIdx = flat.findIndex((b) => b.id === bId)
-  return aIdx - bIdx
-}
-
-/**
  * 获取选区覆盖的所有块 ID（DFS 前序）
  *
  * 从 anchor 到 focus（按文档顺序），包含两端及中间所有块。
@@ -51,24 +38,6 @@ export function getSelectedBlockIdsSet(
 ): Set<string> {
   if (!selection) return new Set()
   return new Set(getSelectedBlockIds(tree, selection))
-}
-
-/**
- * 从选区生成纯文本（用于剪贴板）
- *
- * 每个块内容之间用换行符分隔。
- */
-export function getSelectionText(
-  tree: BlockNode[],
-  selection: EditorSelection,
-): string {
-  const ids = getSelectedBlockIds(tree, selection)
-  const flat = flattenTree(tree)
-  return ids
-    .map((id) => flat.find((b) => b.id === id))
-    .filter(Boolean)
-    .map((b) => b!.content ?? '')
-    .join('\n')
 }
 
 /**

@@ -80,8 +80,6 @@ export interface BlockRendererProps {
   readonly: boolean
   placeholder?: string
   collapsedIds: Set<string>
-  /** 当前跨块选区（null = 无选区） */
-  selection: EditorSelection | null
   /** 被选中的块 ID 集合（从 selection 派生，便于 BlockContainer 快速判断） */
   selectedBlockIds: ReadonlySet<string>
   /** 拖拽状态 */
@@ -91,7 +89,6 @@ export interface BlockRendererProps {
   onContentChange: (blockId: string, content: string) => void
   onAction: (action: BlockAction) => void
   onToggleCollapse: (blockId: string) => void
-  onSelectionChange: (selection: EditorSelection | null) => void
   /** 右键菜单回调 */
   onBlockContextMenu?: BlockContextMenuHandler
 }

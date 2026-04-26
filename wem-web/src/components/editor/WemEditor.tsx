@@ -161,13 +161,11 @@ export function WemEditor({
   const pendingEditorIds = useRef<Set<string>>(new Set())
 
   /** 将 editor_id 延迟清理，避免 SSE 事件到达时已被删除导致误判为外部事件 */
-  const pendingIdTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const addPendingOperationId = useCallback((id: string) => {
     pendingEditorIds.current.add(id)
-    const timer = setTimeout(() => {
+    setTimeout(() => {
       pendingEditorIds.current.delete(id)
     }, 5000)
-    pendingIdTimers.current.push(timer)
   }, [])
 
   /** 取消指定块的 debounce 保存定时器（split/merge/delete 前调用，防止覆盖新数据） */
@@ -406,8 +404,6 @@ export function WemEditor({
     return () => {
       timers.forEach((t) => clearTimeout(t))
       timers.clear()
-      pendingIdTimers.current.forEach((t) => clearTimeout(t))
-      pendingIdTimers.current = []
       if (sseUpdateBatch.current.rafId != null) {
         cancelAnimationFrame(sseUpdateBatch.current.rafId)
       }
@@ -789,14 +785,12 @@ export function WemEditor({
             readonly={readonly}
             placeholder={placeholder}
             collapsedIds={collapsedIds}
-            selection={selection}
             selectedBlockIds={selectedBlockIds}
             dragState={dragState}
             dragHandlers={dragHandlers}
             onToggleCollapse={handleToggleCollapse}
             onContentChange={handleContentChange}
             onAction={handleAction}
-            onSelectionChange={handleSelectionChange}
             onBlockContextMenu={handleBlockContextMenu}
           />
           <BlockContextMenu

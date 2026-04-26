@@ -47,7 +47,6 @@ interface CodeBlockProps {
   block: BlockNode
   readonly: boolean
   placeholder?: string
-  selectedBlockIds: ReadonlySet<string>
   onContentChange: (blockId: string, content: string) => void
   onAction: (action: BlockAction) => void
 }

@@ -30,7 +30,7 @@ export interface UseBlockDragOptions {
 // ─── Hook ───
 
 export function useBlockDrag(options: UseBlockDragOptions) {
-  // Keep latest option values in refs so callbacks can be stable
+  // 将最新的 option 值保持在 ref 中，使回调可以稳定（不依赖外部变化）
   const getTreeRef = useRef(options.getTree)
   getTreeRef.current = options.getTree
   const onActionRef = useRef(options.onAction)

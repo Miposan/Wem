@@ -132,7 +132,5 @@ export function useSelectionManager({
     },
     /** 程序化清除选区 */
     clearSelection,
-    /** 当前是否处于跨块拖拽中（供拖拽 hook 判断冲突） */
-    isSelecting: isDragging,
   }
 }
