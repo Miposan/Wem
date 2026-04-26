@@ -3,7 +3,7 @@ import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, ma
 import type { TextBlockProps } from './types'
 import { useSlashMenu, type SlashMenuItem } from './SlashMenuContext'
 import { focusBlock } from './SelectionManager'
-import { inlineMarkdownToHtml, domToMarkdown, toggleInlineWrap, removeAllFormats, normalizeInline } from './InlineParser'
+import { inlineMarkdownToHtml, domToMarkdown, toggleInlineWrap, removeAllFormats, normalizeInline, removeTextRange, renderMathInElement } from './InlineParser'
 
 /** 空块按 Enter/Backspace 应转为 paragraph 而非删除的类型 */
 function shouldConvertWhenEmpty(blockType: string): boolean {
@@ -52,6 +52,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     if (!el) return
     const html = inlineMarkdownToHtml(block.content ?? '')
     el.innerHTML = html
+    renderMathInElement(el)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.id])
 
@@ -73,18 +74,15 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     const el = ref.current
     const sm = slashMenuRef.current
     if (!el || !sm) return
-    const text = el.textContent || ''
     const offset = sm.state.slashOffset
     const filterLen = sm.state.filter.length
-    const before = text.slice(0, offset)
-    const after = text.slice(offset + 1 + filterLen)
-    const newContent = before + after
-    el.textContent = newContent
+    // Remove "/filter" from DOM preserving inline formatting
+    removeTextRange(el, offset, offset + 1 + filterLen)
     sm.close()
     onActionRef.current({
       type: 'convert-block',
       blockId: block.id,
-      content: newContent,
+      content: domToMarkdown(el),
       blockType: item.blockType,
     })
     setTimeout(() => focusBlock(block.id, 0), 0)
@@ -98,6 +96,8 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     e.preventDefault()
     if (/[*`$=+]/.test(text)) {
       document.execCommand('insertHTML', false, inlineMarkdownToHtml(text))
+      const el = ref.current
+      if (el) renderMathInElement(el)
     } else {
       document.execCommand('insertText', false, text)
     }
@@ -144,6 +144,17 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     }
   }, [block.id, onContentChange])
 
+  const handleEmptyBlockAction = useCallback((mode: 'backspace' | 'delete' = 'backspace') => {
+    const t = block.block_type.type
+    if (t === 'listItem') {
+      onActionRef.current({ type: mode === 'delete' ? 'exit-list' : 'outdent-list-item', blockId: block.id })
+    } else if (shouldConvertWhenEmpty(t)) {
+      onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeParagraphType() })
+    } else {
+      onActionRef.current({ type: 'delete', blockId: block.id })
+    }
+  }, [block.id, block.block_type.type])
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const el = ref.current
@@ -156,16 +167,22 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         if (e.key === 'b') {
           e.preventDefault()
           document.execCommand('bold')
+          normalizeInline(el)
+          onContentChange(block.id, domToMarkdown(el))
           return
         }
         if (e.key === 'i') {
           e.preventDefault()
           document.execCommand('italic')
+          normalizeInline(el)
+          onContentChange(block.id, domToMarkdown(el))
           return
         }
         if (e.key === 'u') {
           e.preventDefault()
           document.execCommand('underline')
+          normalizeInline(el)
+          onContentChange(block.id, domToMarkdown(el))
           return
         }
         if (e.key === 'e' && !e.shiftKey) {
@@ -183,6 +200,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         if (e.key === 'm') {
           e.preventDefault()
           toggleInlineWrap(el, 'span', 'inline-math')
+          renderMathInElement(el)
           onContentChange(block.id, domToMarkdown(el))
           return
         }
@@ -259,50 +277,42 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         const headingMatch = beforeCursor.match(/^(#{1,6})$/)
         if (headingMatch) {
           e.preventDefault()
-          const rest = text.slice(offset).replace(/^\s+/, '')
-          el.textContent = rest
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeHeadingType(headingMatch[1].length) })
+          removeTextRange(el, 0, offset)
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: domToMarkdown(el), blockType: makeHeadingType(headingMatch[1].length) })
           return
         }
 
         const ulMatch = beforeCursor.match(/^[-*]$/)
         if (ulMatch) {
           e.preventDefault()
-          const rest = text.slice(offset).replace(/^\s+/, '')
-          el.textContent = rest
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(false) })
+          removeTextRange(el, 0, offset)
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: domToMarkdown(el), blockType: makeListType(false) })
           return
         }
 
         const olMatch = beforeCursor.match(/^(\d+)\.$/)
         if (olMatch) {
           e.preventDefault()
-          const rest = text.slice(offset).replace(/^\s+/, '')
-          el.textContent = rest
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(true) })
+          removeTextRange(el, 0, offset)
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: domToMarkdown(el), blockType: makeListType(true) })
           return
         }
 
         if (beforeCursor === '>') {
           e.preventDefault()
-          const rest = text.slice(offset).replace(/^\s+/, '')
-          el.textContent = rest
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeBlockquoteType() })
+          removeTextRange(el, 0, offset)
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: domToMarkdown(el), blockType: makeBlockquoteType() })
           return
         }
-      }
 
-      // ``` + Space → CodeBlock
-      if (e.key === ' ' && block.block_type.type === 'paragraph') {
-        const beforeCursor = text.slice(0, offset)
         const codeMatch = beforeCursor.match(/^```(\w*)$/)
         if (codeMatch) {
           e.preventDefault()
-          const rest = text.slice(offset).replace(/^\s+/, '')
-          el.textContent = rest
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeCodeBlockType(codeMatch[1] || 'text') })
+          removeTextRange(el, 0, offset)
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: domToMarkdown(el), blockType: makeCodeBlockType(codeMatch[1] || 'text') })
           return
         }
+
         if (beforeCursor === '$$') {
           e.preventDefault()
           el.textContent = ''
@@ -339,13 +349,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       // Backspace at start of empty → 转换或删除块
       if (e.key === 'Backspace' && atStart && isEmpty) {
         e.preventDefault()
-        if (block.block_type.type === 'listItem') {
-          onActionRef.current({ type: 'outdent-list-item', blockId: block.id })
-        } else if (shouldConvertWhenEmpty(block.block_type.type)) {
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeParagraphType() })
-        } else {
-          onActionRef.current({ type: 'delete', blockId: block.id })
-        }
+        handleEmptyBlockAction()
         return
       }
 
@@ -371,17 +375,11 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       // Delete at end of empty
       if (e.key === 'Delete' && atEnd && isEmpty) {
         e.preventDefault()
-        if (block.block_type.type === 'listItem') {
-          onActionRef.current({ type: 'exit-list', blockId: block.id })
-        } else if (shouldConvertWhenEmpty(block.block_type.type)) {
-          onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeParagraphType() })
-        } else {
-          onActionRef.current({ type: 'delete', blockId: block.id })
-        }
+        handleEmptyBlockAction('delete')
         return
       }
     },
-    [block.id, block.block_type.type, selectedBlockIds, handleSlashSelect],
+    [block.id, block.block_type.type, selectedBlockIds, handleSlashSelect, handleEmptyBlockAction, onContentChange],
   )
 
   return { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd }

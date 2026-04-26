@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Bold, Italic, Underline, Code, Highlighter, Eraser } from 'lucide-react'
-import { toggleInlineWrap, domToMarkdown, normalizeInline, removeAllFormats } from '../core/InlineParser'
+import { toggleInlineWrap, domToMarkdown, normalizeInline, removeAllFormats, renderMathInElement } from '../core/InlineParser'
 
 interface InlineToolbarProps {
   onContentChange: (blockId: string, content: string) => void
@@ -33,6 +33,7 @@ const GROUPS = [
 ] as const
 
 type FlatFormat = (typeof GROUPS)[number][number]
+const ALL_FORMATS: readonly FlatFormat[] = GROUPS.flat()
 
 function MathIcon({ size = 15 }: { size?: number }) {
   return (
@@ -93,9 +94,8 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
     const rect = range.getBoundingClientRect()
     if (rect.width < 2) return null
 
-    const allFormats = GROUPS.flat()
     const activeFormats = new Set<string>()
-    for (const fmt of allFormats) {
+    for (const fmt of ALL_FORMATS) {
       if (isFormatActive(sel, fmt)) activeFormats.add(fmt.key)
     }
 
@@ -153,6 +153,9 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
         toggleInlineWrap(editable, fmt.tag, fmt.className)
       }
 
+      if (fmt.key === 'math') {
+        renderMathInElement(editable)
+      }
       normalizeInline(editable)
 
       const blockEl = editable.closest('[data-block-id]')

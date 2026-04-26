@@ -5,10 +5,13 @@
  *   **bold**       → <strong>
  *   *italic*       → <em>
  *   `code`         → <code>
- *   $formula$      → <span class="inline-math">
+ *   $formula$      → <span class="inline-math">  (KaTeX rendered)
  *   ==highlight==  → <mark>
  *   ++underline++  → <u>
  */
+
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 
 // ─── AST ───
 
@@ -90,12 +93,32 @@ export function inlineMarkdownToHtml(src: string): string {
   return renderHtml(parseInline(src))
 }
 
+// ─── KaTeX rendering ───
+
+/** Render all un-rendered inline-math spans with KaTeX */
+export function renderMathInElement(el: HTMLElement): void {
+  el.querySelectorAll('.inline-math:not([data-render="true"])').forEach((node) => {
+    const span = node as HTMLElement
+    const latex = span.textContent || ''
+    if (!latex) return
+    span.setAttribute('data-content', latex)
+    try {
+      katex.render(latex, span, { throwOnError: false })
+      span.setAttribute('data-render', 'true')
+      span.setAttribute('contenteditable', 'false')
+    } catch {
+      // keep text content as fallback
+    }
+  })
+}
+
 // ─── DOM → Markdown ───
 
 /** Map <b>→strong, <i>→em so nested detection is consistent */
-function canonicalTag(tag: string): string {
+function canonicalTag(tag: string, className?: string): string {
   if (tag === 'b') return 'strong'
   if (tag === 'i') return 'em'
+  if (tag === 'span' && className === 'inline-math') return 'inline-math'
   return tag
 }
 
@@ -109,37 +132,60 @@ export function domToMarkdown(el: HTMLElement, parentCanonical?: string): string
     if (child.nodeType === Node.TEXT_NODE) {
       out += child.textContent || ''
     } else if (child.nodeType === Node.ELEMENT_NODE) {
-      const tag = (child as HTMLElement).tagName.toLowerCase()
-      const canonical = canonicalTag(tag)
-      const inner = domToMarkdown(child as HTMLElement, canonical)
+      const ce = child as HTMLElement
+      const tag = ce.tagName.toLowerCase()
+      const cls = ce.className || undefined
+      const canonical = canonicalTag(tag, cls)
 
-      if (canonical === parentCanonical && ['strong', 'em', 'u', 'code', 'mark'].includes(canonical)) {
+      const inner = domToMarkdown(ce, canonical)
+
+      if (canonical === parentCanonical && ['strong', 'em', 'u', 'code', 'mark', 'inline-math'].includes(canonical)) {
         out += inner
         continue
       }
 
-      switch (tag) {
-        case 'strong': case 'b': out += `**${inner}**`; break
-        case 'em': case 'i':     out += `*${inner}*`; break
-        case 'code':             out += `\`${inner}\``; break
-        case 'mark':             out += `==${inner}==`; break
-        case 'u':                out += `++${inner}++`; break
-        case 'span': {
-          const e = child as HTMLElement
-          if (e.classList.contains('inline-math') || e.dataset.type === 'inline-math') {
-            if (parentCanonical === 'span-math') { out += inner; continue }
-            out += `$${inner}$`
-          } else {
-            out += inner
-          }
-          break
-        }
-        case 'br': break
+      switch (canonical) {
+        case 'strong': out += `**${inner}**`; break
+        case 'em':     out += `*${inner}*`; break
+        case 'code':   out += `\`${inner}\``; break
+        case 'mark':   out += `==${inner}==`; break
+        case 'u':      out += `++${inner}++`; break
+        case 'inline-math': out += `$${ce.getAttribute('data-content') ?? inner}$`; break
         default: out += inner; break
       }
     }
   }
   return out
+}
+
+// ─── DOM text range operations ───
+
+/** Remove characters at [start, end) text-offset range, preserving DOM structure */
+export function removeTextRange(el: HTMLElement, start: number, end: number): void {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let current = 0
+  const edits: { node: Text; s: number; e: number }[] = []
+
+  let textNode: Text | null
+  while ((textNode = walker.nextNode() as Text | null)) {
+    const len = textNode.textContent?.length ?? 0
+    const nodeEnd = current + len
+    if (nodeEnd > start && current < end) {
+      edits.push({
+        node: textNode,
+        s: Math.max(0, start - current),
+        e: Math.min(len, end - current),
+      })
+    }
+    current += len
+    if (current >= end) break
+  }
+
+  for (const { node, s, e } of edits) {
+    const t = node.textContent || ''
+    node.textContent = t.slice(0, s) + t.slice(e)
+  }
+  el.normalize()
 }
 
 // ─── DOM normalization ───
@@ -169,12 +215,12 @@ export function normalizeInline(root: HTMLElement): void {
     parent.removeChild(inner)
   })
 
-  // 2. Merge adjacent same-tag siblings
+  // 2. Merge directly-adjacent same-tag siblings (no text node between them)
   const tags = ['strong', 'b', 'em', 'i', 'u', 'code', 'mark']
   for (const tag of tags) {
     root.querySelectorAll(tag).forEach((el) => {
-      const next = el.nextElementSibling
-      if (next && next.tagName.toLowerCase() === tag) {
+      const next = el.nextSibling
+      if (next && next.nodeType === Node.ELEMENT_NODE && (next as HTMLElement).tagName.toLowerCase() === tag) {
         while (next.firstChild) el.appendChild(next.firstChild)
         next.remove()
       }
@@ -192,23 +238,58 @@ export function toggleInlineWrap(el: HTMLElement, tagName: string, className?: s
   const range = sel.getRangeAt(0)
   if (range.collapsed) return
 
-  const canonical = canonicalTag(tagName)
+  const canonical = canonicalTag(tagName, className)
 
-  // Check if selection is already inside the target element → unwrap
+  // Check if selection is inside a same-type wrapper → unwrap (full or partial)
+  let wrapperNode: HTMLElement | null = null
   let node: Node | null = range.commonAncestorContainer
   while (node && node !== el) {
     if (node.nodeType === Node.ELEMENT_NODE) {
       const elem = node as HTMLElement
-      const nodeCanonical = canonicalTag(elem.tagName.toLowerCase())
-      const matchClass = !className || elem.classList.contains(className)
-      if (nodeCanonical === canonical && matchClass) {
-        const parent = elem.parentNode!
-        while (elem.firstChild) parent.insertBefore(elem.firstChild, elem)
-        parent.removeChild(elem)
-        return
+      if (canonicalTag(elem.tagName.toLowerCase(), elem.className || undefined) === canonical) {
+        wrapperNode = elem
+        break
       }
     }
     node = node.parentNode
+  }
+
+  if (wrapperNode) {
+    const parent = wrapperNode.parentNode!
+
+    // Extract content after selection end (still inside wrapper)
+    const afterRange = document.createRange()
+    afterRange.setStart(range.endContainer, range.endOffset)
+    afterRange.setEndAfter(wrapperNode.lastChild || wrapperNode)
+    const afterFrag = afterRange.extractContents()
+
+    // Extract content before selection start (still inside wrapper)
+    const beforeRange = document.createRange()
+    beforeRange.setStartBefore(wrapperNode.firstChild || wrapperNode)
+    beforeRange.setEnd(range.startContainer, range.startOffset)
+    const beforeFrag = beforeRange.extractContents()
+
+    // Build replacement: [wrapped-before] [selected-text] [wrapped-after]
+    const frag = document.createDocumentFragment()
+
+    if (beforeFrag.firstChild) {
+      const beforeEl = wrapperNode.cloneNode(false) as HTMLElement
+      beforeEl.appendChild(beforeFrag)
+      frag.appendChild(beforeEl)
+    }
+
+    // Selected content (unwrapped)
+    while (wrapperNode.firstChild) frag.appendChild(wrapperNode.firstChild)
+
+    if (afterFrag.firstChild) {
+      const afterEl = wrapperNode.cloneNode(false) as HTMLElement
+      afterEl.appendChild(afterFrag)
+      frag.appendChild(afterEl)
+    }
+
+    parent.replaceChild(frag, wrapperNode)
+    normalizeInline(el)
+    return
   }
 
   // Wrap selection
@@ -222,22 +303,27 @@ export function toggleInlineWrap(el: HTMLElement, tagName: string, className?: s
     range.insertNode(wrapper)
   }
 
+  // Code and math are literal — strip any inner formatting
+  if (canonical === 'code' || canonical === 'inline-math') {
+    wrapper.querySelectorAll('strong,b,em,i,u,mark,code').forEach((inner) => {
+      if (inner === wrapper) return
+      const p = inner.parentNode!
+      while (inner.firstChild) p.insertBefore(inner.firstChild, inner)
+      p.removeChild(inner)
+    })
+  }
+
   normalizeInline(el)
 }
 
 /** Remove all inline formatting from the selection, leaving plain text */
 export function removeAllFormats(el: HTMLElement): void {
-  // First pass: execCommand removes standard formats (strong, b, em, i, u, s)
   document.execCommand('removeFormat')
 
-  // Second pass: unwrap remaining custom elements (mark, code, span.inline-math)
-  const tags = ['mark', 'code', 'span']
-  for (const tag of tags) {
-    el.querySelectorAll(tag).forEach((inner) => {
-      if (tag === 'span' && !(inner as HTMLElement).classList.contains('inline-math') && !(inner as HTMLElement).dataset.type) return
-      const parent = inner.parentNode!
-      while (inner.firstChild) parent.insertBefore(inner.firstChild, inner)
-      parent.removeChild(inner)
-    })
-  }
+  const unwrapTags = 'mark,code,span.inline-math,span[data-type="inline-math"]'
+  el.querySelectorAll(unwrapTags).forEach((inner) => {
+    const parent = inner.parentNode!
+    while (inner.firstChild) parent.insertBefore(inner.firstChild, inner)
+    parent.removeChild(inner)
+  })
 }

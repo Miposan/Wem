@@ -784,12 +784,18 @@
 }
 
 .wem-editor-root .inline-math {
+  cursor: pointer;
+}
+
+.wem-editor-root .inline-math:not([data-render="true"]) {
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 0.92em;
   color: var(--wem-editor-accent, #7c3aed);
-  background: var(--wem-editor-soft);
-  padding: 0.1em 0.25em;
-  border-radius: 3px;
+}
+
+.wem-editor-root .inline-math .katex-error {
+  color: #e74c3c;
+  font-size: 0.88em;
 }
 
 /* ─── Inline Toolbar (floating) ─── */
@@ -1011,6 +1017,74 @@
 .dark .wem-videoblock-wrapper,
 .dark .wem-embedblock-wrapper {
   background: color-mix(in oklab, var(--muted) 45%, transparent);
+}
+
+/* ─── Math Edit Popup ─── */
+
+.wem-math-popup {
+  z-index: 10000;
+  position: fixed;
+  transform: translateX(-50%);
+  width: 360px;
+  background: var(--popover, #fff);
+  border: 1px solid color-mix(in oklab, var(--border, #e2e5e9) 70%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  animation: wem-toolbar-in 0.12s ease-out;
+}
+
+.wem-math-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  user-select: none;
+}
+
+.wem-math-popup-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted-foreground);
+  padding: 0 4px;
+}
+
+.wem-math-popup-close:hover {
+  color: var(--foreground);
+}
+
+.wem-math-popup-editor {
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  display: block;
+  box-sizing: border-box;
+}
+
+.wem-math-popup-preview {
+  padding: 8px 10px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  min-height: 28px;
+  overflow-x: auto;
+  font-size: 0.95em;
+}
+
+.dark .wem-math-popup {
+  background: color-mix(in oklab, var(--popover) 95%, #000);
 }
 
 /* ─── 打印样式 ─── */
