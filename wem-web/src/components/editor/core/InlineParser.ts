@@ -137,9 +137,16 @@ export function domToMarkdown(el: HTMLElement, parentCanonical?: string): string
       const cls = ce.className || undefined
       const canonical = canonicalTag(tag, cls)
 
+      // inline-math: read LaTeX from data-content, skip DOM walk
+      if (canonical === 'inline-math') {
+        if (canonical === parentCanonical) continue
+        out += `$${ce.getAttribute('data-content') ?? ce.textContent ?? ''}$`
+        continue
+      }
+
       const inner = domToMarkdown(ce, canonical)
 
-      if (canonical === parentCanonical && ['strong', 'em', 'u', 'code', 'mark', 'inline-math'].includes(canonical)) {
+      if (canonical === parentCanonical && ['strong', 'em', 'u', 'code', 'mark'].includes(canonical)) {
         out += inner
         continue
       }
@@ -150,7 +157,6 @@ export function domToMarkdown(el: HTMLElement, parentCanonical?: string): string
         case 'code':   out += `\`${inner}\``; break
         case 'mark':   out += `==${inner}==`; break
         case 'u':      out += `++${inner}++`; break
-        case 'inline-math': out += `$${ce.getAttribute('data-content') ?? inner}$`; break
         default: out += inner; break
       }
     }
@@ -326,4 +332,32 @@ export function removeAllFormats(el: HTMLElement): void {
     while (inner.firstChild) parent.insertBefore(inner.firstChild, inner)
     parent.removeChild(inner)
   })
+}
+
+// ─── Shared DOM utilities ───
+
+/** Re-render a single inline-math element with updated LaTeX source */
+export function renderMathSpan(el: HTMLElement, latex: string): void {
+  if (latex) {
+    el.setAttribute('data-content', latex)
+    try {
+      katex.render(latex, el, { throwOnError: false })
+      el.setAttribute('data-render', 'true')
+    } catch {
+      el.textContent = latex
+    }
+  } else {
+    el.parentNode!.replaceChild(document.createTextNode(''), el)
+  }
+}
+
+/** Walk up from element to find the nearest scrollable parent */
+export function findScrollParent(el: HTMLElement): HTMLElement | null {
+  let parent = el.parentElement
+  while (parent) {
+    const { overflowY } = getComputedStyle(parent)
+    if (overflowY === 'auto' || overflowY === 'scroll') return parent
+    parent = parent.parentElement
+  }
+  return null
 }

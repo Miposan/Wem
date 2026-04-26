@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import katex from 'katex'
-import { domToMarkdown } from '../core/InlineParser'
+import { domToMarkdown, renderMathSpan, findScrollParent } from '../core/InlineParser'
 
 interface MathEditPopupProps {
   onContentChange: (blockId: string, content: string) => void
@@ -9,8 +9,6 @@ interface MathEditPopupProps {
 interface PopupData {
   element: HTMLElement
   originalSource: string
-  top: number
-  left: number
 }
 
 export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
@@ -21,7 +19,6 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
   const previewRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Mutable refs for use in stable callbacks
   const liveRef = useRef({ popup: null as PopupData | null, source: '' })
   liveRef.current = { popup, source }
 
@@ -29,7 +26,6 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
     rootRef.current = document.querySelector('.wem-editor-root')
   }, [])
 
-  // Save current edits to DOM and trigger content change
   const doSave = useCallback(() => {
     const { popup: data, source: currentSource } = liveRef.current
     if (!data) return
@@ -41,21 +37,24 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
     const blockId = blockEl?.getAttribute('data-block-id')
 
     if (currentSource) {
-      el.setAttribute('data-content', currentSource)
-      try {
-        katex.render(currentSource, el, { throwOnError: false })
-        el.setAttribute('data-render', 'true')
-      } catch {
-        el.textContent = currentSource
-      }
+      renderMathSpan(el, currentSource)
     } else {
-      el.parentNode!.replaceChild(document.createTextNode(''), el)
+      renderMathSpan(el, '')
     }
 
     if (blockId && editable) {
       onContentChange(blockId, domToMarkdown(editable))
     }
   }, [onContentChange])
+
+  // Position popup directly via DOM (immediate, no React render)
+  const syncPosition = useCallback((mathEl: HTMLElement) => {
+    const el = containerRef.current
+    if (!el) return
+    const rect = mathEl.getBoundingClientRect()
+    el.style.top = `${rect.bottom + 6}px`
+    el.style.left = `${rect.left + rect.width / 2}px`
+  }, [])
 
   // Detect clicks on rendered inline-math → open popup
   useEffect(() => {
@@ -68,20 +67,45 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
       doSave()
 
       const latex = mathEl.getAttribute('data-content') || ''
-      const rect = mathEl.getBoundingClientRect()
 
-      setPopup({
-        element: mathEl,
-        originalSource: latex,
-        top: rect.bottom + 6,
-        left: rect.left + rect.width / 2,
-      })
+      setPopup({ element: mathEl, originalSource: latex })
       setSource(latex)
+
+      // Position after React renders the element
+      requestAnimationFrame(() => {
+        syncPosition(mathEl)
+        textareaRef.current?.focus()
+        textareaRef.current?.select()
+      })
     }
 
     document.addEventListener('mousedown', handleMouseDown, true)
     return () => document.removeEventListener('mousedown', handleMouseDown, true)
-  }, [doSave])
+  }, [doSave, syncPosition])
+
+  // Scroll: direct DOM reposition; hide if element leaves viewport, restore on return
+  useEffect(() => {
+    if (!popup) return
+    const el = popup.element
+    const scrollParent = findScrollParent(el)
+
+    const handleScroll = () => {
+      const popupEl = containerRef.current
+      if (!popupEl) return
+      if (!el.parentElement) { doSave(); setPopup(null); return }
+      const rect = el.getBoundingClientRect()
+      const parentRect = scrollParent?.getBoundingClientRect()
+      if (parentRect && (rect.bottom < parentRect.top || rect.top > parentRect.bottom)) {
+        popupEl.style.display = 'none'
+        return
+      }
+      popupEl.style.display = ''
+      syncPosition(el)
+    }
+
+    scrollParent?.addEventListener('scroll', handleScroll, { passive: true })
+    return () => scrollParent?.removeEventListener('scroll', handleScroll)
+  }, [popup, doSave, syncPosition])
 
   // Click outside popup → save and close
   useEffect(() => {
@@ -109,16 +133,6 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
     }
   }, [popup, source])
 
-  // Focus textarea on open
-  useEffect(() => {
-    if (popup) {
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus()
-        textareaRef.current?.select()
-      })
-    }
-  }, [popup])
-
   const close = useCallback(() => {
     doSave()
     setPopup(null)
@@ -142,7 +156,7 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
     <div
       ref={containerRef}
       className="wem-math-popup"
-      style={{ position: 'fixed', top: popup.top, left: popup.left }}
+      style={{ position: 'fixed' }}
     >
       <div className="wem-math-popup-header">
         <span>LaTeX</span>

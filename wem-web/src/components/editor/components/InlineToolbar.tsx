@@ -1,17 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Bold, Italic, Underline, Code, Highlighter, Eraser } from 'lucide-react'
-import { toggleInlineWrap, domToMarkdown, normalizeInline, removeAllFormats, renderMathInElement } from '../core/InlineParser'
+import { toggleInlineWrap, domToMarkdown, normalizeInline, removeAllFormats, renderMathInElement, findScrollParent } from '../core/InlineParser'
 
 interface InlineToolbarProps {
   onContentChange: (blockId: string, content: string) => void
-}
-
-interface ToolbarState {
-  visible: boolean
-  top: number
-  left: number
-  flipDown: boolean
-  activeFormats: Set<string>
 }
 
 const GROUPS = [
@@ -62,79 +54,117 @@ function isFormatActive(
 }
 
 export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
-  const [state, setState] = useState<ToolbarState>({
-    visible: false,
-    top: 0,
-    left: 0,
-    flipDown: false,
-    activeFormats: new Set(),
-  })
+  const [visible, setVisible] = useState(false)
+  const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set())
+  const [flipDown, setFlipDown] = useState(false)
   const rootRef = useRef<HTMLElement | null>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     rootRef.current = document.querySelector('.wem-editor-root')
   }, [])
 
-  /** Compute toolbar position + active states from current selection */
-  const compute = useCallback((): ToolbarState | null => {
+  /** Show toolbar at current selection position */
+  const show = useCallback(() => {
     const sel = window.getSelection()
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
 
     const range = sel.getRangeAt(0)
     const root = rootRef.current
-    if (!root || !root.contains(range.commonAncestorContainer)) return null
+    if (!root || !root.contains(range.commonAncestorContainer)) return
 
-    // Single-block only
     const anchorEl = sel.anchorNode instanceof HTMLElement ? sel.anchorNode : sel.anchorNode?.parentElement
     const focusEl = sel.focusNode instanceof HTMLElement ? sel.focusNode : sel.focusNode?.parentElement
     const anchorEdit = anchorEl?.closest('[contenteditable="true"]')
     const focusEdit = focusEl?.closest('[contenteditable="true"]')
-    if (!anchorEdit || anchorEdit !== focusEdit) return null
+    if (!anchorEdit || anchorEdit !== focusEdit) return
 
     const rect = range.getBoundingClientRect()
-    if (rect.width < 2) return null
+    if (rect.width < 2) return
 
-    const activeFormats = new Set<string>()
+    const formats = new Set<string>()
     for (const fmt of ALL_FORMATS) {
-      if (isFormatActive(sel, fmt)) activeFormats.add(fmt.key)
+      if (isFormatActive(sel, fmt)) formats.add(fmt.key)
     }
+    setActiveFormats(formats)
 
     const gap = 6
     const barH = 36
-    const flipDown = rect.top < barH + gap + 8
-    const top = flipDown ? rect.bottom + gap : rect.top - barH - gap
+    const fd = rect.top < barH + gap + 8
+    const top = fd ? rect.bottom + gap : rect.top - barH - gap
+    const left = rect.left + rect.width / 2
 
-    return { visible: true, top, left: rect.left + rect.width / 2, flipDown, activeFormats }
+    setFlipDown(fd)
+    setVisible(true)
+
+    // Position directly via DOM (bypass React for immediate paint)
+    requestAnimationFrame(() => {
+      const el = toolbarRef.current
+      if (el) {
+        el.style.top = `${top}px`
+        el.style.left = `${left}px`
+        el.classList.toggle('flip-down', fd)
+      }
+    })
   }, [])
 
-  /** Show toolbar after selection finishes (mouseup) */
-  const handleSelectionEnd = useCallback(() => {
-    // Delay to let the browser finalize selection
-    requestAnimationFrame(() => {
-      const result = compute()
-      if (result) setState(result)
-    })
-  }, [compute])
+  /** Directly update toolbar position from current selection rect (no React render) */
+  const syncPosition = useCallback(() => {
+    const el = toolbarRef.current
+    if (!el) return false
 
-  /** Hide toolbar when selection collapses or moves outside editor */
-  const handleSelectionChange = useCallback(() => {
-    if (!rootRef.current?.contains(document.activeElement)) return
     const sel = window.getSelection()
-    if (!sel || sel.isCollapsed) {
-      setState(s => (s.visible ? { ...s, visible: false } : s))
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      el.style.display = 'none'
+      return false
     }
+
+    const range = sel.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    const gap = 6
+    const barH = 36
+    const fd = rect.top < barH + gap + 8
+    el.style.display = ''
+    el.style.top = `${fd ? rect.bottom + gap : rect.top - barH - gap}px`
+    el.style.left = `${rect.left + rect.width / 2}px`
+    el.classList.toggle('flip-down', fd)
+    return true
   }, [])
 
   useEffect(() => {
+    const handleSelectionEnd = () => requestAnimationFrame(() => show())
+    const handleSelectionChange = () => {
+      if (!rootRef.current?.contains(document.activeElement)) return
+      const sel = window.getSelection()
+      if (!sel || sel.isCollapsed) setVisible(false)
+    }
+
     document.addEventListener('mouseup', handleSelectionEnd)
     document.addEventListener('selectionchange', handleSelectionChange)
     window.addEventListener('resize', handleSelectionChange)
+
+    const scrollParent = rootRef.current ? findScrollParent(rootRef.current) : null
+    const handleScroll = () => {
+      if (!toolbarRef.current) return
+      const range = window.getSelection()?.getRangeAt(0)
+      if (!range) { toolbarRef.current.style.display = 'none'; return }
+      const rect = range.getBoundingClientRect()
+      const parentRect = scrollParent?.getBoundingClientRect()
+      if (parentRect && (rect.bottom < parentRect.top || rect.top > parentRect.bottom)) {
+        toolbarRef.current.style.display = 'none'
+        return
+      }
+      syncPosition()
+    }
+    scrollParent?.addEventListener('scroll', handleScroll, { passive: true })
+
     return () => {
       document.removeEventListener('mouseup', handleSelectionEnd)
       document.removeEventListener('selectionchange', handleSelectionChange)
       window.removeEventListener('resize', handleSelectionChange)
+      scrollParent?.removeEventListener('scroll', handleScroll)
     }
-  }, [handleSelectionEnd, handleSelectionChange])
+  }, [show, syncPosition])
 
   const applyFormat = useCallback(
     (fmt: FlatFormat) => {
@@ -153,27 +183,26 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
         toggleInlineWrap(editable, fmt.tag, fmt.className)
       }
 
-      if (fmt.key === 'math') {
-        renderMathInElement(editable)
-      }
+      if (fmt.key === 'math') renderMathInElement(editable)
       normalizeInline(editable)
 
       const blockEl = editable.closest('[data-block-id]')
       const blockId = blockEl?.getAttribute('data-block-id')
       if (blockId) onContentChange(blockId, domToMarkdown(editable))
 
-      const result = compute()
-      if (result) setState(result)
+      // Re-sync position + active formats after DOM change
+      show()
     },
-    [onContentChange, compute],
+    [onContentChange, show],
   )
 
-  if (!state.visible) return null
+  if (!visible) return null
 
   return (
     <div
-      className={`wem-inline-toolbar${state.flipDown ? ' flip-down' : ''}`}
-      style={{ position: 'fixed', top: state.top, left: state.left }}
+      ref={toolbarRef}
+      className={`wem-inline-toolbar${flipDown ? ' flip-down' : ''}`}
+      style={{ position: 'fixed' }}
       onMouseDown={e => e.preventDefault()}
     >
       {GROUPS.map((group, gi) => (
@@ -181,7 +210,7 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
           {gi > 0 && <div className="wem-inline-toolbar-divider" />}
           {group.map((fmt) => {
             const Icon = ICON_MAP[fmt.key] ?? fmt.icon
-            const isActive = state.activeFormats.has(fmt.key)
+            const isActive = activeFormats.has(fmt.key)
             return (
               <button
                 key={fmt.key}

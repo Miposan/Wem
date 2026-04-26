@@ -164,23 +164,10 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
       // ── 行内格式快捷键 ──
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-        if (e.key === 'b') {
+        const execCommands: Record<string, string> = { b: 'bold', i: 'italic', u: 'underline' }
+        if (execCommands[e.key]) {
           e.preventDefault()
-          document.execCommand('bold')
-          normalizeInline(el)
-          onContentChange(block.id, domToMarkdown(el))
-          return
-        }
-        if (e.key === 'i') {
-          e.preventDefault()
-          document.execCommand('italic')
-          normalizeInline(el)
-          onContentChange(block.id, domToMarkdown(el))
-          return
-        }
-        if (e.key === 'u') {
-          e.preventDefault()
-          document.execCommand('underline')
+          document.execCommand(execCommands[e.key])
           normalizeInline(el)
           onContentChange(block.id, domToMarkdown(el))
           return
