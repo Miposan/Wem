@@ -123,6 +123,7 @@ export interface CreateDocumentReq {
 export interface DocumentContentResult {
   document: Block
   blocks: BlockNode[]
+  has_more: boolean
 }
 
 export interface DocumentChildrenResult {
@@ -159,6 +160,7 @@ export interface MoveBlockReq {
 
 export interface MoveTreeReq {
   id: string
+  target_parent_id?: string
   before_id?: string
   after_id?: string
   editor_id?: string
@@ -180,7 +182,6 @@ export interface BatchUpdateOp {
   action: 'update'
   block_id: string
   content?: string
-  block_type?: BlockType
   properties?: Record<string, string>
   properties_mode?: 'merge' | 'replace'
 }
@@ -228,8 +229,10 @@ export interface ImportTextReq {
 }
 
 export interface ParseWarning {
-  line?: number
+  line: number
+  warning_type: string
   message: string
+  action: string
 }
 
 export interface ImportResult {
@@ -261,11 +264,22 @@ export interface RestoreResult {
   cascade_count: number
 }
 
+export interface ChangeSummary {
+  block_id: string
+  change_type: string
+}
+
 export interface HistoryEntry {
-  version: number
+  operation_id: string
+  action: string
+  description?: string
   timestamp: string
-  operation: string
-  summary?: string
+  undone: boolean
+  changes: ChangeSummary[]
+}
+
+export interface HistoryResponse {
+  entries: HistoryEntry[]
 }
 
 // ---- Undo / Redo ----
@@ -275,6 +289,10 @@ export interface UndoRedoResult {
   affected_block_ids: string[]
   affected_document_ids: string[]
   action: string
+}
+
+export interface UndoRedoResponse {
+  result: UndoRedoResult
 }
 
 // ---- Split / Merge 意图 API ----
@@ -301,12 +319,7 @@ export interface SplitResult {
 }
 
 export interface MergeReq {
-  /** Block ID */
   id: string
-  /** 合并方向（默认 "previous"） */
-  direction?: string
-  /** 前一个兄弟块的当前内容（校验用，可选） */
-  prev_content?: string
   editor_id?: string
 }
 
@@ -359,8 +372,20 @@ export interface RestoreReq {
 }
 
 export interface GetHistoryReq {
-  id: string
+  id?: string
+  document_id?: string
   limit?: number
+  offset?: number
+}
+
+export interface BreadcrumbItem {
+  id: string
+  title: string
+  icon: string
+}
+
+export interface BreadcrumbResult {
+  items: BreadcrumbItem[]
 }
 
 

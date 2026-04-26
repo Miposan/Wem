@@ -31,8 +31,7 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
       if (documentId) {
         setDoc((prev) => prev.status === 'loaded' ? { ...prev, title: newTitle } : prev)
         updateBlock(documentId, {
-          properties: { title: newTitle },
-          properties_mode: 'merge',
+          content: newTitle,
         }).catch((err) => console.error('标题保存失败:', err))
         updateTab(documentId, { title: newTitle })
         window.dispatchEvent(new CustomEvent('wem:doc-title-change', { detail: { id: documentId, title: newTitle } }))
@@ -74,7 +73,7 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
       .then((res) => {
         if (cancelled) return
         const blocks = res.blocks
-        const title = (res.document.properties?.title as string) || ''
+        const title = res.document.content || ''
         const icon = res.document.properties?.icon as string | undefined
         setDoc({ status: 'loaded', docId: documentId, title, icon, tree: blocks })
         onTocItemsChange?.(extractTocItems(blocks))

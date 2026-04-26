@@ -592,20 +592,17 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
 
     let editor_id = req.editor_id.clone();
 
-    // 类型特化：某些块类型需要使用子树移动
-    {
-        let conn = crate::repo::lock_db(db);
-        let block_type = repo::find_by_id(&conn, id)
-            .map(|b| b.block_type.clone())
-            .unwrap_or(BlockType::Paragraph);
-        drop(conn);
-
-        if use_tree_move(&block_type) {
-            return dispatch_tree_move(db, &block_type, req);
-        }
-    }
-
     let conn = crate::repo::lock_db(db);
+
+    // 类型特化：某些块类型需要使用子树移动
+    let block_type = repo::find_by_id(&conn, id)
+        .map(|b| b.block_type.clone())
+        .unwrap_or(BlockType::Paragraph);
+
+    if use_tree_move(&block_type) {
+        drop(conn);
+        return dispatch_tree_move(db, &block_type, req);
+    }
 
     let result = run_in_transaction(&conn, || {
         let current = repo::find_by_id(&conn, id)
@@ -1016,7 +1013,7 @@ mod tests {
         assert_eq!(doc.block_type, BlockType::Document);
         assert_eq!(doc.parent_id, crate::block_system::model::ROOT_ID);
         assert_eq!(doc.content, b"My First Doc");
-        assert_eq!(doc.properties.get("title").unwrap(), "My First Doc");
+        assert!(doc.properties.get("title").is_none());
 
         // 验证同时创建了空段落子块
         let content = document::get_document_content(&db, &doc.id).unwrap();
@@ -1346,7 +1343,7 @@ mod tests {
         let docs = document::list_root_documents(&db).unwrap();
         assert!(docs.len() >= 2);
         let titles: Vec<&str> = docs.iter()
-            .filter_map(|d| d.properties.get("title").map(|s: &String| s.as_str()))
+            .filter_map(|d| std::str::from_utf8(&d.content).ok().map(|s| s.trim()))
             .collect();
         assert!(titles.contains(&"Doc 1"));
         assert!(titles.contains(&"Doc 2"));
@@ -1450,7 +1447,7 @@ mod tests {
     fn import_heading_and_paragraph() {
         let db = init_test_db();
         let result = import_md(&db, "# My Title\n\nSome content here").unwrap();
-        assert_eq!(result.root.properties.get("title").unwrap(), "My Title");
+        assert_eq!(String::from_utf8_lossy(&result.root.content), "My Title");
         assert!(result.blocks_imported >= 3);
     }
 
@@ -1474,7 +1471,7 @@ mod tests {
             title: Some("Overridden Title".to_string()),
         };
         let result = document::import_text(&db, req).unwrap();
-        assert_eq!(result.root.properties.get("title").unwrap(), "Overridden Title");
+        assert_eq!(String::from_utf8_lossy(&result.root.content), "Overridden Title");
     }
 
     #[test]
@@ -1671,13 +1668,11 @@ mod tests {
         let db = init_test_db();
         let doc = document::create_document(&db, "Doc".to_string(), None, None, None).unwrap();
 
-        let mut props = HashMap::new();
-        props.insert("title".to_string(), "My Section".to_string());
         let heading = create_block(&db, CreateBlockReq {
             parent_id: doc.id.clone(),
             block_type: BlockType::Heading { level: 2 },
             content: "My Section".to_string(),
-            properties: props,
+            properties: HashMap::new(),
             after_id: None,
             editor_id: None,
         }).unwrap();

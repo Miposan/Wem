@@ -774,6 +774,31 @@ pub fn check_is_descendant(
 
 // ─── Oplog 恢复专用 ────────────────────────────────────────────
 
+/// 获取文档的祖先链（从文档到根），返回从文档到根的 ID 列表
+///
+/// 使用递归 CTE 一次查询完成，避免 O(depth) 次单条查询。
+pub fn find_ancestor_ids(
+    conn: &Connection,
+    doc_id: &str,
+) -> Result<Vec<String>, rusqlite::Error> {
+    let root_id = crate::block_system::model::ROOT_ID;
+    let mut stmt = conn.prepare(
+        "WITH RECURSIVE ancestors(aid) AS (
+            SELECT id FROM blocks WHERE id = ?1 AND status != 'deleted'
+            UNION ALL
+            SELECT b.parent_id FROM blocks b
+                INNER JOIN ancestors a ON b.id = a.aid
+            WHERE b.parent_id != b.id AND b.parent_id != ?2 AND b.status != 'deleted'
+        )
+        SELECT aid FROM ancestors",
+    )?;
+    let ids: Vec<String> = stmt
+        .query_map(params![doc_id, root_id], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(ids)
+}
+
 /// 从快照恢复 Block（UPDATE 所有快照字段，不递增 version）
 ///
 /// 用于 undo/redo：直接用快照覆盖 block 的所有业务字段。
@@ -887,7 +912,7 @@ mod tests {
             position: position.to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
             content: b"My Doc".to_vec(),
-            properties: r#"{"title":"My Doc"}"#.to_string(),
+            properties: "{}".to_string(),
             version: 1,
             status: "normal".to_string(),
             schema_version: 1,
@@ -1184,7 +1209,7 @@ mod tests {
             position: "a3".to_string(),
             block_type: r#"{"type":"document"}"#.to_string(),
             content: b"Doc 2".to_vec(),
-            properties: r#"{"title":"Doc 2"}"#.to_string(),
+            properties: "{}".to_string(),
             version: 1,
             status: "normal".to_string(),
             schema_version: 1,

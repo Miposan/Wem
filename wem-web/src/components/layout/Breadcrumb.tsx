@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { getBreadcrumb } from '@/api/client'
-import type { BreadcrumbItem } from '@/api/client'
+import type { BreadcrumbItem } from '@/types/api'
 
 interface BreadcrumbProps {
   documentId: string

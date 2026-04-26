@@ -86,7 +86,7 @@ function toDocTreeNode(doc: Block, loaded = false): DocTreeNode {
 function updateDocTitle(tree: DocTreeNode[], id: string, title: string): DocTreeNode[] {
   return tree.map((node) => {
     if (node.doc.id === id) {
-      return { ...node, doc: { ...node.doc, properties: { ...node.doc.properties, title } } }
+      return { ...node, doc: { ...node.doc, content: title } }
     }
     return { ...node, children: updateDocTitle(node.children, id, title) }
   })
@@ -115,7 +115,7 @@ function DocItem({
 }) {
   const isActive = activeId === node.doc.id
   const isExpanded = expandedIds.has(node.doc.id)
-  const title = (node.doc.properties?.title as string) || '无标题'
+  const title = node.doc.content || '无标题'
   const icon = (node.doc.properties?.icon as string) || '📄'
   const [hovering, setHovering] = useState(false)
 
@@ -249,7 +249,7 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
   /** 打开文档 → 同时激活标签页 + 通知父组件 */
   const handleOpenDoc = useCallback(
     (doc: Block) => {
-      const title = (doc.properties?.title as string) || '无标题'
+      const title = doc.content || '无标题'
       const icon = (doc.properties?.icon as string) || '📄'
       openTab({ id: doc.id, title, icon })
       onActiveChange(doc.id)

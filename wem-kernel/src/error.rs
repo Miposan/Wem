@@ -156,3 +156,29 @@ impl From<rusqlite::Error> for AppError {
         AppError::Internal(e.to_string())
     }
 }
+
+// ─── Handler 辅助函数 ──────────────────────────────────────────────
+
+/// 在阻塞线程池中执行同步闭包，返回统一 API 响应
+///
+/// 所有 handler 的公共模式：spawn_blocking → map_err → ApiResponse::ok。
+/// 使用此函数后 handler 只需提供业务闭包。
+///
+/// ```ignore
+/// pub async fn get_document(
+///     State(db): State<Db>,
+///     Json(req): Json<GetDocumentReq>,
+/// ) -> Result<Json<ApiResponse<DocumentContentResult>>, AppError> {
+///     blocking(move || document::get_document_content(&db, &req.id)).await
+/// }
+/// ```
+pub async fn blocking<F, T>(f: F) -> Result<axum::Json<ApiResponse<T>>, AppError>
+where
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+    T: Send + serde::Serialize + 'static,
+{
+    let result = tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+    Ok(axum::Json(ApiResponse::ok(Some(result))))
+}

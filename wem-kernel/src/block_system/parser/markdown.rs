@@ -78,10 +78,8 @@ impl BlockSerializer for MarkdownFormat {
             ctx.out
         };
 
-        let filename = root
-            .properties
-            .get("title")
-            .map(|t| format!("{}.md", t));
+        let title_str = String::from_utf8_lossy(&root.content).trim().to_string();
+        let filename = if title_str.is_empty() { None } else { Some(format!("{}.md", title_str)) };
 
         Ok(SerializeResult {
             content,
@@ -454,15 +452,12 @@ fn parse_heading(scanner: &mut LineScanner, state: &mut ParserState) {
     let heading_id = generate_block_id();
     let parent_id = state.heading_stack.push(level, heading_id.clone());
 
-    let mut props = HashMap::new();
-    props.insert("title".to_string(), text.clone());
-
     state.add_block_with_id(
         heading_id,
         BlockType::Heading { level },
         parent_id,
-        Vec::new(),
-        props,
+        text.clone().into_bytes(),
+        HashMap::new(),
     );
 
     if !state.first_heading_seen {
@@ -773,7 +768,6 @@ fn parse_markdown(
     } else {
         state.doc_title
     };
-    doc.properties.insert("title".to_string(), doc_title.clone());
     doc.content = doc_title.into_bytes();
 
     Ok((doc, state.blocks, state.warnings))
@@ -919,10 +913,9 @@ fn serialize_block_recursive(
     match &block.block_type {
         BlockType::Document => {
             if is_root {
-                if let Some(title) = block.properties.get("title") {
-                    if !title.is_empty() {
-                        ctx.out.push_str(&format!("# {}\n\n", title));
-                    }
+                let title = String::from_utf8_lossy(&block.content).trim().to_string();
+                if !title.is_empty() {
+                    ctx.out.push_str(&format!("# {}\n\n", title));
                 }
             }
             for &child in &sorted_children {
@@ -931,11 +924,7 @@ fn serialize_block_recursive(
         }
 
         BlockType::Heading { level } => {
-            let title = block
-                .properties
-                .get("title")
-                .cloned()
-                .unwrap_or_default();
+            let title = String::from_utf8_lossy(&block.content).to_string();
             let hashes = "#".repeat(*level as usize);
             ctx.out.push_str(&format!("{} {}\n\n", hashes, title));
             for &child in &sorted_children {
@@ -1132,7 +1121,7 @@ mod tests {
         assert_eq!(root.block_type, BlockType::Document);
         assert_eq!(children.len(), 1); // 空 Paragraph
         assert_eq!(children[0].block_type, BlockType::Paragraph);
-        assert_eq!(root.properties.get("title").unwrap(), "无标题文档");
+        assert_eq!(String::from_utf8_lossy(&root.content), "无标题文档");
     }
 
     #[test]
@@ -1147,10 +1136,10 @@ mod tests {
     fn parse_single_heading() {
         let (root, children) = parse_md("# Hello World");
         assert_eq!(root.block_type, BlockType::Document);
-        assert_eq!(root.properties.get("title").unwrap(), "Hello World");
+        assert_eq!(String::from_utf8_lossy(&root.content), "Hello World");
 
         let h1 = find_by_type(&children, &BlockType::Heading { level: 1 });
-        assert_eq!(h1.properties.get("title").unwrap(), "Hello World");
+        assert_eq!(String::from_utf8_lossy(&h1.content), "Hello World");
         assert_eq!(h1.parent_id, root.id);
     }
 
@@ -1442,7 +1431,7 @@ Final paragraph.
         let (root, children) = parse_md(md);
 
         assert_eq!(root.block_type, BlockType::Document);
-        assert_eq!(root.properties.get("title").unwrap(), "My Document");
+        assert_eq!(String::from_utf8_lossy(&root.content), "My Document");
 
         // 验证各种块类型都存在
         let has_h1 = children.iter().any(|b| matches!(b.block_type, BlockType::Heading { level: 1 }));
@@ -1476,14 +1465,13 @@ Final paragraph.
     #[test]
     fn parse_title_from_first_heading() {
         let (root, _) = parse_md("# Document Title\n\nSome content");
-        assert_eq!(root.properties.get("title").unwrap(), "Document Title");
+        assert_eq!(String::from_utf8_lossy(&root.content), "Document Title");
     }
 
     #[test]
     fn parse_title_fallback_to_paragraph() {
         let (root, _) = parse_md("No heading here, just text");
-        // 标题从第一个段落推断
-        let title = root.properties.get("title").unwrap();
+        let title = String::from_utf8_lossy(&root.content);
         assert!(!title.is_empty());
         assert!(title.contains("No heading here"));
     }
@@ -1492,9 +1480,8 @@ Final paragraph.
     fn parse_title_truncation() {
         let long_text: String = "A".repeat(200);
         let (root, _) = parse_md(&long_text);
-        let title = root.properties.get("title").unwrap();
-        // 标题应被截断（truncate_title max 50 chars + "…")
-        assert!(title.len() <= 60); // 50 chars + "…" = ~51 UTF-8 bytes, but chars may vary
+        let title = String::from_utf8_lossy(&root.content);
+        assert!(title.len() <= 60);
     }
 
     // ── 序列化器 ──────────────────────────────────────────
@@ -1507,12 +1494,8 @@ Final paragraph.
             document_id: "doc1".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
-            content: Vec::new(),
-            properties: {
-                let mut m = HashMap::new();
-                m.insert("title".to_string(), "Test Doc".to_string());
-                m
-            },
+            content: "Test Doc".as_bytes().to_vec(),
+            properties: HashMap::new(),
             version: 1,
             status: BlockStatus::Normal,
             schema_version: 1,
@@ -1536,12 +1519,8 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Heading { level: 2 },
-            content: Vec::new(),
-            properties: {
-                let mut m = HashMap::new();
-                m.insert("title".to_string(), "Section".to_string());
-                m
-            },
+            content: "Section".as_bytes().to_vec(),
+            properties: HashMap::new(),
             version: 1,
             status: BlockStatus::Normal,
             schema_version: 1,
@@ -1973,12 +1952,8 @@ Final paragraph.
             document_id: "root".to_string(),
             position: "a0".to_string(),
             block_type: BlockType::Document,
-            content: Vec::new(),
-            properties: {
-                let mut m = HashMap::new();
-                m.insert("title".to_string(), "My Notes".to_string());
-                m
-            },
+            content: "My Notes".as_bytes().to_vec(),
+            properties: HashMap::new(),
             version: 1,
             status: BlockStatus::Normal,
             schema_version: 1,

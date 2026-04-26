@@ -5,6 +5,7 @@ import type {
   Block,
   BatchReq,
   BatchResult,
+  BreadcrumbResult,
   CreateBlockReq,
   CreateDocumentReq,
   DeleteBlockReq,
@@ -19,7 +20,7 @@ import type {
   GetChildrenReq,
   GetDocumentReq,
   GetHistoryReq,
-  HistoryEntry,
+  HistoryResponse,
   ImportTextReq,
   ImportResult,
   MergeReq,
@@ -30,7 +31,7 @@ import type {
   RestoreResult,
   SplitReq,
   SplitResult,
-  UndoRedoResult,
+  UndoRedoResponse,
   UpdateBlockReq,
 } from '@/types/api'
 
@@ -189,17 +190,17 @@ export function importText(req: ImportTextReq) {
 // ---------- History / Version ----------
 
 export function getDocumentHistory(id: string, limit = 50) {
-  return post<HistoryEntry[]>('/documents/history', { id, limit } as GetHistoryReq)
+  return post<HistoryResponse>('/documents/history', { document_id: id, limit } as GetHistoryReq)
 }
 
 // ---------- Undo / Redo ----------
 
 export function undoDocument(documentId: string) {
-  return post<UndoRedoResult>('/documents/undo', { document_id: documentId })
+  return post<UndoRedoResponse>('/documents/undo', { document_id: documentId })
 }
 
 export function redoDocument(documentId: string) {
-  return post<UndoRedoResult>('/documents/redo', { document_id: documentId })
+  return post<UndoRedoResponse>('/documents/redo', { document_id: documentId })
 }
 
 // ---------- Split / Merge 意图 API ----------
@@ -213,16 +214,6 @@ export function mergeBlock(id: string, req: Omit<MergeReq, 'id'>) {
 }
 
 // ---------- Breadcrumb ----------
-
-export interface BreadcrumbItem {
-  id: string
-  title: string
-  icon: string
-}
-
-export interface BreadcrumbResult {
-  items: BreadcrumbItem[]
-}
 
 export function getBreadcrumb(id: string) {
   return post<BreadcrumbResult>('/documents/breadcrumb', { id })

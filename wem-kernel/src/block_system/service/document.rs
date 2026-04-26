@@ -90,9 +90,7 @@ pub fn create_document(
         let position =
             position::calculate_insert_position(&conn, &parent_id_actual, after_id.as_deref())?;
 
-        let mut properties = HashMap::new();
-        properties.insert("title".to_string(), final_title.clone());
-        let properties_json = helpers::to_json(&properties);
+        let properties_json = helpers::to_json(&HashMap::<String, String>::new());
         let block_type_json = helpers::to_json(&BlockType::Document);
 
         repo::insert_block(&conn, &InsertBlockParams {
@@ -319,7 +317,6 @@ pub fn import_text(db: &Db, req: crate::api::request::ImportTextReq) -> Result<c
     root.position = position;
 
     if let Some(title) = &req.title {
-        root.properties.insert("title".to_string(), title.clone());
         root.content = title.clone().into_bytes();
     }
 
@@ -395,18 +392,29 @@ pub fn export_text(db: &Db, doc_id: &str, format: &str) -> Result<crate::api::re
 
 // ─── 内部辅助 ──────────────────────────────────────────────────
 
-fn build_block_tree(parent_id: &str, blocks: &[Block]) -> Vec<BlockNode> {
-    let mut children: Vec<BlockNode> = blocks
-        .iter()
-        .filter(|b| b.parent_id == parent_id)
-        .map(|b| BlockNode {
-            block: b.clone(),
-            children: build_block_tree(&b.id, blocks),
-        })
-        .collect();
+fn build_block_tree(root_parent_id: &str, blocks: &[Block]) -> Vec<BlockNode> {
+    use std::collections::HashMap;
 
-    children.sort_by(|a, b| a.block.position.cmp(&b.block.position));
-    children
+    let mut groups: HashMap<&str, Vec<&Block>> = HashMap::new();
+    for b in blocks {
+        groups.entry(&b.parent_id).or_default().push(b);
+    }
+
+    fn build_children(parent_id: &str, groups: &HashMap<&str, Vec<&Block>>) -> Vec<BlockNode> {
+        let Some(children) = groups.get(parent_id) else {
+            return Vec::new();
+        };
+        let mut sorted: Vec<&Block> = children.clone();
+        sorted.sort_by(|a, b| a.position.cmp(&b.position));
+        sorted.into_iter()
+            .map(|b| BlockNode {
+                block: b.clone(),
+                children: build_children(&b.id, groups),
+            })
+            .collect()
+    }
+
+    build_children(root_parent_id, &groups)
 }
 
 // ─── 业务策略（从 repo 层搬来） ──────────────────────────────────
@@ -452,21 +460,19 @@ fn deduplicate_doc_name(
 pub fn get_breadcrumb(db: &Db, doc_id: &str) -> Result<BreadcrumbResult, AppError> {
     let conn = crate::repo::lock_db(db);
 
-    let root_id = crate::block_system::model::ROOT_ID;
-    let mut items = Vec::new();
-    let mut current_id = doc_id.to_string();
+    let ancestor_ids = repo::find_ancestor_ids(&conn, doc_id)
+        .map_err(|e| AppError::Internal(format!("查询祖先链失败: {}", e)))?;
 
-    loop {
-        if current_id == root_id {
-            break;
-        }
-        let block = repo::find_by_id(&conn, &current_id)
-            .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", current_id)))?;
+    if ancestor_ids.is_empty() {
+        return Err(AppError::NotFound(format!("文档 {} 不存在", doc_id)));
+    }
 
-        let title = block.properties
-            .get("title")
-            .cloned()
-            .unwrap_or_else(|| String::from_utf8_lossy(&block.content).to_string());
+    let mut items = Vec::with_capacity(ancestor_ids.len());
+    for aid in &ancestor_ids {
+        let block = repo::find_by_id(&conn, aid)
+            .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", aid)))?;
+
+        let title = String::from_utf8_lossy(&block.content).to_string();
 
         let icon = block.properties
             .get("icon")
@@ -478,15 +484,9 @@ pub fn get_breadcrumb(db: &Db, doc_id: &str) -> Result<BreadcrumbResult, AppErro
             title,
             icon,
         });
-
-        let parent_id = block.parent_id.clone();
-        if parent_id == current_id || parent_id == root_id {
-            break;
-        }
-        current_id = parent_id;
     }
 
-    // 反转：从根到当前
+    // CTE 返回顺序：doc → root，反转后：root → doc
     items.reverse();
 
     Ok(BreadcrumbResult { items })
