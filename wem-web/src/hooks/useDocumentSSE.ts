@@ -10,6 +10,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { Block } from '@/types/api'
+import { API_BASE_URL } from '@/lib/utils'
 
 // ─── SSE 事件类型（与后端 BlockEvent serde(flatten) 一一对应） ───
 //
@@ -18,7 +19,6 @@ import type { Block } from '@/types/api'
 
 /** 携带完整 block 数据的事件（block 字段被 serde flatten 展平到顶层） */
 export type BlockEventPayload = Block & {
-  document_id: string
   editor_id?: string
 }
 
@@ -79,7 +79,7 @@ export interface SSECallbacks {
 
 // ─── Hook ───
 
-const SSE_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:6809/api/v1'
+const SSE_BASE = API_BASE_URL
 
 /**
  * 订阅指定文档的 SSE 事件流

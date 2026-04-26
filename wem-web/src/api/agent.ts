@@ -9,11 +9,12 @@
  */
 
 import axios from 'axios'
+import { API_BASE_URL } from '@/lib/utils'
 
 // ─── Axios 实例 ───
 
 const agentApi = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:6809/api/v1',
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 30_000,
 })
@@ -152,8 +153,7 @@ export function chatStream(
   const controller = new AbortController()
 
   // 用 fetch 做 SSE，axios 不原生支持 streaming
-  const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:6809/api/v1'
-  const url = `${baseURL}/agent/sessions/${sessionId}/chat`
+  const url = `${agentApi.defaults.baseURL}/agent/sessions/${sessionId}/chat`
 
   fetch(url, {
     method: 'POST',

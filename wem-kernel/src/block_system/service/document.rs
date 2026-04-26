@@ -188,15 +188,8 @@ pub fn get_document_children(db: &Db, doc_id: &str) -> Result<DocumentChildrenRe
 pub fn list_root_documents(db: &Db) -> Result<Vec<Block>, AppError> {
     let conn = crate::repo::lock_db(db);
 
-    let blocks = repo::find_root_documents(&conn)
-        .map_err(|e| AppError::Internal(format!("查询根文档失败: {}", e)))?;
-
-    let docs: Vec<Block> = blocks
-        .into_iter()
-        .filter(|b| matches!(b.block_type, BlockType::Document))
-        .collect();
-
-    Ok(docs)
+    repo::find_root_documents(&conn)
+        .map_err(|e| AppError::Internal(format!("查询根文档失败: {}", e)))
 }
 
 // ─── Document 子树移动 ──────────────────────────────────────────

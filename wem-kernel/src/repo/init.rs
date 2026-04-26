@@ -30,13 +30,6 @@ pub fn lock_db(db: &Db) -> std::sync::MutexGuard<'_, Connection> {
 }
 
 /// 初始化文件数据库
-///
-/// 1. 确保数据库文件目录存在
-/// 2. 打开/创建 SQLite 文件
-/// 3. 执行 PRAGMA 优化配置（WAL、缓存等）
-/// 4. 执行建表 DDL 和索引
-/// 5. 增量迁移
-/// 6. 确保全局根块存在（幂等）
 pub fn init_db(path: &str) -> Result<Db, AppError> {
     if let Some(parent) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(parent)
@@ -46,50 +39,7 @@ pub fn init_db(path: &str) -> Result<Db, AppError> {
     let conn = Connection::open(path)
         .map_err(|e| AppError::Internal(format!("打开数据库失败: {}", e)))?;
 
-    // PRAGMA
-    conn.execute_batch(schema::PRAGMAS)
-        .map_err(|e| AppError::Internal(format!("设置 PRAGMA 失败: {}", e)))?;
-
-    // 建表
-    conn.execute_batch(schema::CREATE_BLOCKS_TABLE)
-        .map_err(|e| AppError::Internal(format!("建表失败: {}", e)))?;
-
-    // 建索引
-    for idx_sql in schema::CREATE_BLOCKS_INDEXES {
-        conn.execute_batch(idx_sql)
-            .map_err(|e| AppError::Internal(format!("建索引失败: {}", e)))?;
-    }
-
-    // 增量迁移
-    conn.execute_batch("ALTER TABLE batches RENAME TO operations").ok();
-    conn.execute_batch("ALTER TABLE operations RENAME COLUMN operation_id TO editor_id").ok();
-    conn.execute_batch("ALTER TABLE changes RENAME COLUMN batch_id TO operation_id").ok();
-
-    // operations 表
-    conn.execute_batch(schema::CREATE_OPERATIONS_TABLE)
-        .map_err(|e| AppError::Internal(format!("建 operations 表失败: {}", e)))?;
-    for idx_sql in schema::CREATE_OPERATIONS_INDEXES {
-        conn.execute_batch(idx_sql)
-            .map_err(|e| AppError::Internal(format!("建 operations 索引失败: {}", e)))?;
-    }
-
-    // changes 表
-    conn.execute_batch(schema::CREATE_CHANGES_TABLE)
-        .map_err(|e| AppError::Internal(format!("建 changes 表失败: {}", e)))?;
-    for idx_sql in schema::CREATE_CHANGES_INDEXES {
-        conn.execute_batch(idx_sql)
-            .map_err(|e| AppError::Internal(format!("建 changes 索引失败: {}", e)))?;
-    }
-
-    // snapshots 表
-    conn.execute_batch(schema::CREATE_SNAPSHOTS_TABLE)
-        .map_err(|e| AppError::Internal(format!("建 snapshots 表失败: {}", e)))?;
-    for idx_sql in schema::CREATE_SNAPSHOTS_INDEXES {
-        conn.execute_batch(idx_sql)
-            .map_err(|e| AppError::Internal(format!("建 snapshots 索引失败: {}", e)))?;
-    }
-
-    ensure_root_block(&conn)?;
+    init_connection(&conn, true)?;
 
     println!("📦 数据库初始化完成: {}", path);
     Ok(Arc::new(Mutex::new(conn)))
@@ -97,32 +47,64 @@ pub fn init_db(path: &str) -> Result<Db, AppError> {
 
 /// 创建内存数据库
 ///
-/// 复刻 `init_db` 的完整流程，但使用 `:memory:` SQLite。
+/// 复用 `init_connection` 的完整流程，但使用 `:memory:` SQLite。
 /// 供 CLI 和测试使用。
 pub fn init_memory_db() -> Db {
     let conn = Connection::open_in_memory()
         .expect("内存数据库创建失败");
 
-    conn.execute_batch(schema::CREATE_BLOCKS_TABLE)
-        .expect("建表失败");
-    conn.execute_batch(schema::CREATE_OPERATIONS_TABLE)
-        .expect("建 operations 表失败");
-    conn.execute_batch(schema::CREATE_CHANGES_TABLE)
-        .expect("建 changes 表失败");
-
-    for idx_sql in schema::CREATE_BLOCKS_INDEXES {
-        conn.execute_batch(idx_sql).expect("建索引失败");
-    }
-    for idx_sql in schema::CREATE_OPERATIONS_INDEXES {
-        conn.execute_batch(idx_sql).expect("建 operations 索引失败");
-    }
-    for idx_sql in schema::CREATE_CHANGES_INDEXES {
-        conn.execute_batch(idx_sql).expect("建 changes 索引失败");
-    }
-
-    ensure_root_block(&conn).expect("创建根块失败");
+    init_connection(&conn, false).expect("初始化内存数据库失败");
 
     Arc::new(Mutex::new(conn))
+}
+
+/// 对单个连接执行完整的初始化流程
+///
+/// PRAGMA → 建表 → 建索引 → 迁移 → 种子数据。
+/// `enable_pragmas`: 文件数据库开启 WAL 等优化，内存数据库跳过。
+fn init_connection(conn: &Connection, enable_pragmas: bool) -> Result<(), AppError> {
+    if enable_pragmas {
+        conn.execute_batch(schema::PRAGMAS)
+            .map_err(|e| AppError::Internal(format!("设置 PRAGMA 失败: {}", e)))?;
+    }
+
+    conn.execute_batch(schema::CREATE_BLOCKS_TABLE)
+        .map_err(|e| AppError::Internal(format!("建表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_BLOCKS_INDEXES {
+        conn.execute_batch(idx_sql)
+            .map_err(|e| AppError::Internal(format!("建索引失败: {}", e)))?;
+    }
+
+    if enable_pragmas {
+        conn.execute_batch("ALTER TABLE batches RENAME TO operations").ok();
+        conn.execute_batch("ALTER TABLE operations RENAME COLUMN operation_id TO editor_id").ok();
+        conn.execute_batch("ALTER TABLE changes RENAME COLUMN batch_id TO operation_id").ok();
+    }
+
+    conn.execute_batch(schema::CREATE_OPERATIONS_TABLE)
+        .map_err(|e| AppError::Internal(format!("建 operations 表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_OPERATIONS_INDEXES {
+        conn.execute_batch(idx_sql)
+            .map_err(|e| AppError::Internal(format!("建 operations 索引失败: {}", e)))?;
+    }
+
+    conn.execute_batch(schema::CREATE_CHANGES_TABLE)
+        .map_err(|e| AppError::Internal(format!("建 changes 表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_CHANGES_INDEXES {
+        conn.execute_batch(idx_sql)
+            .map_err(|e| AppError::Internal(format!("建 changes 索引失败: {}", e)))?;
+    }
+
+    conn.execute_batch(schema::CREATE_SNAPSHOTS_TABLE)
+        .map_err(|e| AppError::Internal(format!("建 snapshots 表失败: {}", e)))?;
+    for idx_sql in schema::CREATE_SNAPSHOTS_INDEXES {
+        conn.execute_batch(idx_sql)
+            .map_err(|e| AppError::Internal(format!("建 snapshots 索引失败: {}", e)))?;
+    }
+
+    ensure_root_block(conn)?;
+
+    Ok(())
 }
 
 /// 确保全局根块 "/" 存在（幂等）
@@ -139,7 +121,7 @@ fn ensure_root_block(conn: &Connection) -> Result<(), AppError> {
         return Ok(());
     }
 
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let now = crate::util::now_iso();
 
     conn.execute(
         "INSERT INTO blocks (

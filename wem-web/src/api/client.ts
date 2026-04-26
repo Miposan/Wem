@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { API_BASE_URL } from '@/lib/utils'
 import type {
   ApiResponse,
   Block,
@@ -36,7 +37,7 @@ import type {
 // ---- Axios 实例 ----
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:6809/api/v1',
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 10_000,
 })

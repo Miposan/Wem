@@ -285,34 +285,17 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
             +
           </button>
         </div>
-        {/* Document Tree */}
-        <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-          {loading && <p className="text-sm text-muted-foreground px-2">加载中…</p>}
-          {!loading && tree.length === 0 && (
-            <div className="px-2 py-4 text-center">
-              <p className="text-sm text-muted-foreground mb-2">暂无文档</p>
-              <button
-                onClick={handleCreateRoot}
-                className="text-sm text-primary hover:underline cursor-pointer"
-              >
-                创建第一个文档
-              </button>
-            </div>
-          )}
-          {tree.map((node) => (
-            <DocItem
-              key={node.doc.id}
-              node={node}
-              depth={0}
-              activeId={activeId}
-              expandedIds={expandedIds}
-              onOpenDoc={handleOpenDoc}
-              onToggle={handleToggle}
-              onCreateChild={handleCreateChild}
-              onDelete={handleDelete}
-            />
-          ))}
-        </nav>
+        <DocTree
+          loading={loading}
+          tree={tree}
+          activeId={activeId}
+          expandedIds={expandedIds}
+          onCreateRoot={handleCreateRoot}
+          onOpenDoc={handleOpenDoc}
+          onToggle={handleToggle}
+          onCreateChild={handleCreateChild}
+          onDelete={handleDelete}
+        />
       </div>
     )
   }
@@ -356,38 +339,76 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
       </div>
 
       {/* Document Tree */}
-      <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {loading && <p className="text-sm text-muted-foreground px-2">加载中…</p>}
-        {!loading && tree.length === 0 && (
-          <div className="px-2 py-4 text-center">
-            <p className="text-sm text-muted-foreground mb-2">暂无文档</p>
-            <button
-              onClick={handleCreateRoot}
-              className="text-sm text-primary hover:underline cursor-pointer"
-            >
-              创建第一个文档
-            </button>
-          </div>
-        )}
-        {tree.map((node) => (
-          <DocItem
-            key={node.doc.id}
-            node={node}
-            depth={0}
-            activeId={activeId}
-            expandedIds={expandedIds}
-            onOpenDoc={handleOpenDoc}
-            onToggle={handleToggle}
-            onCreateChild={handleCreateChild}
-            onDelete={handleDelete}
-          />
-        ))}
-      </nav>
+      <DocTree
+        loading={loading}
+        tree={tree}
+        activeId={activeId}
+        expandedIds={expandedIds}
+        onCreateRoot={handleCreateRoot}
+        onOpenDoc={handleOpenDoc}
+        onToggle={handleToggle}
+        onCreateChild={handleCreateChild}
+        onDelete={handleDelete}
+      />
 
       {/* Footer */}
       <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">
         Wem Editor v0.1
       </div>
     </aside>
+  )
+}
+
+// ─── 文档树渲染（嵌入式复用） ───
+
+function DocTree({
+  loading,
+  tree,
+  activeId,
+  expandedIds,
+  onCreateRoot,
+  onOpenDoc,
+  onToggle,
+  onCreateChild,
+  onDelete,
+}: {
+  loading: boolean
+  tree: DocTreeNode[]
+  activeId: string | null
+  expandedIds: Set<string>
+  onCreateRoot: () => void
+  onOpenDoc: (doc: Block) => void
+  onToggle: (id: string) => void
+  onCreateChild: (parentId: string) => void
+  onDelete: (id: string) => void
+}) {
+  return (
+    <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
+      {loading && <p className="text-sm text-muted-foreground px-2">加载中…</p>}
+      {!loading && tree.length === 0 && (
+        <div className="px-2 py-4 text-center">
+          <p className="text-sm text-muted-foreground mb-2">暂无文档</p>
+          <button
+            onClick={onCreateRoot}
+            className="text-sm text-primary hover:underline cursor-pointer"
+          >
+            创建第一个文档
+          </button>
+        </div>
+      )}
+      {tree.map((node) => (
+        <DocItem
+          key={node.doc.id}
+          node={node}
+          depth={0}
+          activeId={activeId}
+          expandedIds={expandedIds}
+          onOpenDoc={onOpenDoc}
+          onToggle={onToggle}
+          onCreateChild={onCreateChild}
+          onDelete={onDelete}
+        />
+      ))}
+    </nav>
   )
 }

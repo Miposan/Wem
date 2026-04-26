@@ -11,6 +11,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react'
+import { Plus, X, PanelLeft, Square, Lightbulb, ArrowRight } from 'lucide-react'
 import { useCopilotSession } from '@/hooks/useCopilotSession'
 import type { ChatMessage, ToolCallInfo } from '@/api/agent'
 
@@ -204,10 +205,7 @@ function SessionSidebar({
           className="flex items-center gap-1.5 w-full px-2 py-1.5 rounded hover:bg-accent/30 text-muted-foreground hover:text-foreground text-xs transition-colors"
           onClick={onNew}
         >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
-          </svg>
+          <Plus className="h-3.5 w-3.5" />
           新对话
         </button>
       </div>
@@ -237,10 +235,7 @@ function SessionSidebar({
                 onDelete(s.id)
               }}
             >
-              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 6 6 18" />
-                <path d="M6 6l12 12" />
-              </svg>
+              <X className="h-3 w-3" />
             </button>
           </div>
         ))}
@@ -341,10 +336,7 @@ export function CopilotPanel() {
             onClick={() => setShowSidebar(!showSidebar)}
             title="对话列表"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <path d="M9 3v18" />
-            </svg>
+            <PanelLeft className="h-4 w-4" />
           </button>
 
           {/* 新对话 */}
@@ -354,10 +346,7 @@ export function CopilotPanel() {
             onClick={createNewSession}
             title="新对话"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
+            <Plus className="h-4 w-4" />
           </button>
 
           {/* 停止 */}
@@ -368,9 +357,7 @@ export function CopilotPanel() {
               onClick={abort}
               title="停止"
             >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
-              </svg>
+              <Square className="h-4 w-4" fill="currentColor" />
             </button>
           )}
 
@@ -384,12 +371,7 @@ export function CopilotPanel() {
         <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-4">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-              <svg viewBox="0 0 24 24" className="h-8 w-8 opacity-30" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2a8 8 0 0 1 8 8c0 3-1.5 5-3.5 6.5L16 21H8l-.5-4.5C5.5 15 4 13 4 10a8 8 0 0 1 8-8z" />
-                <path d="M9 21v1" />
-                <path d="M15 21v1" />
-                <path d="M10 14h4" />
-              </svg>
+              <Lightbulb className="h-8 w-8 opacity-30" />
               <p className="text-xs text-center leading-relaxed">
                 AI 助手就绪<br />
                 输入问题开始对话
@@ -443,10 +425,7 @@ export function CopilotPanel() {
               title="发送"
               onClick={handleSend}
             >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12h14" />
-                <path d="m12 5 7 7-7 7" />
-              </svg>
+              <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

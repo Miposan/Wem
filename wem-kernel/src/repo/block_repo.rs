@@ -422,43 +422,27 @@ pub fn update_block_fields(
     modified: &str,
     expected_version: Option<u64>,
 ) -> Result<u64, rusqlite::Error> {
-    let rows = if let Some(bt) = block_type {
-        let sql = if expected_version.is_some() {
-            "UPDATE blocks SET content = ?1, properties = ?2, block_type = ?3, modified = ?4, version = version + 1 WHERE id = ?5 AND version = ?6"
-        } else {
-            "UPDATE blocks SET content = ?1, properties = ?2, block_type = ?3, modified = ?4, version = version + 1 WHERE id = ?5"
-        };
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-            Box::new(content.to_vec()),
-            Box::new(properties.to_string()),
-            Box::new(bt.to_string()),
-            Box::new(modified.to_string()),
-            Box::new(id.to_string()),
-        ];
-        if let Some(v) = expected_version {
-            params_vec.push(Box::new(v as i64));
-        }
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        conn.execute(sql, param_refs.as_slice())?
-    } else {
-        let sql = if expected_version.is_some() {
-            "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1 WHERE id = ?4 AND version = ?5"
-        } else {
-            "UPDATE blocks SET content = ?1, properties = ?2, modified = ?3, version = version + 1 WHERE id = ?4"
-        };
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-            Box::new(content.to_vec()),
-            Box::new(properties.to_string()),
-            Box::new(modified.to_string()),
-            Box::new(id.to_string()),
-        ];
-        if let Some(v) = expected_version {
-            params_vec.push(Box::new(v as i64));
-        }
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        conn.execute(sql, param_refs.as_slice())?
+    // 始终更新 block_type：调用方不传时用 COALESCE(null, block_type) 保持原值
+    let sql = match expected_version {
+        Some(_) => "UPDATE blocks SET content = ?1, properties = ?2, block_type = COALESCE(?3, block_type), modified = ?4, version = version + 1 WHERE id = ?5 AND version = ?6",
+        None    => "UPDATE blocks SET content = ?1, properties = ?2, block_type = COALESCE(?3, block_type), modified = ?4, version = version + 1 WHERE id = ?5",
     };
-    Ok(rows as u64)
+
+    let params: Vec<Box<dyn rusqlite::types::ToSql>> = {
+        let mut p: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(content.to_vec()),
+            Box::new(properties.to_string()),
+            Box::new(block_type.map(String::from)),
+            Box::new(modified.to_string()),
+            Box::new(id.to_string()),
+        ];
+        if let Some(v) = expected_version {
+            p.push(Box::new(v as i64));
+        }
+        p
+    };
+    let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    Ok(conn.execute(sql, refs.as_slice())? as u64)
 }
 
 /// 更新 Block 状态（无条件，仅 WHERE id = ?）

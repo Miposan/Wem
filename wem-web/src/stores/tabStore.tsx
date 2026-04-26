@@ -5,7 +5,7 @@
  * 使用 React state + context，无需外部状态库。
  */
 
-import { createContext, useContext, useCallback, useState, useRef, type ReactNode } from 'react'
+import { createContext, useContext, useCallback, useState, type ReactNode } from 'react'
 
 export interface TabInfo {
   id: string        // document id
@@ -36,8 +36,6 @@ export function TabProvider({ children }: { children: ReactNode }) {
     tabs: [],
     activeTabId: null,
   })
-  const stateRef = useRef(state)
-  stateRef.current = state
 
   const openTab = useCallback((tab: TabInfo) => {
     setState((prev) => {

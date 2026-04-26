@@ -66,97 +66,53 @@ fn gc_operations(conn: &rusqlite::Connection) -> Result<(), AppError> {
     Ok(())
 }
 
-// ─── Undo ──────────────────────────────────────────────────────
+// ─── Undo / Redo ──────────────────────────────────────────────
 
-/// 撤销最近一次操作
-///
-/// 流程：
-/// 1. 找到最近的 undone = false 的 Operation
-/// 2. 获取该 Operation 的所有 Change
-/// 3. 对每个 Change，恢复 before 快照到 blocks 表
-/// 4. 标记 Operation 为 undone = true
-///
-/// 返回受影响的 Block ID 和 Document ID（用于 SSE 广播）
 pub fn undo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
-    let conn = crate::repo::lock_db(db);
-
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
-
-    let result = (|| -> Result<UndoRedoResult, AppError> {
-        // 1. 找到指定文档最近的未撤销 Operation
-        let op = oplog_repo::find_latest_undoable_operation(&conn, document_id)
-            .map_err(|e| AppError::Internal(format!("查询可撤销 operation 失败: {}", e)))?
-            .ok_or_else(|| AppError::BadRequest("没有可撤销的操作".to_string()))?;
-
-        // 2. 获取所有 Change
-        let changes = oplog_repo::find_operation_changes(&conn, &op.id)
-            .map_err(|e| AppError::Internal(format!("查询 operation changes 失败: {}", e)))?;
-
-        // 3. 恢复 before 快照
-        let (affected_block_ids, affected_document_ids) =
-            restore_snapshots(&conn, &changes, true)?;
-
-        // 4. 标记为已撤销
-        oplog_repo::set_operation_undone(&conn, &op.id, true)
-            .map_err(|e| AppError::Internal(format!("标记 operation undone 失败: {}", e)))?;
-
-        Ok(UndoRedoResult {
-            operation_id: op.id,
-            affected_block_ids,
-            affected_document_ids,
-            action: op.action.as_str().to_string(),
-        })
-    })();
-
-    match &result {
-        Ok(_) => { let _ = conn.execute_batch("COMMIT"); }
-        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
-    }
-
-    if let Ok(ref r) = result {
-        for doc_id in &r.affected_document_ids {
-            event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
-                document_id: doc_id.clone(),
-                editor_id: None,
-            });
-        }
-    }
-
-    result
+    let result = undo_redo_core(db, document_id, UndoRedoMode::Undo)?;
+    emit_batch_events(&result.affected_document_ids);
+    Ok(result)
 }
 
-// ─── Redo ──────────────────────────────────────────────────────
-
-/// 重做最近被撤销的操作
-///
-/// 流程：
-/// 1. 找到最近的 undone = true 的 Operation
-/// 2. 获取该 Operation 的所有 Change
-/// 3. 对每个 Change，恢复 after 快照到 blocks 表
-/// 4. 标记 Operation 为 undone = false
 pub fn redo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
+    let result = undo_redo_core(db, document_id, UndoRedoMode::Redo)?;
+    emit_batch_events(&result.affected_document_ids);
+    Ok(result)
+}
+
+enum UndoRedoMode {
+    Undo,
+    Redo,
+}
+
+fn undo_redo_core(
+    db: &Db,
+    document_id: &str,
+    mode: UndoRedoMode,
+) -> Result<UndoRedoResult, AppError> {
     let conn = crate::repo::lock_db(db);
+    let no_op_msg = match mode {
+        UndoRedoMode::Undo => "没有可撤销的操作",
+        UndoRedoMode::Redo => "没有可重做的操作",
+    };
+    let use_before = matches!(mode, UndoRedoMode::Undo);
+    let mark_undone = use_before;
 
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| AppError::Internal(format!("开启事务失败: {}", e)))?;
+    super::helpers::run_in_transaction(&conn, || {
+        let op = match mode {
+            UndoRedoMode::Undo => oplog_repo::find_latest_undoable_operation(&conn, document_id),
+            UndoRedoMode::Redo => oplog_repo::find_latest_redoable_operation(&conn, document_id),
+        }
+        .map_err(|e| AppError::Internal(format!("查询 operation 失败: {}", e)))?
+        .ok_or_else(|| AppError::BadRequest(no_op_msg.to_string()))?;
 
-    let result = (|| -> Result<UndoRedoResult, AppError> {
-        // 1. 找到指定文档最近的已撤销 Operation
-        let op = oplog_repo::find_latest_redoable_operation(&conn, document_id)
-            .map_err(|e| AppError::Internal(format!("查询可重做 operation 失败: {}", e)))?
-            .ok_or_else(|| AppError::BadRequest("没有可重做的操作".to_string()))?;
-
-        // 2. 获取所有 Change
         let changes = oplog_repo::find_operation_changes(&conn, &op.id)
             .map_err(|e| AppError::Internal(format!("查询 operation changes 失败: {}", e)))?;
 
-        // 3. 恢复 after 快照
         let (affected_block_ids, affected_document_ids) =
-            restore_snapshots(&conn, &changes, false)?;
+            restore_snapshots(&conn, &changes, use_before)?;
 
-        // 4. 标记为未撤销
-        oplog_repo::set_operation_undone(&conn, &op.id, false)
+        oplog_repo::set_operation_undone(&conn, &op.id, mark_undone)
             .map_err(|e| AppError::Internal(format!("标记 operation undone 失败: {}", e)))?;
 
         Ok(UndoRedoResult {
@@ -165,23 +121,16 @@ pub fn redo(db: &Db, document_id: &str) -> Result<UndoRedoResult, AppError> {
             affected_document_ids,
             action: op.action.as_str().to_string(),
         })
-    })();
+    })
+}
 
-    match &result {
-        Ok(_) => { let _ = conn.execute_batch("COMMIT"); }
-        Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
+fn emit_batch_events(document_ids: &[String]) {
+    for doc_id in document_ids {
+        event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
+            document_id: doc_id.clone(),
+            editor_id: None,
+        });
     }
-
-    if let Ok(ref r) = result {
-        for doc_id in &r.affected_document_ids {
-            event::EventBus::global().emit(BlockEvent::BlocksBatchChanged {
-                document_id: doc_id.clone(),
-                editor_id: None,
-            });
-        }
-    }
-
-    result
 }
 
 // ─── 查询历史 ──────────────────────────────────────────────────

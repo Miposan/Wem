@@ -27,7 +27,7 @@ use crate::util::now_iso;
 use super::heading::HeadingOps;
 use super::document::DocumentOps;
 use super::paragraph::ParagraphOps;
-use super::list::{ListOps, ListItemOps};
+use super::list::ListOps;
 
 pub(crate) fn use_tree_move(block_type: &BlockType) -> bool {
     match block_type {
@@ -77,8 +77,6 @@ pub(crate) fn dispatch_flat_list_move(
 pub(crate) fn validate_on_create(block_type: &BlockType) -> Result<(), AppError> {
     match block_type {
         BlockType::Heading { .. } => HeadingOps::validate_on_create(block_type),
-        BlockType::List { .. } => ListOps::validate_on_create(block_type),
-        BlockType::ListItem => ListItemOps::validate_on_create(block_type),
         _ => Ok(()),
     }
 }
@@ -664,29 +662,21 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
                 .to_string(),
         };
 
-        // 3. 自引用 / 后代引用检测
-        let is_self = target_parent_id == id;
-        if is_self || repo::check_is_descendant(&conn, id, &target_parent_id)
+        // 3. 自引用 / 后代引用 → 平铺模型下的合法位置调整（先平铺再建树）
+        if target_parent_id == id || repo::check_is_descendant(&conn, id, &target_parent_id)
             .map_err(|e| AppError::Internal(format!("检查后代关系失败: {}", e)))?
         {
             return Ok(current);
         }
 
-        // 4. 循环引用检测（仅当父块改变时）
+        // 4. 父块存在性检测
         let parent_changed = target_parent_id != current.parent_id;
-        if parent_changed {
-            if repo::check_is_descendant(&conn, id, &target_parent_id)
-                .map_err(|e| AppError::Internal(format!("检查循环引用失败: {}", e)))?
-            {
-                return Err(AppError::CycleReference);
-            }
-            if !repo::exists_normal(&conn, &target_parent_id)
-                .map_err(|e| AppError::Internal(format!("检查父块存在性失败: {}", e)))?
-            {
-                return Err(AppError::BadRequest(format!(
-                    "目标父块 {} 不存在或已删除", target_parent_id
-                )));
-            }
+        if parent_changed && !repo::exists_normal(&conn, &target_parent_id)
+            .map_err(|e| AppError::Internal(format!("检查父块存在性失败: {}", e)))?
+        {
+            return Err(AppError::BadRequest(format!(
+                "目标父块 {} 不存在或已删除", target_parent_id
+            )));
         }
 
         let target_parent = repo::find_by_id(&conn, &target_parent_id)

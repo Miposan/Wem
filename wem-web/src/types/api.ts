@@ -76,6 +76,7 @@ export function makeParagraphType(): ParagraphBlockType {
 export interface Block {
   id: string
   parent_id: string
+  document_id: string
   position: string
   block_type: BlockType
   content: string

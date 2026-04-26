@@ -22,14 +22,6 @@ use super::helpers;
 pub struct ListOps;
 
 impl BlockTypeOps for ListOps {
-    /// List 自身不需要额外校验（ordered 是 bool，不会非法）
-    fn validate_on_create(block_type: &BlockType) -> Result<(), AppError> {
-        if let BlockType::List { ordered: _ } = block_type {
-            // List 类型参数合法，无需额外校验
-        }
-        Ok(())
-    }
-
     /// List 块被移动后的后置处理
     ///
     /// List 的移动通常是整棵子树一起移动（List + 所有 ListItem），
@@ -160,14 +152,7 @@ impl BlockTypeOps for ListOps {
 /// ListItem 类型行为实现
 pub struct ListItemOps;
 
-impl BlockTypeOps for ListItemOps {
-    /// 校验 ListItem 的 parent 必须是 List 类型
-    fn validate_on_create(block_type: &BlockType) -> Result<(), AppError> {
-        // ListItem 自身没有参数需要校验
-        let _ = block_type;
-        Ok(())
-    }
-}
+impl BlockTypeOps for ListItemOps {}
 
 // ─── 父子类型约束校验 ─────────────────────────────────────────
 

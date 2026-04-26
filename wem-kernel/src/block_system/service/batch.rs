@@ -394,14 +394,11 @@ fn batch_move_block(
 
     let parent_changed = target_parent != current.parent_id;
     if parent_changed {
-        if target_parent == id {
-            return Err(AppError::BadRequest("不能将 Block 移动到自身下".to_string()));
-        }
-
-        let is_descendant = repo::check_is_descendant(conn, id, &target_parent)
-            .map_err(|e| AppError::Internal(format!("检查循环引用失败: {}", e)))?;
-        if is_descendant {
-            return Err(AppError::CycleReference);
+        if target_parent == id || repo::check_is_descendant(conn, id, &target_parent)
+            .map_err(|e| AppError::Internal(format!("检查后代关系失败: {}", e)))?
+        {
+            return repo::get_version(conn, id)
+                .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)));
         }
 
         let parent_exists = repo::exists_normal(conn, &target_parent)
