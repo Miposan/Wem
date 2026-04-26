@@ -10,7 +10,8 @@ use crate::api::request::{
     ImportTextReq, MoveDocumentTreeReq,
 };
 use crate::api::response::{
-    DeleteResult, DocumentChildrenResult, DocumentContentResult, ExportResult, ImportResult,
+    BreadcrumbResult, DeleteResult, DocumentChildrenResult, DocumentContentResult, ExportResult,
+    ImportResult,
 };
 use crate::error::{AppError, ApiResponse};
 use crate::block_system::model::Block;
@@ -117,6 +118,23 @@ pub async fn move_document_tree(
         .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
 
     Ok(Json(ApiResponse::ok(Some(blk))))
+}
+
+// ─── Breadcrumb ──────────────────────────────────────────────
+
+/// POST /api/v1/documents/breadcrumb
+///
+/// 获取文档的祖先链（从根到当前文档），用于面包屑导航
+pub async fn get_breadcrumb(
+    State(db): State<Db>,
+    Json(req): Json<GetDocumentReq>,
+) -> Result<Json<ApiResponse<BreadcrumbResult>>, AppError> {
+    let doc_id = req.id;
+    let result = tokio::task::spawn_blocking(move || document::get_breadcrumb(&db, &doc_id))
+        .await
+        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
+
+    Ok(Json(ApiResponse::ok(Some(result))))
 }
 
 // ─── Import / Export ───────────────────────────────────────────

@@ -91,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/documents", post(handler::create_document))
         .route("/api/v1/documents/list", post(handler::list_documents))
         .route("/api/v1/documents/get", post(handler::get_document))
+        .route("/api/v1/documents/breadcrumb", post(handler::get_breadcrumb))
         .route("/api/v1/documents/children", post(handler::get_document_children))
         .route("/api/v1/documents/delete", post(handler::delete_document))
         .route("/api/v1/documents/export", post(handler::export_text))
@@ -162,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   POST   /api/v1/documents");
     println!("   POST   /api/v1/documents/list");
     println!("   POST   /api/v1/documents/get");
+    println!("   POST   /api/v1/documents/breadcrumb");
     println!("   POST   /api/v1/documents/children");
     println!("   POST   /api/v1/documents/delete");
     println!("   POST   /api/v1/documents/export");

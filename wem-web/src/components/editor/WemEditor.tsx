@@ -588,9 +588,9 @@ export function WemEditor({
       // 只在点击到编辑器底部空白区域（所有块之下）时才聚焦/创建段落
       // 点击在块之间的空白区域（margin）不触发
       const editorEl = (e.currentTarget as HTMLElement)
-      const lastChild = editorEl.querySelector(':scope > .wem-block-container:last-of-type')
-      if (lastChild) {
-        const lastRect = lastChild.getBoundingClientRect()
+      const blockTree = editorEl.querySelector('.wem-block-tree')
+      if (blockTree && blockTree.lastElementChild) {
+        const lastRect = blockTree.lastElementChild.getBoundingClientRect()
         if (e.clientY < lastRect.bottom) return
       }
 
@@ -677,17 +677,6 @@ export function WemEditor({
     },
     [handleAction, documentId, setTreeSync, addPendingOperationId],
   )
-
-  /** 在指定块后面插入新块（顶层） */
-  function insertBlockAfter(tree: BlockNode[], afterId: string, newBlock: BlockNode): BlockNode[] {
-    return tree.flatMap((node) => {
-      if (node.id === afterId) return [node, { ...newBlock, children: [] }]
-      if (node.children.length > 0) {
-        return [{ ...node, children: insertBlockAfter(node.children, afterId, newBlock) }]
-      }
-      return [node]
-    })
-  }
 
   return (
     <div

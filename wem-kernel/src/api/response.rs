@@ -175,3 +175,20 @@ pub struct HistoryResponse {
 pub struct UndoRedoResponse {
     pub result: crate::block_system::model::oplog::UndoRedoResult,
 }
+
+/// 文档面包屑（祖先链）
+///
+/// `POST /api/v1/documents/breadcrumb`
+///
+/// 从根到当前文档的路径，每项包含 id/title/icon。
+#[derive(Debug, Serialize)]
+pub struct BreadcrumbResult {
+    pub items: Vec<BreadcrumbItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BreadcrumbItem {
+    pub id: String,
+    pub title: String,
+    pub icon: String,
+}

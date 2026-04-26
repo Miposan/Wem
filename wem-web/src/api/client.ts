@@ -211,3 +211,19 @@ export function splitBlock(id: string, req: Omit<SplitReq, 'id'>) {
 export function mergeBlock(id: string, req: Omit<MergeReq, 'id'>) {
   return post<MergeResult>('/blocks/merge', { id, ...req } as MergeReq)
 }
+
+// ---------- Breadcrumb ----------
+
+export interface BreadcrumbItem {
+  id: string
+  title: string
+  icon: string
+}
+
+export interface BreadcrumbResult {
+  items: BreadcrumbItem[]
+}
+
+export function getBreadcrumb(id: string) {
+  return post<BreadcrumbResult>('/documents/breadcrumb', { id })
+}

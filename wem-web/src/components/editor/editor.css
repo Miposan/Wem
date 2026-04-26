@@ -3,6 +3,78 @@
    内容优先、极低干扰、清晰的排版层级
    ═══════════════════════════════════════════════════ */
 
+/* ─── Breadcrumb Bar（SiYuan notion-theme 风格） ─── */
+
+.wem-breadcrumb-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-height: 35px;
+  padding: 0 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  background: var(--background);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted-foreground);
+  user-select: none;
+}
+
+.wem-breadcrumb-inner {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.wem-breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 3px 5px;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.wem-breadcrumb-item:hover {
+  opacity: 1;
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+
+.wem-breadcrumb-current {
+  opacity: 1;
+  color: var(--foreground);
+  cursor: default;
+}
+
+.wem-breadcrumb-current:hover {
+  background: none;
+}
+
+/* 箭头分隔符：旋转的斜线 */
+.wem-breadcrumb-arrow {
+  display: inline-block;
+  width: 0;
+  height: 13px;
+  margin: 0 1px;
+  transform: rotate(18deg);
+  border-left: 1px solid var(--muted-foreground);
+  opacity: 0.35;
+  flex-shrink: 0;
+}
+
+.wem-breadcrumb-text {
+  margin-left: 4px;
+  font-size: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ═══════════════════════════════════════════════════ */
+
 .wem-editor-root {
   --wem-editor-text: var(--foreground);
   --wem-editor-muted: var(--muted-foreground);
@@ -75,6 +147,17 @@
   outline: none;
 }
 
+/* 非文本块焦点（键盘导航 — BlockContainer 设置 tabIndex） */
+.wem-block-content[tabindex]:focus-visible {
+  outline: 2px solid var(--wem-editor-accent);
+  outline-offset: -2px;
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-block-content[tabindex]:focus {
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+}
+
 .wem-block-content [contenteditable]:empty::before {
   content: attr(data-placeholder);
   color: color-mix(in oklab, var(--wem-editor-muted) 70%, transparent);
@@ -123,10 +206,6 @@
   margin: 12px 0;
   cursor: default;
   outline: none;
-}
-
-.wem-thematic-break:focus {
-  border-top-color: var(--wem-editor-accent);
 }
 
 /* ─── 引用块 ─── */
@@ -402,6 +481,223 @@
   background: transparent;
 }
 
+/* ─── 公式块 ─── */
+
+.wem-mathblock {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: var(--wem-editor-radius);
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+  min-height: 2em;
+}
+
+.wem-mathblock:hover {
+  background: color-mix(in oklab, var(--muted) 14%, transparent);
+}
+
+.wem-mathblock-editing {
+  cursor: default;
+}
+
+.wem-mathblock-render {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+.wem-mathblock-editor {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid var(--wem-editor-accent);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--wem-editor-text);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.wem-mathblock-placeholder {
+  color: color-mix(in oklab, var(--wem-editor-muted) 70%, transparent);
+  font-size: 14px;
+}
+
+/* ─── 图片块 ─── */
+
+.wem-imageblock {
+  margin: 6px 0;
+}
+
+.wem-imageblock-wrapper {
+  position: relative;
+  border-radius: var(--wem-editor-radius);
+  overflow: hidden;
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+  min-height: 80px;
+}
+
+.wem-imageblock-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-imageblock-loading,
+.wem-imageblock-error,
+.wem-imageblock-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  border: 1px dashed color-mix(in oklab, var(--wem-editor-border) 60%, transparent);
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-imageblock-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid color-mix(in oklab, var(--wem-editor-border) 50%, transparent);
+  border-top-color: var(--wem-editor-accent);
+  border-radius: 50%;
+  animation: wem-spin 0.8s linear infinite;
+}
+
+@keyframes wem-spin {
+  to { transform: rotate(360deg); }
+}
+
+.wem-imageblock-caption {
+  text-align: center;
+  padding: 4px 0;
+  color: var(--wem-editor-muted);
+  font-size: 0.875em;
+  outline: none;
+  min-height: 1.4em;
+}
+
+.wem-imageblock-caption:empty::before {
+  content: '添加图片说明…';
+  color: color-mix(in oklab, var(--wem-editor-muted) 50%, transparent);
+}
+
+/* ─── 视频块 ─── */
+
+.wem-videoblock {
+  margin: 6px 0;
+}
+
+.wem-videoblock-wrapper {
+  position: relative;
+  border-radius: var(--wem-editor-radius);
+  overflow: hidden;
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+}
+
+.wem-videoblock-video {
+  display: block;
+  width: 100%;
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-videoblock-iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-videoblock-empty,
+.wem-videoblock-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 16px;
+  border: 1px dashed color-mix(in oklab, var(--wem-editor-border) 60%, transparent);
+  border-radius: var(--wem-editor-radius);
+}
+
+/* ─── 嵌入块 ─── */
+
+.wem-embedblock {
+  margin: 6px 0;
+}
+
+.wem-embedblock-wrapper {
+  border-radius: var(--wem-editor-radius);
+  overflow: hidden;
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+}
+
+.wem-embedblock-iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-embedblock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+}
+
+.wem-embedblock-content {
+  padding: 8px;
+  border: 1px solid color-mix(in oklab, var(--wem-editor-border) 50%, transparent);
+  border-radius: var(--wem-editor-radius);
+}
+
+.wem-embedblock-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 16px;
+  border: 1px dashed color-mix(in oklab, var(--wem-editor-border) 60%, transparent);
+  border-radius: var(--wem-editor-radius);
+}
+
+/* ─── 音频块 ─── */
+
+.wem-audioblock {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: var(--wem-editor-radius);
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+}
+
+.wem-audioblock-player {
+  display: block;
+  width: 100%;
+  height: 40px;
+  border-radius: 4px;
+}
+
+.wem-audioblock-empty,
+.wem-audioblock-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  border: 1px dashed color-mix(in oklab, var(--wem-editor-border) 60%, transparent);
+  border-radius: var(--wem-editor-radius);
+}
+
 /* ─── 选区 / 拖拽 ─── */
 
 .wem-block-selected > .wem-block-content {
@@ -521,6 +817,15 @@
   background: color-mix(in oklab, var(--muted) 25%, transparent);
 }
 
+.dark .wem-mathblock-editor {
+  border-color: color-mix(in oklab, var(--primary) 60%, transparent);
+}
+
+.dark .wem-videoblock-wrapper,
+.dark .wem-embedblock-wrapper {
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+}
+
 /* ─── 打印样式 ─── */
 
 @media print {
@@ -536,12 +841,24 @@
   }
 
   .wem-block-container:focus-within > .wem-block-content,
-  .wem-block-container:not(:focus-within):not(.wem-block-selected):hover > .wem-block-content {
+  .wem-block-container:not(:focus-within):not(.wem-block-selected):hover > .wem-block-content,
+  .wem-block-content[tabindex]:focus,
+  .wem-block-content[tabindex]:focus-visible {
     background: transparent;
+    outline: none;
   }
 
   .wem-block-selected > .wem-block-content {
     background: transparent;
     box-shadow: none;
+  }
+
+  .wem-videoblock-video,
+  .wem-audioblock-player {
+    display: none;
+  }
+
+  .wem-imageblock-loading .wem-imageblock-spinner {
+    display: none;
   }
 }

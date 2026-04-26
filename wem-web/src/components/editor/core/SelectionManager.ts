@@ -17,6 +17,15 @@ export function findEditable(blockId: string): HTMLElement | null {
   ) as HTMLElement | null
 }
 
+/** 查找 block 的可聚焦元素（文本块用 contentEditable，非文本块用 tabIndex 容器） */
+export function findFocusable(blockId: string): HTMLElement | null {
+  const editable = findEditable(blockId)
+  if (editable) return editable
+  return document.querySelector(
+    `[data-block-id="${blockId}"] > .wem-block-content[tabindex]`,
+  ) as HTMLElement | null
+}
+
 /**
  * 直接同步块的 contentEditable DOM 内容
  *
@@ -39,23 +48,34 @@ export function syncBlockContent(blockId: string, content: string): void {
  */
 export function getCursorPosition(): { blockId: string; offset: number } | null {
   const active = document.activeElement as HTMLElement | null
-  if (!active || !active.isContentEditable) return null
+  if (!active) return null
 
-  const blockEl = active.closest('[data-block-id]')
-  if (!blockEl) return null
+  if (active.isContentEditable) {
+    const blockEl = active.closest('[data-block-id]')
+    if (!blockEl) return null
+    const blockId = blockEl.getAttribute('data-block-id')!
 
-  const blockId = blockEl.getAttribute('data-block-id')!
+    const sel = window.getSelection()
+    if (!sel || !sel.rangeCount) return null
 
-  const sel = window.getSelection()
-  if (!sel || !sel.rangeCount) return null
+    const range = sel.getRangeAt(0)
+    const preRange = range.cloneRange()
+    preRange.selectNodeContents(active)
+    preRange.setEnd(range.startContainer, range.startOffset)
+    const offset = preRange.toString().length
 
-  const range = sel.getRangeAt(0)
-  const preRange = range.cloneRange()
-  preRange.selectNodeContents(active)
-  preRange.setEnd(range.startContainer, range.startOffset)
-  const offset = preRange.toString().length
+    return { blockId, offset }
+  }
 
-  return { blockId, offset }
+  // Non-text block focus (tabIndex container)
+  if (active.classList.contains('wem-block-content')) {
+    const blockEl = active.closest('[data-block-id]')
+    if (!blockEl) return null
+    const blockId = blockEl.getAttribute('data-block-id')!
+    return { blockId, offset: 0 }
+  }
+
+  return null
 }
 
 /** Observer 超时时间（ms），防止永久等待 */
@@ -68,33 +88,31 @@ const FOCUS_OBSERVER_TIMEOUT_MS = 2_000
  * 返回 true 表示焦点成功设置到目标元素。
  */
 function placeCursor(el: HTMLElement, offset: number): boolean {
-  // 先 blur 当前焦点元素，避免某些浏览器下 focus() 不生效
   const prev = document.activeElement as HTMLElement | null
-  if (prev && prev !== el && prev.getAttribute('contenteditable') !== null) {
+  if (prev && prev !== el && (prev.isContentEditable || prev.getAttribute('tabindex') !== null)) {
     prev.blur()
   }
 
   el.focus()
 
-  const sel = window.getSelection()
-  if (!sel) return document.activeElement === el
-
-  const range = document.createRange()
-  const textNode = el.firstChild
-
-  if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-    const len = textNode.textContent?.length ?? 0
-    range.setStart(textNode, Math.min(offset, len))
-  } else {
-    range.setStart(el, 0)
+  if (el.isContentEditable) {
+    const sel = window.getSelection()
+    if (sel) {
+      const range = document.createRange()
+      const textNode = el.firstChild
+      if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+        const len = textNode.textContent?.length ?? 0
+        range.setStart(textNode, Math.min(offset, len))
+      } else {
+        range.setStart(el, 0)
+      }
+      range.collapse(true)
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }
   }
-  range.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(range)
 
-  // 确保光标所在块滚入视口（避免快速 Enter 时光标"掉出"视口底部）
   el.scrollIntoView({ block: 'nearest', behavior: 'instant' })
-
   return document.activeElement === el
 }
 
@@ -106,16 +124,15 @@ function placeCursor(el: HTMLElement, offset: number): boolean {
  */
 export function focusBlock(blockId: string, offset: number = 0): void {
   // 1. 立即尝试：元素已存在时直接聚焦
-  const el = findEditable(blockId)
+  const el = findFocusable(blockId)
   if (el) {
     placeCursor(el, offset)
     return
   }
 
   // 2. 元素不存在：通过 MutationObserver 等待其出现
-  const targetSelector = `[data-block-id="${blockId}"] [contenteditable="true"]`
   const observer = new MutationObserver((_mutations, obs) => {
-    const target = document.querySelector(targetSelector) as HTMLElement | null
+    const target = findFocusable(blockId)
     if (target) {
       obs.disconnect()
       clearTimeout(timeout)

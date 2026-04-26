@@ -6,6 +6,11 @@ import { ThematicBreakBlock } from '../blocks/ThematicBreakBlock'
 import { CodeBlock } from '../blocks/CodeBlock'
 import { ListItemBlock } from '../blocks/ListItemBlock'
 import { BlockquoteBlock } from '../blocks/BlockquoteBlock'
+import { MathBlock } from '../blocks/MathBlock'
+import { ImageBlock } from '../blocks/ImageBlock'
+import { VideoBlock } from '../blocks/VideoBlock'
+import { EmbedBlock } from '../blocks/EmbedBlock'
+import { AudioBlock } from '../blocks/AudioBlock'
 import { getHeadingLevel } from '../core/BlockOperations'
 import { UnknownBlock } from '../blocks/UnknownBlock'
 import { ChevronRight, GripVertical, List, ListOrdered } from 'lucide-react'
@@ -24,7 +29,7 @@ function BlockContentRouter({ block, ...props }: ContentRouterProps) {
     case 'heading':
       return <HeadingBlock block={block} {...props} />
     case 'thematicBreak':
-      return <ThematicBreakBlock blockId={block.id} onAction={props.onAction} />
+      return <ThematicBreakBlock />
     case 'codeBlock':
       return <CodeBlock block={block} {...props} />
     case 'list':
@@ -34,14 +39,18 @@ function BlockContentRouter({ block, ...props }: ContentRouterProps) {
       return <ListItemBlock block={block} {...props} />
     case 'blockquote':
       return <BlockquoteBlock block={block} {...props} />
-    // Phase 2 块类型占位
     case 'mathBlock':
-    case 'callout':
+      return <MathBlock block={block} readonly={props.readonly} onContentChange={props.onContentChange} />
     case 'image':
-    case 'audio':
+      return <ImageBlock block={block} readonly={props.readonly} onContentChange={props.onContentChange} onAction={props.onAction} />
     case 'video':
+      return <VideoBlock block={block} readonly={props.readonly} />
     case 'iframe':
     case 'embed':
+      return <EmbedBlock block={block} readonly={props.readonly} />
+    case 'audio':
+      return <AudioBlock block={block} readonly={props.readonly} />
+    case 'callout':
     case 'attributeView':
     case 'widget':
     case 'document':
@@ -68,6 +77,15 @@ function isCollapsible(block: BlockNode): boolean {
   return (block.block_type.type === 'heading' || block.block_type.type === 'list') && block.children.length > 0
 }
 
+/** 非文本块类型：没有 contentEditable，需要 BlockContainer 层面的焦点管理 */
+const NON_TEXT_BLOCK_TYPES = new Set([
+  'thematicBreak', 'mathBlock', 'image', 'video', 'audio', 'iframe', 'embed',
+])
+
+function isNonTextBlock(block: BlockNode): boolean {
+  return NON_TEXT_BLOCK_TYPES.has(block.block_type.type)
+}
+
 /** 获取 List 块的 ordered 属性（用于 CSS data 属性） */
 function getListOrdered(block: BlockNode): string | undefined {
   if (block.block_type.type === 'list') {
@@ -91,6 +109,7 @@ export function BlockContainer({
   const selected = selectedBlockIds.has(block.id)
   const isDragging = dragState.draggingBlockId === block.id
   const isDropTarget = dragState.dropTarget?.blockId === block.id
+  const nonText = isNonTextBlock(block)
   const className = [
     'wem-block-container',
     `wem-block-type-${block.block_type.type}`,
@@ -102,6 +121,25 @@ export function BlockContainer({
   ]
     .filter(Boolean)
     .join(' ')
+
+  // 非文本块：为 .wem-block-content 添加 tabIndex 以支持键盘导航
+  const contentTabProps = nonText ? {
+    tabIndex: -1 as const,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault()
+        props.onAction({ type: 'delete', blockId: block.id })
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        props.onAction({ type: 'focus-previous', blockId: block.id })
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        props.onAction({ type: 'focus-next', blockId: block.id })
+      }
+    },
+  } : {}
 
   return (
     <div
@@ -115,14 +153,10 @@ export function BlockContainer({
       onDrop={(e) => dragHandlers.onDrop(e, block.id)}
       onContextMenu={(e) => onBlockContextMenu?.(e, block)}
       onClick={(e) => {
-        // 点击块的非 contentEditable 区域（padding、margin 等）→ 聚焦该块
-        if (!(e.target as HTMLElement).closest('[contenteditable]')) {
-          const blockType = block.block_type.type
-          if (blockType === 'thematicBreak') {
-            // 分隔线不可编辑，选中它（由 focusBlock 处理）
-          } else {
-            focusBlock(block.id)
-          }
+        const target = e.target as HTMLElement
+        // 不抢占 textarea / input / select 等自身管理焦点的元素
+        if (!target.closest('[contenteditable], textarea, input, select')) {
+          focusBlock(block.id)
         }
       }}
     >
@@ -131,7 +165,7 @@ export function BlockContainer({
         <DropIndicator position="before" />
       )}
 
-      <div className="wem-block-content">
+      <div className="wem-block-content" {...contentTabProps}>
         <div className="wem-block-editable">
           {/* 块左侧操作区（折叠、拖拽等） — 绝对定位于 editable 左侧，紧贴文字 */}
           <div className="wem-block-gutter" contentEditable={false}>

@@ -11,7 +11,7 @@ import EditorPage from '@/pages/EditorPage'
 function AppInner() {
   const [activeDocId, setActiveDocId] = useState<string | null>(null)
   const [tocItems, setTocItems] = useState<TocItem[]>([])
-  const { tabs } = useTabStore()
+  const { tabs, openTab } = useTabStore()
   const { getSlotPanels } = useLayoutStore()
 
   // 活跃文档 ID：TabStore 优先，fallback 到 activeDocId
@@ -23,6 +23,14 @@ function AppInner() {
     const el = document.querySelector(`[data-block-id="${blockId}"]`)
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
+
+  const handleBreadcrumbNavigate = useCallback(
+    (id: string, title: string, icon: string) => {
+      openTab({ id, title, icon })
+      setActiveDocId(id)
+    },
+    [openTab],
+  )
 
   // 面板内容渲染所需的共享 props
   const contentProps = {
@@ -71,7 +79,7 @@ function AppInner() {
         <TabBar />
 
         {/* Editor */}
-        <EditorPage documentId={displayDocId} onTocItemsChange={setTocItems} />
+        <EditorPage documentId={displayDocId} onTocItemsChange={setTocItems} onNavigate={handleBreadcrumbNavigate} />
       </div>
 
       {/* ─── Right Slot ─── */}

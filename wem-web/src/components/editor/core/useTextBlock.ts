@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { makeHeadingType, makeListType, makeCodeBlockType } from '@/types/api'
+import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType } from '@/types/api'
 import type { BlockType } from '@/types/api'
 import type { TextBlockProps } from './types'
 
@@ -189,6 +189,19 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
             blockId: block.id,
             content: rest,
             blockType: makeCodeBlockType(language),
+          })
+          return
+        }
+
+        // $$ + Space → MathBlock
+        if (beforeCursor === '$$') {
+          e.preventDefault()
+          el.textContent = ''
+          onAction({
+            type: 'convert-block',
+            blockId: block.id,
+            content: '',
+            blockType: makeMathBlockType(),
           })
           return
         }

@@ -3,13 +3,14 @@ import { getDocument, updateBlock } from '@/api/client'
 import type { BlockNode } from '@/types/api'
 import { WemEditor } from '@/components/editor'
 import { EmojiPicker } from '@/components/editor/components/EmojiPicker'
-import { extractTocItems, type TocItem } from '@/components/layout'
+import { Breadcrumb, extractTocItems, type TocItem } from '@/components/layout'
 import { useTabStore } from '@/stores/tabStore'
 import '@/components/editor/editor.css'
 
 interface Props {
   documentId: string | null
   onTocItemsChange?: (items: TocItem[]) => void
+  onNavigate?: (id: string, title: string, icon: string) => void
 }
 
 // ─── 文档加载状态 ───
@@ -19,7 +20,7 @@ type DocData =
   | { status: 'loaded'; docId: string; title: string; icon: string | undefined; tree: BlockNode[] }
   | { status: 'error'; docId: string; error: unknown }
 
-export default function EditorPage({ documentId, onTocItemsChange }: Props) {
+export default function EditorPage({ documentId, onTocItemsChange, onNavigate }: Props) {
   const [doc, setDoc] = useState<DocData>({ status: 'idle' })
   const { updateTab } = useTabStore()
 
@@ -116,7 +117,12 @@ export default function EditorPage({ documentId, onTocItemsChange }: Props) {
   const { title, icon, tree } = doc
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Breadcrumb — 固定在顶部，标签栏下方 */}
+      {onNavigate && documentId && (
+        <Breadcrumb documentId={documentId} onNavigate={onNavigate} />
+      )}
+
       {/* 编辑器主区域 */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-8 py-12">

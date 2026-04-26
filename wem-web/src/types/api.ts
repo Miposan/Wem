@@ -73,6 +73,14 @@ export function makeParagraphType(): ParagraphBlockType {
   return { type: 'paragraph' }
 }
 
+export function makeMathBlockType(): MathBlockBlockType {
+  return { type: 'mathBlock' }
+}
+
+export function makeImageBlockType(url: string): ImageBlockType {
+  return { type: 'image', url }
+}
+
 export interface Block {
   id: string
   parent_id: string

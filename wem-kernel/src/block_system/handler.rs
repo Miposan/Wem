@@ -15,8 +15,8 @@ pub mod oplog;
 
 // 统一重导出，供 main.rs 路由注册使用
 pub use document::{
-    create_document, list_documents, get_document, get_document_children, delete_document,
-    move_document_tree, import_text, export_text,
+    create_document, list_documents, get_document, get_document_children, get_breadcrumb,
+    delete_document, move_document_tree, import_text, export_text,
 };
 pub use block::{
     create_block, get_block, update_block, delete_block, delete_tree, move_block, move_heading_tree,

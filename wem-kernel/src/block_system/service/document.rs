@@ -22,7 +22,7 @@ use super::traits::{BlockTypeOps, MoveContext, TreeMoveOps, ExportDepth};
 use super::helpers::{self, run_in_transaction, resolve_target_parent};
 use super::{event, oplog};
 use crate::api::request::MoveDocumentTreeReq;
-use crate::api::response::{BlockNode, DocumentChildrenResult, DocumentContentResult};
+use crate::api::response::{BlockNode, BreadcrumbItem, BreadcrumbResult, DocumentChildrenResult, DocumentContentResult};
 
 /// Document 类型行为实现
 pub struct DocumentOps;
@@ -445,6 +445,51 @@ fn deduplicate_doc_name(
         }
         seq += 1;
     }
+}
+
+// ─── Breadcrumb（文档祖先链） ───────────────────────────────────
+
+pub fn get_breadcrumb(db: &Db, doc_id: &str) -> Result<BreadcrumbResult, AppError> {
+    let conn = crate::repo::lock_db(db);
+
+    let root_id = crate::block_system::model::ROOT_ID;
+    let mut items = Vec::new();
+    let mut current_id = doc_id.to_string();
+
+    loop {
+        if current_id == root_id {
+            break;
+        }
+        let block = repo::find_by_id(&conn, &current_id)
+            .map_err(|_| AppError::NotFound(format!("文档 {} 不存在", current_id)))?;
+
+        let title = block.properties
+            .get("title")
+            .cloned()
+            .unwrap_or_else(|| String::from_utf8_lossy(&block.content).to_string());
+
+        let icon = block.properties
+            .get("icon")
+            .cloned()
+            .unwrap_or_else(|| "📄".to_string());
+
+        items.push(BreadcrumbItem {
+            id: block.id.clone(),
+            title,
+            icon,
+        });
+
+        let parent_id = block.parent_id.clone();
+        if parent_id == current_id || parent_id == root_id {
+            break;
+        }
+        current_id = parent_id;
+    }
+
+    // 反转：从根到当前
+    items.reverse();
+
+    Ok(BreadcrumbResult { items })
 }
 
 // ─── CLI 辅助 ──────────────────────────────────────────────────
