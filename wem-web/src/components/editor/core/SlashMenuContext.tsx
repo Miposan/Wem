@@ -32,21 +32,22 @@ export interface SlashMenuState {
   selectedIndex: number
 }
 
-interface SlashMenuContextValue {
-  state: SlashMenuState
-  filteredItems: SlashMenuItem[]
+// ── Split context: dispatch (stable) + state (reactive) ──
+// useTextBlock only subscribes to dispatch (never re-renders on state change).
+// SlashCommandMenu subscribes to both (re-renders when state changes).
+
+interface SlashMenuDispatch {
   trigger: (params: { blockId: string; x: number; y: number; slashOffset: number }) => void
   close: () => void
   setFilter: (filter: string) => void
   navigate: (direction: 'up' | 'down') => void
   hoverIndex: (index: number) => void
+  /** Read state at call time (not reactive — for use in event handlers via refs) */
+  getState: () => SlashMenuState
 }
 
-const SlashMenuContext = createContext<SlashMenuContextValue | null>(null)
-
-export function useSlashMenu() {
-  return useContext(SlashMenuContext)
-}
+const SlashMenuDispatchContext = createContext<SlashMenuDispatch | null>(null)
+const SlashMenuStateContext = createContext<SlashMenuState | null>(null)
 
 function filterItems(filter: string): SlashMenuItem[] {
   if (!filter) return SLASH_ITEMS
@@ -56,46 +57,65 @@ function filterItems(filter: string): SlashMenuItem[] {
   )
 }
 
+/** Stable dispatch only — for useTextBlock (doesn't re-render on state changes) */
+export function useSlashMenuDispatch(): SlashMenuDispatch {
+  const ctx = useContext(SlashMenuDispatchContext)
+  if (!ctx) throw new Error('useSlashMenuDispatch must be used within SlashMenuProvider')
+  return ctx
+}
+
+/** Full context: state + dispatch + derived data — for SlashCommandMenu */
+export function useSlashMenu(): {
+  state: SlashMenuState
+  filteredItems: SlashMenuItem[]
+} & SlashMenuDispatch {
+  const dispatch = useContext(SlashMenuDispatchContext)
+  const state = useContext(SlashMenuStateContext)
+  if (!dispatch || !state) throw new Error('useSlashMenu must be used within SlashMenuProvider')
+  const filteredItems = useMemo(() => filterItems(state.filter), [state.filter])
+  return { state, filteredItems, ...dispatch }
+}
+
 export function SlashMenuProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SlashMenuState>({
     visible: false, x: 0, y: 0, blockId: null, slashOffset: 0, filter: '', selectedIndex: 0,
   })
 
-  const filteredItems = useMemo(() => filterItems(state.filter), [state.filter])
-  const filteredCountRef = useRef(filteredItems.length)
-  filteredCountRef.current = filteredItems.length
+  const stateRef = useRef(state)
+  stateRef.current = state
 
-  const trigger = useCallback((params: { blockId: string; x: number; y: number; slashOffset: number }) => {
-    setState({ visible: true, x: params.x, y: params.y, blockId: params.blockId, slashOffset: params.slashOffset, filter: '', selectedIndex: 0 })
-  }, [])
+  const filteredCountRef = useRef(SLASH_ITEMS.length)
 
-  const close = useCallback(() => {
-    setState((prev) => ({ ...prev, visible: false }))
-  }, [])
-
-  const setFilter = useCallback((filter: string) => {
-    setState((prev) => ({ ...prev, filter, selectedIndex: 0 }))
-  }, [])
-
-  const navigate = useCallback((direction: 'up' | 'down') => {
-    setState((prev) => {
-      const max = filteredCountRef.current - 1
-      return { ...prev, selectedIndex: direction === 'up' ? Math.max(0, prev.selectedIndex - 1) : Math.min(max, prev.selectedIndex + 1) }
-    })
-  }, [])
-
-  const hoverIndex = useCallback((index: number) => {
-    setState((prev) => ({ ...prev, selectedIndex: index }))
-  }, [])
-
-  const value = useMemo<SlashMenuContextValue>(
-    () => ({ state, filteredItems, trigger, close, setFilter, navigate, hoverIndex }),
-    [state, filteredItems, trigger, close, setFilter, navigate, hoverIndex],
-  )
+  const dispatch = useMemo<SlashMenuDispatch>(() => ({
+    trigger: (params) => {
+      filteredCountRef.current = SLASH_ITEMS.length
+      setState({ visible: true, x: params.x, y: params.y, blockId: params.blockId, slashOffset: params.slashOffset, filter: '', selectedIndex: 0 })
+    },
+    close: () => {
+      setState((prev) => ({ ...prev, visible: false }))
+    },
+    setFilter: (filter) => {
+      const items = filterItems(filter)
+      filteredCountRef.current = items.length
+      setState((prev) => ({ ...prev, filter, selectedIndex: 0 }))
+    },
+    navigate: (direction) => {
+      setState((prev) => {
+        const max = filteredCountRef.current - 1
+        return { ...prev, selectedIndex: direction === 'up' ? Math.max(0, prev.selectedIndex - 1) : Math.min(max, prev.selectedIndex + 1) }
+      })
+    },
+    hoverIndex: (index) => {
+      setState((prev) => ({ ...prev, selectedIndex: index }))
+    },
+    getState: () => stateRef.current,
+  }), [])
 
   return (
-    <SlashMenuContext.Provider value={value}>
-      {children}
-    </SlashMenuContext.Provider>
+    <SlashMenuDispatchContext.Provider value={dispatch}>
+      <SlashMenuStateContext.Provider value={state}>
+        {children}
+      </SlashMenuStateContext.Provider>
+    </SlashMenuDispatchContext.Provider>
   )
 }

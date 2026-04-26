@@ -16,6 +16,7 @@ import { getHeadingLevel } from '../core/BlockOperations'
 import { UnknownBlock } from '../blocks/UnknownBlock'
 import { ChevronRight, GripVertical, List, ListOrdered, Plus } from 'lucide-react'
 import { focusBlock } from '../core/SelectionManager'
+import { EditorErrorBoundary } from '../core/EditorErrorBoundary'
 
 // ─── Block Type → Component 路由 ───
 
@@ -223,14 +224,16 @@ const BlockContainer = memo(function BlockContainer({
               </button>
             )}
           </div>
-          <BlockContentRouter
-            block={block}
-            collapsedIds={collapsedIds}
-            dragState={dragState}
-            dragHandlers={dragHandlers}
-            onToggleCollapse={onToggleCollapse}
-            {...props}
-          />
+          <EditorErrorBoundary blockId={block.id}>
+            <BlockContentRouter
+              block={block}
+              collapsedIds={collapsedIds}
+              dragState={dragState}
+              dragHandlers={dragHandlers}
+              onToggleCollapse={onToggleCollapse}
+              {...props}
+            />
+          </EditorErrorBoundary>
         </div>
       </div>
 

@@ -9,15 +9,15 @@ export function SlashCommandMenu({ onSelect }: SlashCommandMenuProps) {
   const ctx = useSlashMenu()
   const menuRef = useRef<HTMLDivElement>(null)
 
+  const { state, filteredItems } = ctx
+
   useEffect(() => {
-    if (!ctx?.state.visible) return
+    if (!state.visible) return
     const el = menuRef.current?.querySelector('[data-selected="true"]')
     el?.scrollIntoView({ block: 'nearest' })
-  }, [ctx?.state.selectedIndex, ctx?.state.visible])
+  }, [state.selectedIndex, state.visible])
 
-  if (!ctx?.state.visible || ctx.filteredItems.length === 0) return null
-
-  const { state, filteredItems } = ctx
+  if (!state.visible || filteredItems.length === 0) return null
 
   return (
     <div

@@ -5,6 +5,7 @@ import { WemEditor } from '@/components/editor'
 import { EmojiPicker } from '@/components/editor/components/EmojiPicker'
 import { Breadcrumb, extractTocItems, type TocItem } from '@/components/layout'
 import { useTabStore } from '@/stores/tabStore'
+import { ListOrdered, WrapText } from 'lucide-react'
 import '@/components/editor/editor.css'
 
 interface Props {
@@ -22,6 +23,8 @@ type DocData =
 
 export default function EditorPage({ documentId, onTocItemsChange, onNavigate }: Props) {
   const [doc, setDoc] = useState<DocData>({ status: 'idle' })
+  const [headingNumbering, setHeadingNumbering] = useState(false)
+  const [codeBlockWrap, setCodeBlockWrap] = useState(false)
   const { updateTab } = useTabStore()
   const tocTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
@@ -64,6 +67,13 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
       onTocItemsChange?.(extractTocItems(tree))
     }, 200)
   }, [onTocItemsChange])
+
+  // 清理 TOC 定时器
+  useEffect(() => {
+    return () => {
+      if (tocTimerRef.current) clearTimeout(tocTimerRef.current)
+    }
+  }, [])
 
   // 加载文档
   useEffect(() => {
@@ -128,6 +138,35 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
         <Breadcrumb documentId={documentId} onNavigate={onNavigate} currentTitle={title} />
       )}
 
+      <div className="flex items-center justify-end px-4 h-8 shrink-0 border-b border-border/30 gap-1">
+        <button
+          type="button"
+          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
+            headingNumbering
+              ? 'bg-accent/60 text-foreground'
+              : 'text-muted-foreground hover:text-foreground hover:bg-accent/30'
+          }`}
+          onClick={() => setHeadingNumbering((v) => !v)}
+          title="标题编号"
+        >
+          <ListOrdered className="h-3.5 w-3.5" />
+          <span>编号</span>
+        </button>
+        <button
+          type="button"
+          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
+            codeBlockWrap
+              ? 'bg-accent/60 text-foreground'
+              : 'text-muted-foreground hover:text-foreground hover:bg-accent/30'
+          }`}
+          onClick={() => setCodeBlockWrap((v) => !v)}
+          title="代码块自动换行"
+        >
+          <WrapText className="h-3.5 w-3.5" />
+          <span>换行</span>
+        </button>
+      </div>
+
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-8 py-12">
           <div className="mb-4 relative">
@@ -167,6 +206,8 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
             documentId={documentId!}
             placeholder="输入内容，或输入 / 插入块…"
             onTreeChange={handleTreeChange}
+            headingNumbering={headingNumbering}
+            codeBlockWrap={codeBlockWrap}
           />
         </div>
       </main>

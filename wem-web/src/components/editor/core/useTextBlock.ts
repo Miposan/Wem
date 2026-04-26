@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType, makeParagraphType } from '@/types/api'
 import type { TextBlockProps } from './types'
-import { useSlashMenu, type SlashMenuItem } from './SlashMenuContext'
+import { useSlashMenuDispatch, type SlashMenuItem } from './SlashMenuContext'
+import type { SlashMenuState } from './SlashMenuContext'
 import { focusBlock } from './SelectionManager'
 import { inlineMarkdownToHtml, domToMarkdown, toggleInlineWrap, removeAllFormats, normalizeInline, removeTextRange, renderMathInElement } from './InlineParser'
 
@@ -60,11 +61,8 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
   }, [block.id])
 
   // ── 斜杠命令 ──
-  // 用 ref 保持 slashMenu 引用稳定，避免 handleKeyDown 因 context value 变化而重建
-
-  const slashMenu = useSlashMenu()
-  const slashMenuRef = useRef(slashMenu)
-  slashMenuRef.current = slashMenu
+  // 只订阅 dispatch（stable，不随 state 变化而 re-render）
+  const slashMenu = useSlashMenuDispatch()
 
   const slashPending = useRef(false)
   const slashPendingOffset = useRef(0)
@@ -75,13 +73,13 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
   const handleSlashSelect = useCallback((item: SlashMenuItem) => {
     const el = ref.current
-    const sm = slashMenuRef.current
-    if (!el || !sm) return
-    const offset = sm.state.slashOffset
-    const filterLen = sm.state.filter.length
+    if (!el) return
+    const st = slashMenu.getState()
+    const offset = st.slashOffset
+    const filterLen = st.filter.length
     // Remove "/filter" from DOM preserving inline formatting
     removeTextRange(el, offset, offset + 1 + filterLen)
-    sm.close()
+    slashMenu.close()
     onActionRef.current({
       type: 'convert-block',
       blockId: block.id,
@@ -131,7 +129,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         if (rect.width === 0 && rect.height === 0) {
           rect = el.getBoundingClientRect()
         }
-        slashMenuRef.current?.trigger({
+        slashMenu.trigger({
           blockId: block.id,
           x: rect.left,
           y: rect.bottom,
@@ -142,14 +140,14 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     }
 
     // 斜杠菜单已打开：更新过滤文字
-    const sm = slashMenuRef.current
-    if (sm?.state.visible && sm.state.blockId === block.id) {
+    const smState = slashMenu.getState()
+    if (smState.visible && smState.blockId === block.id) {
       const text = el.textContent || ''
       const cursorOffset = getCursorOffset(el)
-      if (text[sm.state.slashOffset] !== '/') {
-        sm.close()
+      if (text[smState.slashOffset] !== '/') {
+        slashMenu.close()
       } else {
-        sm.setFilter(text.slice(sm.state.slashOffset + 1, cursorOffset))
+        slashMenu.setFilter(text.slice(smState.slashOffset + 1, cursorOffset))
       }
     }
   }, [block.id, onContentChange])

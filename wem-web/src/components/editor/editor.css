@@ -198,6 +198,13 @@
 .wem-heading-5 { font-size: 1em; padding: 2px 0 1px; }
 .wem-heading-6 { font-size: 0.9em; padding: 2px 0 1px; color: var(--wem-editor-muted); }
 
+.wem-heading[data-heading-number]::before {
+  content: attr(data-heading-number) ". ";
+  user-select: none;
+  color: var(--wem-editor-muted);
+  font-weight: 500;
+}
+
 /* ─── 分隔线 ─── */
 
 .wem-thematic-break {
@@ -224,7 +231,6 @@
 .wem-codeblock {
   position: relative;
   margin: 6px 0;
-  overflow: hidden;
   border: 1px solid color-mix(in oklab, var(--wem-editor-border) 80%, transparent);
   border-radius: var(--wem-editor-radius);
   background: color-mix(in oklab, var(--muted) 50%, var(--background));
@@ -320,10 +326,6 @@
 .wem-codeblock-editor .cm-editor {
   height: auto;
   background: transparent;
-}
-
-.wem-codeblock-editor .cm-scroller {
-  overflow: visible;
 }
 
 /* ─── 列表 ─── */
@@ -981,6 +983,10 @@
 }
 
 .dark .wem-codeblock {
+  background: color-mix(in oklab, var(--muted) 55%, var(--background));
+}
+
+.dark .wem-codeblock-editor .cm-gutters {
   background: color-mix(in oklab, var(--muted) 55%, var(--background));
 }
 

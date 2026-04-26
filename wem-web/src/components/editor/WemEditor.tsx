@@ -15,7 +15,7 @@
  * - OperationQueue 串行化所有结构变更操作，保证有序
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
 import { getDocument, updateBlock, createBlock, undoDocument, redoDocument } from '@/api/client'
@@ -55,6 +55,8 @@ import type { SlashMenuItem } from './core/SlashMenuContext'
 import { SlashCommandMenu } from './components/SlashCommandMenu'
 import { InlineToolbar } from './components/InlineToolbar'
 import { MathEditPopup } from './components/MathEditPopup'
+import { HeadingNumberingProvider, computeHeadingNumbers } from './core/HeadingNumbering'
+import { EditorSettingsProvider, type EditorSettings } from './core/EditorSettings'
 
 // ─── Props ───
 
@@ -64,6 +66,8 @@ export interface WemEditorProps {
   readonly?: boolean
   placeholder?: string
   onTreeChange?: (tree: BlockNode[]) => void
+  headingNumbering?: boolean
+  codeBlockWrap?: boolean
 }
 
 // ─── Main Component ───
@@ -74,6 +78,8 @@ export function WemEditor({
   readonly = false,
   placeholder = '输入 / 插入块…',
   onTreeChange,
+  headingNumbering = false,
+  codeBlockWrap = false,
 }: WemEditorProps) {
   const [tree, setTreeState] = useState<BlockNode[]>([])
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
@@ -87,6 +93,15 @@ export function WemEditor({
   })
   const treeRef = useRef<BlockNode[]>([])
   const pendingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  const headingNumberMap = useMemo(() => {
+    if (!headingNumbering) return null
+    return computeHeadingNumbers(tree)
+  }, [headingNumbering, tree])
+
+  const editorSettings = useMemo<EditorSettings>(() => ({
+    codeBlockWrap,
+  }), [codeBlockWrap])
 
   // ─── 跨块选区刚结束标记 ───
   //
@@ -146,11 +161,13 @@ export function WemEditor({
   const pendingEditorIds = useRef<Set<string>>(new Set())
 
   /** 将 editor_id 延迟清理，避免 SSE 事件到达时已被删除导致误判为外部事件 */
+  const pendingIdTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const addPendingOperationId = useCallback((id: string) => {
     pendingEditorIds.current.add(id)
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       pendingEditorIds.current.delete(id)
     }, 5000)
+    pendingIdTimers.current.push(timer)
   }, [])
 
   /** 取消指定块的 debounce 保存定时器（split/merge/delete 前调用，防止覆盖新数据） */
@@ -341,16 +358,32 @@ export function WemEditor({
     [makeContext, addPendingOperationId],
   )
 
-  // ─── 内容变更（打字）→ debounce 保存 ───
+  // ─── 内容变更（打字）→ rAF 批量 React 更新 + debounce 后端保存 ───
+  //
+  // 高频输入（如长按 Backspace）每秒产生数十次变更。
+  // contentEditable / CM6 自己已处理视觉更新，React 只需同步数据模型。
+  // 用 rAF 将同一帧内的多次变更合并为一次 setState，避免逐次 re-render。
+
+  const contentBatchRef = useRef<number | null>(null)
+
+  const flushContentBatch = useCallback(() => {
+    contentBatchRef.current = null
+    setTreeState(treeRef.current)
+    onTreeChange?.(treeRef.current)
+  }, [onTreeChange])
 
   const handleContentChange = useCallback((blockId: string, content: string) => {
-    // 乐观更新（不经过队列，打字是高频操作）
-    setTreeAsync((prev) => updateBlockInTree(prev, blockId, { content }))
+    // 立即更新 ref（命令读取 treeRef.current 时拿到最新数据）
+    treeRef.current = updateBlockInTree(treeRef.current, blockId, { content })
+
+    // rAF 批量更新 React state
+    if (contentBatchRef.current == null) {
+      contentBatchRef.current = requestAnimationFrame(flushContentBatch)
+    }
 
     // Debounce 保存到后端
     const timer = setTimeout(async () => {
       pendingTimers.current.delete(blockId)
-      // 从 treeRef 读取最新 content，防止 SSE 在 debounce 期间更新了同一块后被闭包旧值覆盖
       const latest = findBlockById(treeRef.current, blockId)
       const latestContent = latest?.content ?? content
       const editorId = crypto.randomUUID()
@@ -365,16 +398,21 @@ export function WemEditor({
     const saves = pendingTimers.current
     if (saves.has(blockId)) clearTimeout(saves.get(blockId)!)
     saves.set(blockId, timer)
-  }, [setTreeAsync, addPendingOperationId])
+  }, [flushContentBatch, addPendingOperationId])
 
-  // 清理定时器 + SSE 批量 rAF
+  // 清理定时器 + rAF
   useEffect(() => {
     const timers = pendingTimers.current
     return () => {
       timers.forEach((t) => clearTimeout(t))
       timers.clear()
+      pendingIdTimers.current.forEach((t) => clearTimeout(t))
+      pendingIdTimers.current = []
       if (sseUpdateBatch.current.rafId != null) {
         cancelAnimationFrame(sseUpdateBatch.current.rafId)
+      }
+      if (contentBatchRef.current != null) {
+        cancelAnimationFrame(contentBatchRef.current)
       }
     }
   }, [])
@@ -738,36 +776,40 @@ export function WemEditor({
 
   return (
     <SlashMenuProvider>
-      <div
-        className="wem-editor-root"
-        onClick={handleEditorClick}
-        onKeyDown={handleEditorKeyDown}
-        {...selectionHandlers}
-      >
-        <BlockTreeRenderer
-          blocks={tree}
-          readonly={readonly}
-          placeholder={placeholder}
-          collapsedIds={collapsedIds}
-          selection={selection}
-          selectedBlockIds={selectedBlockIds}
-          dragState={dragState}
-          dragHandlers={dragHandlers}
-          onToggleCollapse={handleToggleCollapse}
-          onContentChange={handleContentChange}
-          onAction={handleAction}
-          onSelectionChange={handleSelectionChange}
-          onBlockContextMenu={handleBlockContextMenu}
-        />
-        <BlockContextMenu
-          state={contextMenuState}
-          onClose={handleContextMenuClose}
-          onAction={handleContextAction}
-        />
-      </div>
-      <SlashCommandMenu onSelect={handleSlashSelect} />
-      <InlineToolbar onContentChange={handleContentChange} />
-      <MathEditPopup onContentChange={handleContentChange} />
+      <EditorSettingsProvider value={editorSettings}>
+        <HeadingNumberingProvider map={headingNumberMap}>
+        <div
+          className="wem-editor-root"
+          onClick={handleEditorClick}
+          onKeyDown={handleEditorKeyDown}
+          {...selectionHandlers}
+        >
+          <BlockTreeRenderer
+            blocks={tree}
+            readonly={readonly}
+            placeholder={placeholder}
+            collapsedIds={collapsedIds}
+            selection={selection}
+            selectedBlockIds={selectedBlockIds}
+            dragState={dragState}
+            dragHandlers={dragHandlers}
+            onToggleCollapse={handleToggleCollapse}
+            onContentChange={handleContentChange}
+            onAction={handleAction}
+            onSelectionChange={handleSelectionChange}
+            onBlockContextMenu={handleBlockContextMenu}
+          />
+          <BlockContextMenu
+            state={contextMenuState}
+            onClose={handleContextMenuClose}
+            onAction={handleContextAction}
+          />
+        </div>
+        <SlashCommandMenu onSelect={handleSlashSelect} />
+        <InlineToolbar onContentChange={handleContentChange} />
+        <MathEditPopup onContentChange={handleContentChange} />
+      </HeadingNumberingProvider>
+      </EditorSettingsProvider>
     </SlashMenuProvider>
   )
 }

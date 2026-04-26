@@ -74,6 +74,12 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
     const root = rootRef.current
     if (!root || !root.contains(range.commonAncestorContainer)) return
 
+    // 跳过 CM6 代码块内的选区
+    const commonEl = range.commonAncestorContainer instanceof HTMLElement
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement
+    if (commonEl?.closest('.cm-editor')) return
+
     const anchorEl = sel.anchorNode instanceof HTMLElement ? sel.anchorNode : sel.anchorNode?.parentElement
     const focusEl = sel.focusNode instanceof HTMLElement ? sel.focusNode : sel.focusNode?.parentElement
     const anchorEdit = anchorEl?.closest('[contenteditable="true"]')

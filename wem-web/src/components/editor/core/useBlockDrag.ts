@@ -6,7 +6,7 @@
  * 块的层级关系（heading 子块、listItem 归属 list）由后端自动处理。
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { BlockNode } from "@/types/api";
 import type {
   BlockAction,
@@ -30,7 +30,13 @@ export interface UseBlockDragOptions {
 // ─── Hook ───
 
 export function useBlockDrag(options: UseBlockDragOptions) {
-  const { getTree, onAction, isCollapsed } = options;
+  // Keep latest option values in refs so callbacks can be stable
+  const getTreeRef = useRef(options.getTree)
+  getTreeRef.current = options.getTree
+  const onActionRef = useRef(options.onAction)
+  onActionRef.current = options.onAction
+  const isCollapsedRef = useRef(options.isCollapsed)
+  isCollapsedRef.current = options.isCollapsed
 
   const [dragState, setDragState] = useState<DragState>({
     draggingBlockId: null,
@@ -56,7 +62,7 @@ export function useBlockDrag(options: UseBlockDragOptions) {
 
   const onDragStart = useCallback(
     (e: React.DragEvent, blockId: string) => {
-      const tree = getTree();
+      const tree = getTreeRef.current();
       const flat = flattenTree(tree);
       if (flat.length <= 1) {
         e.preventDefault();
@@ -69,7 +75,7 @@ export function useBlockDrag(options: UseBlockDragOptions) {
 
       setDragState({ draggingBlockId: blockId, dropTarget: null });
     },
-    [getTree],
+    [],
   );
 
   const onDragOver = useCallback(
@@ -126,7 +132,7 @@ export function useBlockDrag(options: UseBlockDragOptions) {
       dragBlockIdRef.current = null;
       setDragState({ draggingBlockId: null, dropTarget: null });
 
-      const tree = getTree();
+      const tree = getTreeRef.current();
       const draggedBlock = findBlockById(tree, dragBlockId);
 
       // ── 折叠的 heading（有子块）或 list（有子项）→ 整棵子树整体移动 ──
@@ -134,18 +140,18 @@ export function useBlockDrag(options: UseBlockDragOptions) {
         const isHeading = draggedBlock.block_type.type === 'heading';
         const isList = draggedBlock.block_type.type === 'list';
         if (
-          (isHeading && isCollapsed(dragBlockId)) ||
+          (isHeading && isCollapsedRef.current(dragBlockId)) ||
           isList
         ) {
-          onAction({ type: 'move-heading-tree', blockId: dragBlockId, target });
+          onActionRef.current({ type: 'move-heading-tree', blockId: dragBlockId, target });
           return;
         }
       }
 
       // ── 普通块 → 单块移动 ──
-      onAction({ type: "move-block", blockId: dragBlockId, target });
+      onActionRef.current({ type: "move-block", blockId: dragBlockId, target });
     },
-    [onAction, computeDropPosition, getTree, isCollapsed],
+    [computeDropPosition],
   );
 
   const onDragEnd = useCallback(() => {
@@ -153,13 +159,13 @@ export function useBlockDrag(options: UseBlockDragOptions) {
     setDragState({ draggingBlockId: null, dropTarget: null });
   }, []);
 
-  const dragHandlers: DragHandlers = {
+  const dragHandlers: DragHandlers = useMemo(() => ({
     onDragStart,
     onDragOver,
     onDragLeave,
     onDrop,
     onDragEnd,
-  };
+  }), [onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd]);
 
   return { dragState, dragHandlers };
 }

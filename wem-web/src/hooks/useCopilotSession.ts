@@ -250,17 +250,34 @@ export function useCopilotSession() {
   )
 
   // ─── SSE 事件处理 ───
+  // text_delta 高频批量化：同一 animation frame 内的多次 text_delta 只触发一次 setState
+  const textDeltaBatch = useRef<{ asstId: string; text: string; rafId: number | null }>({ asstId: '', text: '', rafId: null })
+
+  const flushTextDelta = useCallback(() => {
+    const batch = textDeltaBatch.current
+    batch.rafId = null
+    if (!batch.text) return
+    const { asstId, text } = batch
+    batch.text = ''
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === asstId ? { ...m, content: m.content + text } : m,
+      ),
+    )
+  }, [])
 
   const handleAgentEvent = useCallback(
     (event: AgentEvent, asstId: string) => {
       switch (event.type) {
-        case 'text_delta':
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === asstId ? { ...m, content: m.content + event.text } : m,
-            ),
-          )
+        case 'text_delta': {
+          const batch = textDeltaBatch.current
+          batch.asstId = asstId
+          batch.text += event.text
+          if (!batch.rafId) {
+            batch.rafId = requestAnimationFrame(flushTextDelta)
+          }
           break
+        }
 
         case 'tool_call_begin':
           setMessages((prev) =>
@@ -447,10 +464,11 @@ export function useCopilotSession() {
     [activeId],
   )
 
-  // 清理 persist 定时器
+  // 清理 persist 定时器 + text delta rAF
   useEffect(() => {
     return () => {
       if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+      if (textDeltaBatch.current.rafId != null) cancelAnimationFrame(textDeltaBatch.current.rafId)
     }
   }, [])
 

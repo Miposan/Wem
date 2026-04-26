@@ -30,11 +30,13 @@ import type { BlockAction } from '../core/types'
 import { makeParagraphType, makeCodeBlockType } from '@/types/api'
 import { wemCmTheme, wemCmHighlight } from './codeblock/cm6-theme'
 import { getLanguageExtension, getLanguageDisplayName, LANGUAGE_OPTIONS } from './codeblock/cm6-languages'
+import { useEditorSettings } from '../core/EditorSettings'
 
 // ── Compartment：允许运行时替换的扩展槽 ──
 const languageCompartment = new Compartment()
 const readonlyCompartment = new Compartment()
 const placeholderCompartment = new Compartment()
+const wrapCompartment = new Compartment()
 
 // ── 实例级同步标记：避免 updateListener 回调与外部同步形成循环 ──
 const syncingViews = new WeakSet<EditorView>()
@@ -61,6 +63,7 @@ export function CodeBlock({
 }: CodeBlockProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const { codeBlockWrap } = useEditorSettings()
 
   // ── 折叠状态 ──
   const [collapsed, setCollapsed] = useState(false)
@@ -74,6 +77,9 @@ export function CodeBlock({
 
   const blockIdRef = useRef(block.id)
   blockIdRef.current = block.id
+
+  // 追踪最近通过 updateListener 上报的内容，用于区分"自身编辑回声"和"外部变更"
+  const lastReportedRef = useRef<string | null>(null)
 
   const language = block.block_type.type === 'codeBlock' ? block.block_type.language : 'text'
   const content = block.content ?? ''
@@ -99,9 +105,11 @@ export function CodeBlock({
         language,
         readonly,
         placeholderText: placeholder || '输入代码…',
+        wrap: codeBlockWrap,
         onContentChangeRef,
         onActionRef,
         blockIdRef,
+        lastReportedRef,
       }),
       parent: container,
     })
@@ -125,6 +133,8 @@ export function CodeBlock({
 
     const currentText = view.state.doc.toString()
     if (currentText === content) return
+    // 跳过自身编辑的回声（rAF 批量更新可能滞后于新的输入）
+    if (content === lastReportedRef.current) return
 
     syncingViews.add(view)
     view.dispatch({
@@ -151,6 +161,17 @@ export function CodeBlock({
       effects: readonlyCompartment.reconfigure(EditorState.readOnly.of(readonly)),
     })
   }, [readonly])
+
+  // ── 自动换行切换 ──
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(
+        codeBlockWrap ? EditorView.lineWrapping : [],
+      ),
+    })
+  }, [codeBlockWrap])
 
   // ── placeholder 切换 ──
   useEffect(() => {
@@ -225,9 +246,11 @@ interface BuildStateOptions {
   language: string
   readonly: boolean
   placeholderText: string
+  wrap: boolean
   onContentChangeRef: React.MutableRefObject<(blockId: string, content: string) => void>
   onActionRef: React.MutableRefObject<(action: BlockAction) => void>
   blockIdRef: React.MutableRefObject<string>
+  lastReportedRef: React.MutableRefObject<string | null>
 }
 
 function buildState({
@@ -235,9 +258,11 @@ function buildState({
   language,
   readonly,
   placeholderText,
+  wrap,
   onContentChangeRef,
   onActionRef,
   blockIdRef,
+  lastReportedRef,
 }: BuildStateOptions): EditorState {
   const extensions: Extension[] = [
     // ── 编辑历史 ──
@@ -259,6 +284,7 @@ function buildState({
     languageCompartment.of(getLanguageExtension(language)),
     readonlyCompartment.of(EditorState.readOnly.of(readonly)),
     placeholderCompartment.of(cmPlaceholder(placeholderText)),
+    wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
 
     // ── 键映射 ──
     keymap.of([
@@ -321,9 +347,10 @@ function buildState({
     // ── 内容变更监听 ──
     EditorView.updateListener.of((update) => {
       if (!update.docChanged) return
-      // 外部同步期间的变更不回调，避免循环
       if (syncingViews.has(update.view)) return
-      onContentChangeRef.current(blockIdRef.current, update.state.doc.toString())
+      const text = update.state.doc.toString()
+      lastReportedRef.current = text
+      onContentChangeRef.current(blockIdRef.current, text)
     }),
   ]
 
