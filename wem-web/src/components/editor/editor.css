@@ -11,7 +11,7 @@
   align-items: center;
   min-height: 35px;
   padding: 0 12px;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  border-bottom: none;
   background: var(--background);
   font-size: 12px;
   line-height: 1;

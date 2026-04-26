@@ -146,14 +146,11 @@ export function ActivityBar({ side }: ActivityBarProps) {
 
   // ─── 渲染 ───
 
-  const borderSide = side === 'left' ? 'border-r' : 'border-l'
-
   return (
     <div
       className={`
         relative h-full w-12 shrink-0 select-none flex flex-col items-center
-        border-border/50 ${borderSide}
-        bg-background
+        bg-sidebar
         transition-colors duration-150
         ${dragOver ? 'bg-accent' : ''}
       `}

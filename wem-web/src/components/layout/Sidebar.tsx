@@ -274,7 +274,7 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
     return (
       <div className="flex flex-col h-full">
         {/* 文档树工具栏 */}
-        <div className="flex items-center justify-between px-3 h-8 border-b border-border shrink-0">
+        <div className="flex items-center justify-between px-3 h-8 shrink-0">
           <span className="text-xs font-medium text-muted-foreground">文档</span>
           <button
             onClick={handleCreateRoot}
@@ -301,7 +301,7 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
   // ─── 收起状态 ───
   if (collapsed) {
     return (
-      <aside className="w-12 h-screen border-r border-border/40 bg-background flex flex-col items-center pt-3 shrink-0">
+      <aside className="w-12 h-screen bg-sidebar flex flex-col items-center pt-3 shrink-0">
         <button
           onClick={() => setCollapsed(false)}
           className="w-8 h-8 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
@@ -313,9 +313,9 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
   }
 
   return (
-    <aside className="w-64 h-screen border-r border-border/40 bg-background flex flex-col shrink-0">
+    <aside className="w-64 h-screen bg-sidebar flex flex-col shrink-0">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 h-10 border-b border-border/30">
+      <div className="flex items-center justify-between px-4 h-10">
         <span className="font-semibold text-sm tracking-tight text-foreground/70">Wem</span>
         <div className="flex items-center gap-1">
           <button
@@ -347,7 +347,7 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
       />
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-border/30 text-[10px] text-muted-foreground/50">
+      <div className="px-4 py-2 text-[10px] text-muted-foreground/50">
         Wem Editor v0.1
       </div>
     </aside>

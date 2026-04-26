@@ -67,15 +67,10 @@ export function SlotContainer({ slot, children }: SlotContainerProps) {
   // ─── 渲染 ───
 
   const isVertical = slot === 'left' || slot === 'right'
-  const borderClass =
-    slot === 'left' ? 'border-r' :
-    slot === 'right' ? 'border-l' :
-    'border-b'
-
   return (
     <div
       ref={slotRef}
-      className={`relative flex flex-col shrink-0 bg-background border-border/40 ${borderClass} border`}
+      className="relative flex flex-col shrink-0 bg-sidebar"
       style={{
         width: isVertical ? `${slotState.size}px` : '100%',
         height: slot === 'top' ? `${slotState.size}px` : '100%',

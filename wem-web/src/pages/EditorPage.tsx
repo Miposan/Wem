@@ -117,7 +117,7 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
   const { title, icon, tree } = doc
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden bg-background rounded-tl-md shadow-[inset_1px_1px_3px_rgba(0,0,0,0.03)]">
       {/* Breadcrumb — 固定在顶部，标签栏下方 */}
       {onNavigate && documentId && (
         <Breadcrumb documentId={documentId} onNavigate={onNavigate} />
