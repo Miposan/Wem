@@ -2,45 +2,25 @@
  * CopilotPanel — AI Agent 聊天面板
  *
  * 类似 GitHub Copilot Chat 的右侧交互面板：
+ * - 会话列表侧栏（创建 / 切换 / 删除）
  * - 消息列表（用户 + 助手，支持 Markdown）
  * - 流式接收助手回复（SSE）
  * - 工具调用展示（折叠式）
  * - 权限审批按钮
- * - 新建会话 / 中止对话
+ * - localStorage 缓存（刷新不丢消息）
  */
 
-import {
-  useState,
-  useRef,
-  useCallback,
-  useEffect,
-  type FormEvent,
-  type KeyboardEvent,
-} from 'react'
-import {
-  createSession,
-  chatStream,
-  abortSession,
-  resolvePermission,
-  type ChatMessage,
-  type ToolCallInfo,
-  type AgentEvent,
-} from '@/api/agent'
+import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react'
+import { useCopilotSession } from '@/hooks/useCopilotSession'
+import type { ChatMessage, ToolCallInfo } from '@/api/agent'
 
-// ─── Helpers ───
+// ─── 简易 Markdown 渲染 ───
 
-function genId(): string {
-  return crypto.randomUUID()
-}
-
-/** 简易 Markdown 渲染（粗体、代码、换行） */
 function SimpleMarkdown({ text }: { text: string }) {
-  // 逐行处理：粗体 **text** → <strong>，`code` → <code>，换行
   const lines = text.split('\n')
   return (
     <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
       {lines.map((line, i) => {
-        // 粗体 + 行内代码
         const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
         const rendered = parts.map((part, j) => {
           if (part.startsWith('**') && part.endsWith('**')) {
@@ -76,7 +56,6 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   return (
     <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-      {/* 头像 */}
       <div
         className={`
           shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
@@ -89,7 +68,6 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {isUser ? 'U' : 'AI'}
       </div>
 
-      {/* 内容 */}
       <div
         className={`
           flex-1 min-w-0 rounded-lg px-3 py-2
@@ -111,7 +89,6 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <span className="inline-block w-1.5 h-4 ml-0.5 bg-foreground/60 animate-pulse rounded-sm" />
         )}
 
-        {/* 工具调用 */}
         {message.toolCalls.length > 0 && (
           <div className="mt-2 space-y-1">
             {message.toolCalls.map((tc) => (
@@ -203,16 +180,100 @@ function PermissionBanner({
   )
 }
 
+// ─── 会话列表侧栏 ───
+
+function SessionSidebar({
+  sessions,
+  activeId,
+  onSelect,
+  onDelete,
+  onNew,
+}: {
+  sessions: { id: string; title: string; updatedAt: number }[]
+  activeId: string | null
+  onSelect: (id: string) => void
+  onDelete: (id: string) => void
+  onNew: () => void
+}) {
+  return (
+    <div className="flex flex-col h-full wem-copilot-sidebar">
+      {/* 新建按钮 */}
+      <div className="shrink-0 p-2 border-b border-border/50">
+        <button
+          type="button"
+          className="flex items-center gap-1.5 w-full px-2 py-1.5 rounded hover:bg-accent/30 text-muted-foreground hover:text-foreground text-xs transition-colors"
+          onClick={onNew}
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+          新对话
+        </button>
+      </div>
+
+      {/* 会话列表 */}
+      <div className="flex-1 overflow-y-auto">
+        {sessions.map((s) => (
+          <div
+            key={s.id}
+            className={`
+              group flex items-center gap-1 px-2 py-1.5 cursor-pointer text-xs
+              transition-colors
+              ${s.id === activeId
+                ? 'bg-accent/40 text-foreground'
+                : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
+              }
+            `}
+            onClick={() => onSelect(s.id)}
+          >
+            <span className="flex-1 truncate">{s.title}</span>
+            <button
+              type="button"
+              className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
+              title="删除此对话"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete(s.id)
+              }}
+            >
+              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6 6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        ))}
+
+        {sessions.length === 0 && (
+          <div className="px-2 py-4 text-center text-muted-foreground text-[10px]">
+            暂无对话
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── 主面板组件 ───
 
 export function CopilotPanel() {
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [pendingPermission, setPendingPermission] = useState<{ toolName: string } | null>(null)
+  const {
+    sessions,
+    activeId,
+    messages,
+    isLoading,
+    pendingPermission,
+    createNewSession,
+    switchTo,
+    removeSession,
+    sendMessage,
+    abort,
+    resolvePerm,
+  } = useCopilotSession()
 
-  const abortRef = useRef<AbortController | null>(null)
+  const [input, setInput] = useState('')
+  const [showSidebar, setShowSidebar] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -223,193 +284,23 @@ export function CopilotPanel() {
     })
   }, [])
 
-  // 初始化会话
+  // 消息变化时自动滚动
   useEffect(() => {
-    createSession()
-      .then((id) => setSessionId(id))
-      .catch((err) => console.error('[Copilot] 创建会话失败:', err))
-  }, [])
+    scrollToBottom()
+  }, [messages.length, messages, scrollToBottom])
 
-  // 处理 SSE 事件
-  const handleAgentEvent = useCallback(
-    (assistantId: string, event: AgentEvent) => {
-      switch (event.type) {
-        case 'text_delta':
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: m.content + event.text }
-                : m,
-            ),
-          )
-          scrollToBottom()
-          break
+  // 发送
+  const handleSend = useCallback(() => {
+    const text = input.trim()
+    if (!text || isLoading) return
+    sendMessage(text)
+    setInput('')
+    inputRef.current?.focus()
+  }, [input, isLoading, sendMessage])
 
-        case 'tool_call_begin':
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    toolCalls: [
-                      ...m.toolCalls,
-                      {
-                        id: event.id,
-                        name: event.name,
-                        args: event.args,
-                        status: 'running' as const,
-                      },
-                    ],
-                  }
-                : m,
-            ),
-          )
-          break
-
-        case 'tool_call_end':
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    toolCalls: m.toolCalls.map((tc) =>
-                      tc.id === event.id
-                        ? { ...tc, result: event.result_summary, status: 'done' as const }
-                        : tc,
-                    ),
-                  }
-                : m,
-            ),
-          )
-          break
-
-        case 'permission_required':
-          setPendingPermission({ toolName: event.tool_name })
-          break
-
-        case 'phase_changed':
-          // 可选：根据 phase 显示进度
-          break
-
-        case 'step_progress':
-          // 可选：显示步骤进度
-          break
-      }
-    },
-    [scrollToBottom],
-  )
-
-  // 发送消息
-  const handleSend = useCallback(
-    (e?: FormEvent) => {
-      e?.preventDefault()
-      const text = input.trim()
-      if (!text || !sessionId || isLoading) return
-
-      // 添加用户消息
-      const userMsg: ChatMessage = {
-        id: genId(),
-        role: 'user',
-        content: text,
-        toolCalls: [],
-        status: 'done',
-      }
-
-      // 添加助手占位消息
-      const assistantId = genId()
-      const assistantMsg: ChatMessage = {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        toolCalls: [],
-        status: 'pending',
-      }
-
-      setMessages((prev) => [...prev, userMsg, assistantMsg])
-      setInput('')
-      setIsLoading(true)
-
-      // 调用流式 API
-      const controller = chatStream(
-        sessionId,
-        text,
-        (event) => {
-          // 首次收到事件 → 切换为 streaming
-          if (event.type === 'text_delta') {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId && m.status === 'pending'
-                  ? { ...m, status: 'streaming' }
-                  : m,
-              ),
-            )
-          }
-          handleAgentEvent(assistantId, event)
-        },
-        (error) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, status: 'error', error: error.message }
-                : m,
-            ),
-          )
-          setIsLoading(false)
-        },
-        () => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, status: 'done' }
-                : m,
-            ),
-          )
-          setIsLoading(false)
-        },
-      )
-
-      abortRef.current = controller
-    },
-    [input, sessionId, isLoading, handleAgentEvent],
-  )
-
-  // 中止当前对话
-  const handleAbort = useCallback(async () => {
-    abortRef.current?.abort()
-    if (sessionId) {
-      await abortSession(sessionId).catch(() => {})
-    }
-    setIsLoading(false)
-  }, [sessionId])
-
-  // 权限审批
-  const handlePermissionDecision = useCallback(
-    async (approved: boolean) => {
-      if (!sessionId) return
-      setPendingPermission(null)
-      await resolvePermission(sessionId, approved).catch(() => {})
-    },
-    [sessionId],
-  )
-
-  // 新建会话
-  const handleNewSession = useCallback(async () => {
-    abortRef.current?.abort()
-    try {
-      const id = await createSession()
-      setSessionId(id)
-      setMessages([])
-      setPendingPermission(null)
-      setIsLoading(false)
-    } catch (err) {
-      console.error('[Copilot] 新建会话失败:', err)
-    }
-  }, [])
-
-  // 输入框快捷键
+  // 快捷键
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // Enter 发送（Shift+Enter 换行）
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
         handleSend()
@@ -419,107 +310,146 @@ export function CopilotPanel() {
   )
 
   return (
-    <div className="flex flex-col h-full wem-copilot-panel">
-      {/* ─── 工具栏 ─── */}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border/50 shrink-0">
-        <button
-          type="button"
-          className="p-1.5 rounded hover:bg-accent/30 text-muted-foreground hover:text-foreground transition-colors"
-          onClick={handleNewSession}
-          title="新对话"
-        >
-          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
-          </svg>
-        </button>
-        {isLoading && (
+    <div className="flex h-full wem-copilot-panel">
+      {/* ─── 会话列表侧栏 ─── */}
+      {showSidebar && (
+        <div className="w-48 shrink-0 border-r border-border/50 bg-background/50">
+          <SessionSidebar
+            sessions={sessions}
+            activeId={activeId}
+            onSelect={(id) => {
+              switchTo(id)
+              setShowSidebar(false)
+            }}
+            onDelete={removeSession}
+            onNew={() => {
+              createNewSession()
+              setShowSidebar(false)
+            }}
+          />
+        </div>
+      )}
+
+      {/* ─── 聊天主区域 ─── */}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* 工具栏 */}
+        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border/50 shrink-0">
+          {/* 侧栏切换 */}
           <button
             type="button"
-            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-            onClick={handleAbort}
-            title="停止"
+            className={`p-1.5 rounded hover:bg-accent/30 transition-colors ${showSidebar ? 'text-foreground bg-accent/20' : 'text-muted-foreground'}`}
+            onClick={() => setShowSidebar(!showSidebar)}
+            title="对话列表"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2" />
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M9 3v18" />
             </svg>
           </button>
-        )}
-        <div className="flex-1" />
-        <span className="text-[10px] text-muted-foreground">
-          {sessionId ? sessionId.slice(0, 8) : '...'}
-        </span>
-      </div>
 
-      {/* ─── 消息列表 ─── */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-4">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-            <svg viewBox="0 0 24 24" className="h-8 w-8 opacity-30" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2a8 8 0 0 1 8 8c0 3-1.5 5-3.5 6.5L16 21H8l-.5-4.5C5.5 15 4 13 4 10a8 8 0 0 1 8-8z" />
-              <path d="M9 21v1" />
-              <path d="M15 21v1" />
-              <path d="M10 14h4" />
-            </svg>
-            <p className="text-xs text-center leading-relaxed">
-              AI 助手就绪<br />
-              输入问题开始对话
-            </p>
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
-        ))}
-
-        {/* 权限审批 */}
-        {pendingPermission && (
-          <PermissionBanner
-            toolName={pendingPermission.toolName}
-            onDecision={handlePermissionDecision}
-          />
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* ─── 输入区 ─── */}
-      <div className="shrink-0 border-t border-border/50 p-3">
-        <form onSubmit={handleSend} className="relative">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"
-            rows={2}
-            disabled={isLoading || !sessionId}
-            className="
-              w-full resize-none rounded-lg border border-border bg-background
-              px-3 py-2 text-sm leading-relaxed
-              placeholder:text-muted-foreground
-              focus:outline-none focus:ring-1 focus:ring-ring
-              disabled:opacity-50 disabled:cursor-not-allowed
-              transition-colors
-            "
-          />
+          {/* 新对话 */}
           <button
-            type="submit"
-            disabled={isLoading || !input.trim() || !sessionId}
-            className="
-              absolute right-2 bottom-2 p-1.5 rounded-md
-              bg-primary text-primary-foreground
-              disabled:opacity-30 disabled:cursor-not-allowed
-              hover:opacity-90 transition-opacity
-            "
-            title="发送"
+            type="button"
+            className="p-1.5 rounded hover:bg-accent/30 text-muted-foreground hover:text-foreground transition-colors"
+            onClick={createNewSession}
+            title="新对话"
           >
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" />
               <path d="M5 12h14" />
-              <path d="m12 5 7 7-7 7" />
             </svg>
           </button>
-        </form>
+
+          {/* 停止 */}
+          {isLoading && (
+            <button
+              type="button"
+              className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              onClick={abort}
+              title="停止"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            </button>
+          )}
+
+          <div className="flex-1" />
+          <span className="text-[10px] text-muted-foreground">
+            {activeId ? activeId.slice(0, 8) : '...'}
+          </span>
+        </div>
+
+        {/* 消息列表 */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 space-y-4">
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+              <svg viewBox="0 0 24 24" className="h-8 w-8 opacity-30" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2a8 8 0 0 1 8 8c0 3-1.5 5-3.5 6.5L16 21H8l-.5-4.5C5.5 15 4 13 4 10a8 8 0 0 1 8-8z" />
+                <path d="M9 21v1" />
+                <path d="M15 21v1" />
+                <path d="M10 14h4" />
+              </svg>
+              <p className="text-xs text-center leading-relaxed">
+                AI 助手就绪<br />
+                输入问题开始对话
+              </p>
+            </div>
+          )}
+
+          {messages.map((msg) => (
+            <MessageBubble key={msg.id} message={msg} />
+          ))}
+
+          {pendingPermission && (
+            <PermissionBanner
+              toolName={pendingPermission.toolName}
+              onDecision={resolvePerm}
+            />
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* 输入区 */}
+        <div className="shrink-0 border-t border-border/50 p-3">
+          <div className="relative">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"
+              rows={2}
+              disabled={isLoading || !activeId}
+              className="
+                w-full resize-none rounded-lg border border-border bg-background
+                px-3 py-2 text-sm leading-relaxed
+                placeholder:text-muted-foreground
+                focus:outline-none focus:ring-1 focus:ring-ring
+                disabled:opacity-50 disabled:cursor-not-allowed
+                transition-colors
+              "
+            />
+            <button
+              type="button"
+              disabled={isLoading || !input.trim() || !activeId}
+              className="
+                absolute right-2 bottom-2 p-1.5 rounded-md
+                bg-primary text-primary-foreground
+                disabled:opacity-30 disabled:cursor-not-allowed
+                hover:opacity-90 transition-opacity
+              "
+              title="发送"
+              onClick={handleSend}
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14" />
+                <path d="m12 5 7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
