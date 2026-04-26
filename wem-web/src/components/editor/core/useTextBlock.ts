@@ -3,6 +3,7 @@ import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, ma
 import type { TextBlockProps } from './types'
 import { useSlashMenu, type SlashMenuItem } from './SlashMenuContext'
 import { focusBlock } from './SelectionManager'
+import { inlineMarkdownToHtml, domToMarkdown, toggleInlineWrap, removeAllFormats, normalizeInline } from './InlineParser'
 
 /** 空块按 Enter/Backspace 应转为 paragraph 而非删除的类型 */
 function shouldConvertWhenEmpty(blockType: string): boolean {
@@ -42,17 +43,15 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     isComposing.current = false
     const el = ref.current
     if (!el) return
-    onContentChange(block.id, el.textContent || '')
+    onContentChange(block.id, domToMarkdown(el))
   }, [block.id, onContentChange])
 
-  // 仅在 block.id 变化时同步 DOM
+  // 仅在 block.id 变化时同步 DOM（将 markdown 解析为 HTML）
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const text = block.content ?? ''
-    if (el.textContent !== text) {
-      el.textContent = text
-    }
+    const html = inlineMarkdownToHtml(block.content ?? '')
+    el.innerHTML = html
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.id])
 
@@ -91,13 +90,17 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     setTimeout(() => focusBlock(block.id, 0), 0)
   }, [block.id])
 
-  // ── 粘贴 → 剥离格式，仅保留纯文本 ──
+  // ── 粘贴 → 解析行内 markdown，保留格式 ──
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const text = e.clipboardData.getData('text/plain')
     if (!text) return
     e.preventDefault()
-    document.execCommand('insertText', false, text)
+    if (/[*`$=+]/.test(text)) {
+      document.execCommand('insertHTML', false, inlineMarkdownToHtml(text))
+    } else {
+      document.execCommand('insertText', false, text)
+    }
   }, [])
 
   const handleInput = useCallback(() => {
@@ -105,7 +108,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     const el = ref.current
     if (!el) return
 
-    onContentChange(block.id, el.textContent || '')
+    onContentChange(block.id, domToMarkdown(el))
 
     // 斜杠命令：首次输入 / 触发菜单
     if (slashPending.current) {
@@ -147,6 +150,51 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       if (!el) return
 
       if (isComposing.current) return
+
+      // ── 行内格式快捷键 ──
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        if (e.key === 'b') {
+          e.preventDefault()
+          document.execCommand('bold')
+          return
+        }
+        if (e.key === 'i') {
+          e.preventDefault()
+          document.execCommand('italic')
+          return
+        }
+        if (e.key === 'u') {
+          e.preventDefault()
+          document.execCommand('underline')
+          return
+        }
+        if (e.key === 'e' && !e.shiftKey) {
+          e.preventDefault()
+          toggleInlineWrap(el, 'code')
+          onContentChange(block.id, domToMarkdown(el))
+          return
+        }
+        if (e.shiftKey && e.key === 'H') {
+          e.preventDefault()
+          toggleInlineWrap(el, 'mark')
+          onContentChange(block.id, domToMarkdown(el))
+          return
+        }
+        if (e.key === 'm') {
+          e.preventDefault()
+          toggleInlineWrap(el, 'span', 'inline-math')
+          onContentChange(block.id, domToMarkdown(el))
+          return
+        }
+        // Ctrl+\ → clear all formatting
+        if (e.key === '\\') {
+          e.preventDefault()
+          removeAllFormats(el)
+          normalizeInline(el)
+          onContentChange(block.id, domToMarkdown(el))
+          return
+        }
+      }
 
       const sm = slashMenuRef.current
 

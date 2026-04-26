@@ -777,6 +777,96 @@
   color: var(--wem-editor-text);
 }
 
+.wem-editor-root mark {
+  background: color-mix(in oklab, #f59e0b 30%, transparent);
+  border-radius: 2px;
+  padding: 0.05em 0.1em;
+}
+
+.wem-editor-root .inline-math {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.92em;
+  color: var(--wem-editor-accent, #7c3aed);
+  background: var(--wem-editor-soft);
+  padding: 0.1em 0.25em;
+  border-radius: 3px;
+}
+
+/* ─── Inline Toolbar (floating) ─── */
+
+.wem-inline-toolbar {
+  z-index: 10000;
+  position: fixed;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  padding: 3px 5px;
+  background: var(--popover, #fff);
+  border: 1px solid color-mix(in oklab, var(--border, #e2e5e9) 70%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.06);
+  user-select: none;
+  animation: wem-toolbar-in 0.12s ease-out;
+}
+
+.wem-inline-toolbar::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid var(--popover, #fff);
+}
+
+.wem-inline-toolbar.flip-down::after {
+  bottom: auto;
+  top: -4px;
+  border-top: none;
+  border-bottom: 5px solid var(--popover, #fff);
+}
+
+@keyframes wem-toolbar-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(3px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.wem-inline-toolbar-group {
+  display: flex;
+  align-items: center;
+}
+
+.wem-inline-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: color-mix(in oklab, var(--border, #d1d5db) 50%, transparent);
+}
+
+.wem-inline-toolbar-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--foreground, #374151);
+  cursor: pointer;
+  transition: background 0.08s, color 0.08s;
+}
+
+.wem-inline-toolbar-btn:hover {
+  background: color-mix(in oklab, var(--foreground, #374151) 8%, transparent);
+}
+
+.wem-inline-toolbar-btn.active {
+  background: color-mix(in oklab, var(--primary, #3575f0) 12%, transparent);
+  color: var(--primary, #3575f0);
+}
+
 .wem-editor-root a {
   color: var(--wem-editor-text);
   text-decoration: underline;

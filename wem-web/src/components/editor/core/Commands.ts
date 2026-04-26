@@ -28,7 +28,7 @@ import {
   moveBlockInTree,
   moveHeadingTreeInTree,
 } from './BlockOperations'
-import { focusBlock, focusBlockEnd, getCursorPosition, syncBlockContent } from './SelectionManager'
+import { focusBlock, focusBlockEnd, getCursorPosition, syncBlockContent, splitContentAtCursor, findEditable } from './SelectionManager'
 
 function pendingBlockId(): string {
   return `_pending:${crypto.randomUUID()}`
@@ -103,9 +103,13 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
   const block = findBlockById(tree, targetId)
   if (!block) return
 
+  // 使用 DOM 直接拆分行内格式内容（避免 markdown 偏移错位）
+  const editEl = findEditable(targetId)
+  const { before: contentBefore, after: contentAfter } = editEl
+    ? splitContentAtCursor(editEl)
+    : { before: block.content ?? '', after: '' }
+
   const text = block.content ?? ''
-  const contentBefore = text.slice(0, offset)
-  const contentAfter = text.slice(offset)
 
   ctx.cancelPendingSave(targetId)
 

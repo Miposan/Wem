@@ -53,6 +53,7 @@ import type { BlockContextMenuState, BlockContextAction } from './components/Blo
 import { SlashMenuProvider } from './core/SlashMenuContext'
 import type { SlashMenuItem } from './core/SlashMenuContext'
 import { SlashCommandMenu } from './components/SlashCommandMenu'
+import { InlineToolbar } from './components/InlineToolbar'
 
 // ─── Props ───
 
@@ -727,6 +728,7 @@ export function WemEditor({
         />
       </div>
       <SlashCommandMenu onSelect={handleSlashSelect} />
+      <InlineToolbar onContentChange={handleContentChange} />
     </SlashMenuProvider>
   )
 }

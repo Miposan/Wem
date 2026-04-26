@@ -10,6 +10,8 @@
  * 3. 通过 block ID + offset 定位，不依赖 DOM 结构
  */
 
+import { domToMarkdown, inlineMarkdownToHtml } from './InlineParser'
+
 /** 查找 block 对应的 contentEditable 元素（排除 contenteditable="false" 的折叠按钮等） */
 export function findEditable(blockId: string): HTMLElement | null {
   return document.querySelector(
@@ -35,9 +37,7 @@ export function findFocusable(blockId: string): HTMLElement | null {
 export function syncBlockContent(blockId: string, content: string): void {
   const el = findEditable(blockId)
   if (!el) return
-  // 内容一致时跳过，避免无谓地重写 textContent 导致光标重置
-  if (el.textContent === content) return
-  el.textContent = content
+  el.innerHTML = inlineMarkdownToHtml(content)
 }
 
 /**
@@ -78,8 +78,69 @@ export function getCursorPosition(): { blockId: string; offset: number } | null 
   return null
 }
 
+/**
+ * 在光标位置拆分 DOM 内容为 before / after 两段 markdown
+ *
+ * 使用 Range.cloneContents() 直接操作 DOM，正确处理行内格式元素。
+ * 用于 executeSplit 代替 block.content 字符串切片。
+ */
+export function splitContentAtCursor(el: HTMLElement): { before: string; after: string } {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) {
+    return { before: domToMarkdown(el), after: '' }
+  }
+
+  const range = sel.getRangeAt(0)
+
+  const beforeRange = document.createRange()
+  beforeRange.selectNodeContents(el)
+  beforeRange.setEnd(range.startContainer, range.startOffset)
+  const beforeFrag = beforeRange.cloneContents()
+
+  const afterRange = document.createRange()
+  afterRange.selectNodeContents(el)
+  afterRange.setStart(range.startContainer, range.startOffset)
+  const afterFrag = afterRange.cloneContents()
+
+  const tempBefore = document.createElement('div')
+  tempBefore.appendChild(beforeFrag)
+  const tempAfter = document.createElement('div')
+  tempAfter.appendChild(afterFrag)
+
+  return { before: domToMarkdown(tempBefore), after: domToMarkdown(tempAfter) }
+}
+
 /** Observer 超时时间（ms），防止永久等待 */
 const FOCUS_OBSERVER_TIMEOUT_MS = 2_000
+
+/** 在 contentEditable 元素中，将光标设置到指定文本偏移位置（支持行内格式元素） */
+function setCursorAtTextOffset(el: HTMLElement, offset: number): void {
+  const sel = window.getSelection()
+  if (!sel) return
+
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let current = 0
+  let node: Text | null
+  while ((node = walker.nextNode() as Text | null)) {
+    const len = node.textContent?.length ?? 0
+    if (current + len >= offset) {
+      const range = document.createRange()
+      range.setStart(node, offset - current)
+      range.collapse(true)
+      sel.removeAllRanges()
+      sel.addRange(range)
+      return
+    }
+    current += len
+  }
+
+  // Offset beyond content — place at end
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
 
 /**
  * 将光标设置到指定元素的目标偏移位置
@@ -96,20 +157,7 @@ function placeCursor(el: HTMLElement, offset: number): boolean {
   el.focus()
 
   if (el.isContentEditable) {
-    const sel = window.getSelection()
-    if (sel) {
-      const range = document.createRange()
-      const textNode = el.firstChild
-      if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-        const len = textNode.textContent?.length ?? 0
-        range.setStart(textNode, Math.min(offset, len))
-      } else {
-        range.setStart(el, 0)
-      }
-      range.collapse(true)
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }
+    setCursorAtTextOffset(el, offset)
   }
 
   el.scrollIntoView({ block: 'nearest', behavior: 'instant' })
