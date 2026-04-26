@@ -154,8 +154,10 @@ export function BlockContainer({
       onContextMenu={(e) => onBlockContextMenu?.(e, block)}
       onClick={(e) => {
         const target = e.target as HTMLElement
-        // 不抢占 textarea / input / select 等自身管理焦点的元素
-        if (!target.closest('[contenteditable], textarea, input, select')) {
+        // 只响应块自身内容区域的点击，忽略从子块冒泡上来的事件
+        // 避免跨块选区结束后 click 落在公共祖先上导致光标跳转
+        const ownContent = (e.currentTarget as HTMLElement).querySelector(':scope > .wem-block-content')
+        if (ownContent?.contains(target) && !target.closest('[contenteditable], textarea, input, select')) {
           focusBlock(block.id)
         }
       }}

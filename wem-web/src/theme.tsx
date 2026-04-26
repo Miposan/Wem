@@ -6,7 +6,7 @@
  * - 支持 system / light / dark 三种模式
  */
 
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from 'react'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -67,8 +67,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const value = useMemo(() => ({ mode, resolved, setMode }), [mode, resolved, setMode])
+
   return (
-    <ThemeContext.Provider value={{ mode, resolved, setMode }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   )

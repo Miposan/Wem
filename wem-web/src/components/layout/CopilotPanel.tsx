@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react'
-import { Plus, X, PanelLeft, Square, Lightbulb, ArrowRight } from 'lucide-react'
+import { Plus, X, PanelLeft, Square, Lightbulb, ArrowRight, ChevronRight } from 'lucide-react'
 import { useCopilotSession } from '@/hooks/useCopilotSession'
 import type { ChatMessage, ToolCallInfo } from '@/api/agent'
 

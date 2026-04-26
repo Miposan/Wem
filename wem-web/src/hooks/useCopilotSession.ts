@@ -83,27 +83,30 @@ export function useCopilotSession() {
   const abortRef = useRef<AbortController | null>(null)
   const assistantIdRef = useRef<string | null>(null)
 
-  // ─── 持久化：每次 messages 或 sessions 变化时写入 localStorage ───
+  // ─── 持久化：debounce 写入，避免流式期间高频 I/O ───
+
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   const persistCache = useCallback(
     (sess: SessionInfo[], msgs: ChatMessage[], currentId: string | null) => {
-      const cache = loadCache()
-      if (currentId) {
-        cache.messages[currentId] = msgs
-        // 更新对应 session 的 title 和 updatedAt
-        const idx = sess.findIndex((s) => s.id === currentId)
-        if (idx !== -1) {
-          sess[idx].title = deriveTitle(msgs)
-          sess[idx].updatedAt = Date.now()
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+      persistTimerRef.current = setTimeout(() => {
+        const cache = loadCache()
+        if (currentId) {
+          cache.messages[currentId] = msgs
+          const idx = sess.findIndex((s) => s.id === currentId)
+          if (idx !== -1) {
+            sess[idx].title = deriveTitle(msgs)
+            sess[idx].updatedAt = Date.now()
+          }
         }
-      }
-      cache.sessions = sess
-      saveCache(cache)
+        cache.sessions = sess
+        saveCache(cache)
+      }, 500)
     },
     [],
   )
 
-  // 当 messages 变化时持久化
   const prevMsgsLen = useRef(0)
   useEffect(() => {
     if (messages.length === 0 && prevMsgsLen.current === 0) return
@@ -401,6 +404,13 @@ export function useCopilotSession() {
     },
     [activeId],
   )
+
+  // 清理 persist 定时器
+  useEffect(() => {
+    return () => {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    }
+  }, [])
 
   return {
     // state

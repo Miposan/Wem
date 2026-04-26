@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType } from '@/types/api'
-import type { BlockType } from '@/types/api'
+import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType, makeParagraphType } from '@/types/api'
 import type { TextBlockProps } from './types'
 import { useSlashMenu, type SlashMenuItem } from './SlashMenuContext'
 import { focusBlock } from './SelectionManager'
@@ -23,7 +22,7 @@ function getCursorOffset(el: HTMLElement): number {
 /**
  * 文本块共享逻辑 hook
  *
- * 抽取 ParagraphBlock / HeadingBlock / 未来的 ListItem 等的共同行为：
+ * 抽取 ParagraphBlock / HeadingBlock / ListItem 等的共同行为：
  * - mount/块切换时同步 DOM 内容
  * - input → onContentChange
  * - 键盘操作 → onAction（Enter/Backspace/ArrowUp/ArrowDown）
@@ -58,30 +57,39 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
   }, [block.id])
 
   // ── 斜杠命令 ──
+  // 用 ref 保持 slashMenu 引用稳定，避免 handleKeyDown 因 context value 变化而重建
 
   const slashMenu = useSlashMenu()
+  const slashMenuRef = useRef(slashMenu)
+  slashMenuRef.current = slashMenu
+
   const slashPending = useRef(false)
   const slashPendingOffset = useRef(0)
 
+  // 稳定的 onAction ref
+  const onActionRef = useRef(onAction)
+  onActionRef.current = onAction
+
   const handleSlashSelect = useCallback((item: SlashMenuItem) => {
     const el = ref.current
-    if (!el || !slashMenu) return
+    const sm = slashMenuRef.current
+    if (!el || !sm) return
     const text = el.textContent || ''
-    const offset = slashMenu.state.slashOffset
-    const filterLen = slashMenu.state.filter.length
+    const offset = sm.state.slashOffset
+    const filterLen = sm.state.filter.length
     const before = text.slice(0, offset)
     const after = text.slice(offset + 1 + filterLen)
     const newContent = before + after
     el.textContent = newContent
-    slashMenu.close()
-    onAction({
+    sm.close()
+    onActionRef.current({
       type: 'convert-block',
       blockId: block.id,
       content: newContent,
       blockType: item.blockType,
     })
     setTimeout(() => focusBlock(block.id, 0), 0)
-  }, [block.id, onAction, slashMenu])
+  }, [block.id])
 
   // ── 粘贴 → 剥离格式，仅保留纯文本 ──
 
@@ -110,7 +118,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         if (rect.width === 0 && rect.height === 0) {
           rect = el.getBoundingClientRect()
         }
-        slashMenu?.trigger({
+        slashMenuRef.current?.trigger({
           blockId: block.id,
           x: rect.left,
           y: rect.bottom,
@@ -121,16 +129,17 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     }
 
     // 斜杠菜单已打开：更新过滤文字
-    if (slashMenu?.state.visible && slashMenu.state.blockId === block.id) {
+    const sm = slashMenuRef.current
+    if (sm?.state.visible && sm.state.blockId === block.id) {
       const text = el.textContent || ''
-      const offset = getCursorOffset(el)
-      if (text[slashMenu.state.slashOffset] !== '/') {
-        slashMenu.close()
+      const cursorOffset = getCursorOffset(el)
+      if (text[sm.state.slashOffset] !== '/') {
+        sm.close()
       } else {
-        slashMenu.setFilter(text.slice(slashMenu.state.slashOffset + 1, offset))
+        sm.setFilter(text.slice(sm.state.slashOffset + 1, cursorOffset))
       }
     }
-  }, [block.id, onContentChange, slashMenu])
+  }, [block.id, onContentChange])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -139,24 +148,26 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
       if (isComposing.current) return
 
+      const sm = slashMenuRef.current
+
       // ── 斜杠菜单键盘交互 ──
-      if (slashMenu?.state.visible && slashMenu.state.blockId === block.id) {
-        if (e.key === 'ArrowDown') { e.preventDefault(); slashMenu.navigate('down'); return }
-        if (e.key === 'ArrowUp') { e.preventDefault(); slashMenu.navigate('up'); return }
+      if (sm?.state.visible && sm.state.blockId === block.id) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); sm.navigate('down'); return }
+        if (e.key === 'ArrowUp') { e.preventDefault(); sm.navigate('up'); return }
         if (e.key === 'Enter') {
           e.preventDefault()
-          const item = slashMenu.filteredItems[slashMenu.state.selectedIndex]
+          const item = sm.filteredItems[sm.state.selectedIndex]
           if (item) handleSlashSelect(item)
           return
         }
-        if (e.key === 'Escape') { e.preventDefault(); slashMenu.close(); return }
+        if (e.key === 'Escape') { e.preventDefault(); sm.close(); return }
         // 其他键继续传递给正常处理（用于更新过滤文字）
       }
 
       // ── 跨块选区 Backspace / Delete → delete-range ──
       if ((e.key === 'Backspace' || e.key === 'Delete') && selectedBlockIds.size > 1) {
         e.preventDefault()
-        onAction({ type: 'delete-range', blockIds: Array.from(selectedBlockIds) })
+        onActionRef.current({ type: 'delete-range', blockIds: Array.from(selectedBlockIds) })
         return
       }
 
@@ -182,7 +193,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       // ListItem: Tab / Shift+Tab 调整列表层级
       if (e.key === 'Tab' && block.block_type.type === 'listItem') {
         e.preventDefault()
-        onAction({ type: e.shiftKey ? 'outdent-list-item' : 'indent-list-item', blockId: block.id })
+        onActionRef.current({ type: e.shiftKey ? 'outdent-list-item' : 'indent-list-item', blockId: block.id })
         return
       }
 
@@ -202,7 +213,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeHeadingType(headingMatch[1].length) })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeHeadingType(headingMatch[1].length) })
           return
         }
 
@@ -211,7 +222,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(false) })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(false) })
           return
         }
 
@@ -220,7 +231,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(true) })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeListType(true) })
           return
         }
 
@@ -228,7 +239,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: { type: 'blockquote' } as BlockType })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeBlockquoteType() })
           return
         }
       }
@@ -241,13 +252,13 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
           e.preventDefault()
           const rest = text.slice(offset).replace(/^\s+/, '')
           el.textContent = rest
-          onAction({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeCodeBlockType(codeMatch[1] || 'text') })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: rest, blockType: makeCodeBlockType(codeMatch[1] || 'text') })
           return
         }
         if (beforeCursor === '$$') {
           e.preventDefault()
           el.textContent = ''
-          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: makeMathBlockType() })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeMathBlockType() })
           return
         }
       }
@@ -260,7 +271,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       ) {
         e.preventDefault()
         el.textContent = ''
-        onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'thematicBreak' } as BlockType })
+        onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeThematicBreakType() })
         return
       }
 
@@ -268,11 +279,11 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         if (block.block_type.type === 'listItem' && isEmpty) {
-          onAction({ type: 'exit-list', blockId: block.id })
+          onActionRef.current({ type: 'exit-list', blockId: block.id })
         } else if (isEmpty && shouldConvertWhenEmpty(block.block_type.type)) {
-          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'paragraph' } as BlockType })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeParagraphType() })
         } else {
-          onAction({ type: 'split' })
+          onActionRef.current({ type: 'split' })
         }
         return
       }
@@ -281,11 +292,11 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       if (e.key === 'Backspace' && atStart && isEmpty) {
         e.preventDefault()
         if (block.block_type.type === 'listItem') {
-          onAction({ type: 'outdent-list-item', blockId: block.id })
+          onActionRef.current({ type: 'outdent-list-item', blockId: block.id })
         } else if (shouldConvertWhenEmpty(block.block_type.type)) {
-          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'paragraph' } as BlockType })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeParagraphType() })
         } else {
-          onAction({ type: 'delete', blockId: block.id })
+          onActionRef.current({ type: 'delete', blockId: block.id })
         }
         return
       }
@@ -293,19 +304,19 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       // Backspace at start with content → 与前块合并
       if (e.key === 'Backspace' && atStart && !isEmpty) {
         e.preventDefault()
-        onAction({ type: 'merge-with-previous', blockId: block.id })
+        onActionRef.current({ type: 'merge-with-previous', blockId: block.id })
         return
       }
 
-      if (e.key === 'ArrowUp' && atStart) { e.preventDefault(); onAction({ type: 'focus-previous', blockId: block.id }); return }
-      if (e.key === 'ArrowDown' && atEnd) { e.preventDefault(); onAction({ type: 'focus-next', blockId: block.id }); return }
-      if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); onAction({ type: 'focus-previous', blockId: block.id }); return }
-      if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); onAction({ type: 'focus-next', blockId: block.id }); return }
+      if (e.key === 'ArrowUp' && atStart) { e.preventDefault(); onActionRef.current({ type: 'focus-previous', blockId: block.id }); return }
+      if (e.key === 'ArrowDown' && atEnd) { e.preventDefault(); onActionRef.current({ type: 'focus-next', blockId: block.id }); return }
+      if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); onActionRef.current({ type: 'focus-previous', blockId: block.id }); return }
+      if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); onActionRef.current({ type: 'focus-next', blockId: block.id }); return }
 
       // Delete at end → 与下一块合并
       if (e.key === 'Delete' && atEnd && !isEmpty) {
         e.preventDefault()
-        onAction({ type: 'merge-with-next', blockId: block.id })
+        onActionRef.current({ type: 'merge-with-next', blockId: block.id })
         return
       }
 
@@ -313,16 +324,16 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       if (e.key === 'Delete' && atEnd && isEmpty) {
         e.preventDefault()
         if (block.block_type.type === 'listItem') {
-          onAction({ type: 'exit-list', blockId: block.id })
+          onActionRef.current({ type: 'exit-list', blockId: block.id })
         } else if (shouldConvertWhenEmpty(block.block_type.type)) {
-          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'paragraph' } as BlockType })
+          onActionRef.current({ type: 'convert-block', blockId: block.id, content: '', blockType: makeParagraphType() })
         } else {
-          onAction({ type: 'delete', blockId: block.id })
+          onActionRef.current({ type: 'delete', blockId: block.id })
         }
         return
       }
     },
-    [block.id, block.block_type.type, onAction, selectedBlockIds, slashMenu, handleSlashSelect],
+    [block.id, block.block_type.type, selectedBlockIds, handleSlashSelect],
   )
 
   return { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd }

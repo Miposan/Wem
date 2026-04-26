@@ -18,9 +18,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
-import { getDocument, updateBlock, createBlock, deleteBlock, undoDocument, redoDocument } from '@/api/client'
+import { getDocument, updateBlock, createBlock, undoDocument, redoDocument } from '@/api/client'
 import { BlockTreeRenderer } from './components/BlockTreeRenderer'
-import { updateBlockInTree, removeBlock, flattenTree, findBlockById, insertAfter } from './core/BlockOperations'
+import { updateBlockInTree, flattenTree, findBlockById, insertAfter } from './core/BlockOperations'
 import { OperationQueue } from './core/OperationQueue'
 import {
   executeSplit,
@@ -37,6 +37,8 @@ import {
   executeOutdentListItem,
   executeExitList,
   executeExitCodeBlock,
+  executeDeleteRange,
+  executeAddBlockAfter,
 } from './core/Commands'
 import type { CommandContext } from './core/Commands'
 import type { BlockAction, EditorSelection } from './core/types'
@@ -92,13 +94,15 @@ export function WemEditor({
   // React state 更新可能尚未提交。
   const crossBlockSelectionRef = useRef(false)
   const creatingBlankBlockRef = useRef(false)
+  const selectionRef = useRef<EditorSelection | null>(null)
+  const clearSelectionRef = useRef<() => void>(() => {})
 
   // ─── 跨块选区 ───
 
   const handleSelectionChange = useCallback(
     (newSelection: EditorSelection | null) => {
-      // 同步标记：有跨块选区 → true，清除 → false
       crossBlockSelectionRef.current = newSelection !== null
+      selectionRef.current = newSelection
       setSelection(newSelection)
       setSelectedBlockIds(getSelectedBlockIdsSet(treeRef.current, newSelection))
     },
@@ -109,6 +113,7 @@ export function WemEditor({
     getTree: () => treeRef.current,
     onSelectionChange: handleSelectionChange,
   })
+  clearSelectionRef.current = clearSelection
 
   // ─── 拖拽 action 转发 ref（解决 handleAction 循环依赖） ──
   //
@@ -339,8 +344,7 @@ export function WemEditor({
 
   const handleAction = useCallback(
     (action: BlockAction) => {
-      // 任何操作都清除跨块选区
-      if (selection) clearSelection()
+      if (selectionRef.current) clearSelectionRef.current()
 
       switch (action.type) {
         // 结构操作 → 入队串行执行 + 抑制 SSE 回声
@@ -380,26 +384,9 @@ export function WemEditor({
         case 'delete-range': {
           const { blockIds } = action
           if (blockIds.length === 0) break
-          enqueueStructuralOp('delete-range', async (ctx) => {
-            for (const id of blockIds) {
-              ctx.cancelPendingSave(id)
-            }
-            for (const id of blockIds) {
-              await deleteBlock(id, ctx.editorId)
-            }
-            ctx.setTreeSync((prev) => {
-              let result = prev
-              for (const id of blockIds) {
-                result = removeBlock(result, id)
-              }
-              return result
-            })
-            // 聚焦到被删除范围之前的块（如果存在）
-            const flat = flattenTree(treeRef.current)
-            if (flat.length > 0) {
-              focusBlock(flat[0].id, 0)
-            }
-          })
+          enqueueStructuralOp('delete-range', (ctx) =>
+            executeDeleteRange(ctx, { blockIds }),
+          )
           break
         }
         case 'move-block': {
@@ -453,18 +440,9 @@ export function WemEditor({
         }
         case 'add-block-after': {
           const { blockId } = action
-          enqueueStructuralOp(`add-after:${blockId}`, async (ctx) => {
-            const created = await createBlock({
-              parent_id: documentId,
-              block_type: { type: 'paragraph' },
-              content: '',
-              after_id: blockId,
-              editor_id: ctx.editorId,
-            })
-            const newBlock: BlockNode = { ...created, children: [] }
-            ctx.setTreeSync((prev) => insertAfter(prev, blockId, newBlock))
-            requestAnimationFrame(() => focusBlock(created.id))
-          })
+          enqueueStructuralOp(`add-after:${blockId}`, (ctx) =>
+            executeAddBlockAfter(ctx, { afterBlockId: blockId, documentId }),
+          )
           break
         }
         // 导航操作 → 无 API 调用，无需队列
@@ -476,7 +454,7 @@ export function WemEditor({
           break
       }
     },
-    [makeContext, enqueueStructuralOp, selection, clearSelection],
+    [makeContext, enqueueStructuralOp],
   )
 
   // 同步 ref → useBlockDrag 的回调现在能调用最新的 handleAction
@@ -543,14 +521,14 @@ export function WemEditor({
       }
       // Escape → 清除跨块选区
       if (e.key === 'Escape') {
-        if (selection) {
+        if (selectionRef.current) {
           e.preventDefault()
-          clearSelection()
+          clearSelectionRef.current()
         }
         return
       }
     },
-    [handleUndo, handleRedo, handleSelectionChange, selection, clearSelection],
+    [handleUndo, handleRedo, handleSelectionChange],
   )
 
   // ─── 空白区域点击 → 聚焦编辑入口 ───
@@ -674,9 +652,9 @@ export function WemEditor({
               editor_id: editorId,
             })
               .then((created) => {
-        const newBlock: BlockNode = { ...created, children: [] }
-        setTreeSync((prev) => insertAfter(prev, block.id, newBlock))
-      })
+                const newBlock: BlockNode = { ...created, children: [] }
+                setTreeSync((prev) => insertAfter(prev, block.id, newBlock))
+              })
               .catch((err) => console.error('[context-menu] 复制块失败:', err))
           }
           break

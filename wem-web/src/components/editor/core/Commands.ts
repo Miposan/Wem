@@ -20,6 +20,7 @@ import {
   insertAsFirstChild,
   insertBefore,
   removeBlock,
+  removeBlocks,
   updateBlockInTree,
   replaceBlockInTree,
   findPrevBlock,
@@ -833,6 +834,66 @@ export async function executeExitCodeBlock(
     console.error('[exit-code-block] 退出代码块失败，回滚:', err)
     ctx.refetchDocument()
   }
+}
+
+/**
+ * DeleteRange — 批量删除选区中的多个块
+ *
+ * 一次性从 UI 树中移除所有目标块，聚焦到被删范围之前的块。
+ */
+export async function executeDeleteRange(
+  ctx: CommandContext,
+  params: { blockIds: string[] },
+): Promise<void> {
+  const { blockIds } = params
+  if (blockIds.length === 0) return
+
+  // 记录删除范围之前的块
+  const flatBefore = flattenTree(ctx.getTree())
+  const firstDeletedIdx = flatBefore.findIndex((b) => b.id === blockIds[0])
+  const blockBeforeRange = firstDeletedIdx > 0 ? flatBefore[firstDeletedIdx - 1] : null
+
+  for (const id of blockIds) {
+    ctx.cancelPendingSave(id)
+  }
+  for (const id of blockIds) {
+    await deleteBlock(id, ctx.editorId)
+  }
+
+  ctx.setTreeSync((prev) => removeBlocks(prev, new Set(blockIds)))
+
+  // 聚焦到被删范围之前的块
+  if (blockBeforeRange) {
+    const afterDelete = findBlockById(ctx.getTree(), blockBeforeRange.id)
+    if (afterDelete) {
+      focusBlock(afterDelete.id, (afterDelete.content ?? '').length)
+    } else {
+      const flat = flattenTree(ctx.getTree())
+      if (flat.length > 0) focusBlock(flat[0].id, 0)
+    }
+  } else {
+    const flat = flattenTree(ctx.getTree())
+    if (flat.length > 0) focusBlock(flat[0].id, 0)
+  }
+}
+
+/**
+ * AddBlockAfter — 在指定块之后插入新段落（gutter "+" 按钮触发）
+ */
+export async function executeAddBlockAfter(
+  ctx: CommandContext,
+  params: { afterBlockId: string; documentId: string },
+): Promise<void> {
+  const created = await createBlock({
+    parent_id: params.documentId,
+    block_type: { type: 'paragraph' },
+    content: '',
+    after_id: params.afterBlockId,
+    editor_id: ctx.editorId,
+  })
+  const newBlock: BlockNode = { ...created, children: [] }
+  ctx.setTreeSync((prev) => insertAfter(prev, params.afterBlockId, newBlock))
+  requestAnimationFrame(() => focusBlock(created.id))
 }
 
 /** 查找 ListItem 所属的 List 父容器 */

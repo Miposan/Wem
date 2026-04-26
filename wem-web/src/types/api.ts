@@ -69,6 +69,14 @@ export function makeListItemType(): ListItemBlockType {
   return { type: 'listItem' }
 }
 
+export function makeBlockquoteType(): BlockquoteBlockType {
+  return { type: 'blockquote' }
+}
+
+export function makeThematicBreakType(): ThematicBreakBlockType {
+  return { type: 'thematicBreak' }
+}
+
 export function makeParagraphType(): ParagraphBlockType {
   return { type: 'paragraph' }
 }

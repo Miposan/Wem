@@ -5,7 +5,6 @@
  * 放置在编辑器右侧面板中。
  */
 
-import { useCallback } from 'react'
 import type { BlockNode } from '@/types/api'
 
 // ─── Types ───
@@ -56,13 +55,6 @@ interface TocPanelProps {
 // ─── Component ───
 
 export function TocPanel({ items, activeHeadingId, onHeadingClick }: TocPanelProps) {
-  const handleClick = useCallback(
-    (id: string) => {
-      onHeadingClick(id)
-    },
-    [onHeadingClick],
-  )
-
   if (items.length === 0) {
     return (
       <div className="p-4 text-sm text-muted-foreground">
@@ -89,7 +81,7 @@ export function TocPanel({ items, activeHeadingId, onHeadingClick }: TocPanelPro
               }
             `}
             style={{ paddingLeft: `${indent + 12}px` }}
-            onClick={() => handleClick(item.id)}
+            onClick={() => onHeadingClick(item.id)}
             title={item.text}
           >
             {item.text}

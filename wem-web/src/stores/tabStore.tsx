@@ -5,7 +5,7 @@
  * 使用 React state + context，无需外部状态库。
  */
 
-import { createContext, useContext, useCallback, useState, type ReactNode } from 'react'
+import { createContext, useContext, useCallback, useMemo, useState, type ReactNode } from 'react'
 
 export interface TabInfo {
   id: string        // document id
@@ -97,7 +97,7 @@ export function TabProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const store: TabStore = {
+  const store: TabStore = useMemo(() => ({
     ...state,
     openTab,
     closeTab,
@@ -105,7 +105,7 @@ export function TabProvider({ children }: { children: ReactNode }) {
     updateTab,
     closeAllTabs,
     closeOtherTabs,
-  }
+  }), [state, openTab, closeTab, switchTab, updateTab, closeAllTabs, closeOtherTabs])
 
   return <TabContext.Provider value={store}>{children}</TabContext.Provider>
 }

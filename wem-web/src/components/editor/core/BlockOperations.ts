@@ -126,6 +126,25 @@ export function removeBlock(tree: BlockNode[], blockId: string): BlockNode[] {
   })
 }
 
+/** 从树中批量移除多个块（一次遍历） */
+export function removeBlocks(tree: BlockNode[], ids: Set<string>): BlockNode[] {
+  const filtered = tree.filter((b) => !ids.has(b.id))
+  if (filtered.length !== tree.length) {
+    return filtered.map((block) => {
+      const updated = removeBlocks(block.children, ids)
+      return updated !== block.children ? { ...block, children: updated } : block
+    })
+  }
+
+  return tree.map((block) => {
+    const updated = removeBlocks(block.children, ids)
+    if (updated !== block.children) {
+      return { ...block, children: updated }
+    }
+    return block
+  })
+}
+
 // ─── 更新 ───
 
 /** 更新指定块的属性 */

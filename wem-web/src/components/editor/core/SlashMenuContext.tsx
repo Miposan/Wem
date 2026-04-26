@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
-import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType } from '@/types/api'
+import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
+import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType } from '@/types/api'
 import type { BlockType } from '@/types/api'
 
 export interface SlashMenuItem {
@@ -16,10 +16,10 @@ export const SLASH_ITEMS: SlashMenuItem[] = [
   { label: '标题 3', description: '小标题', blockType: makeHeadingType(3), icon: 'H3' },
   { label: '无序列表', description: '项目符号列表', blockType: makeListType(false), icon: '•' },
   { label: '有序列表', description: '编号列表', blockType: makeListType(true), icon: '1.' },
-  { label: '引用', description: '引用块', blockType: { type: 'blockquote' } as BlockType, icon: '❝' },
+  { label: '引用', description: '引用块', blockType: makeBlockquoteType(), icon: '❝' },
   { label: '代码块', description: '代码片段', blockType: makeCodeBlockType(''), icon: '</>' },
   { label: '公式', description: '数学公式', blockType: makeMathBlockType(), icon: 'fx' },
-  { label: '分割线', description: '水平分割线', blockType: { type: 'thematicBreak' } as BlockType, icon: '—' },
+  { label: '分割线', description: '水平分割线', blockType: makeThematicBreakType(), icon: '—' },
 ]
 
 export interface SlashMenuState {
@@ -61,7 +61,7 @@ export function SlashMenuProvider({ children }: { children: ReactNode }) {
     visible: false, x: 0, y: 0, blockId: null, slashOffset: 0, filter: '', selectedIndex: 0,
   })
 
-  const filteredItems = filterItems(state.filter)
+  const filteredItems = useMemo(() => filterItems(state.filter), [state.filter])
 
   const trigger = useCallback((params: { blockId: string; x: number; y: number; slashOffset: number }) => {
     setState({ visible: true, x: params.x, y: params.y, blockId: params.blockId, slashOffset: params.slashOffset, filter: '', selectedIndex: 0 })
@@ -86,8 +86,13 @@ export function SlashMenuProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, selectedIndex: index }))
   }, [])
 
+  const value = useMemo<SlashMenuContextValue>(
+    () => ({ state, filteredItems, trigger, close, setFilter, navigate, hoverIndex }),
+    [state, filteredItems, trigger, close, setFilter, navigate, hoverIndex],
+  )
+
   return (
-    <SlashMenuContext.Provider value={{ state, filteredItems, trigger, close, setFilter, navigate, hoverIndex }}>
+    <SlashMenuContext.Provider value={value}>
       {children}
     </SlashMenuContext.Provider>
   )

@@ -29,12 +29,12 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
     (e: React.FocusEvent<HTMLHeadingElement>) => {
       const newTitle = e.currentTarget.textContent || ''
       if (documentId) {
+        setDoc((prev) => prev.status === 'loaded' ? { ...prev, title: newTitle } : prev)
         updateBlock(documentId, {
           properties: { title: newTitle },
           properties_mode: 'merge',
         }).catch((err) => console.error('标题保存失败:', err))
         updateTab(documentId, { title: newTitle })
-        // 通知侧边栏文档树更新标题
         window.dispatchEvent(new CustomEvent('wem:doc-title-change', { detail: { id: documentId, title: newTitle } }))
       }
     },
@@ -126,7 +126,7 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-background rounded-tl-md shadow-[inset_1px_1px_3px_rgba(0,0,0,0.03)]">
       {onNavigate && documentId && (
-        <Breadcrumb documentId={documentId} onNavigate={onNavigate} />
+        <Breadcrumb documentId={documentId} onNavigate={onNavigate} currentTitle={title} />
       )}
 
       <main className="flex-1 overflow-y-auto">

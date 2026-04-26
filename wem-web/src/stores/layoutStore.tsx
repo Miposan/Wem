@@ -10,7 +10,7 @@
  * 此 store 只管布局状态（哪个面板在哪个槽位、是否可见、尺寸）。
  */
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react'
 import { type PanelType, PANEL_REGISTRY, getRegisteredPanelTypes } from '@/components/layout/panelRegistry'
 
 // ─── Types ───
@@ -273,7 +273,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     setState(getDefaultState())
   }, [])
 
-  const store: LayoutStore = {
+  const store: LayoutStore = useMemo(() => ({
     ...state,
     movePanel,
     togglePanel,
@@ -282,7 +282,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     getSlotPanels,
     getAllSlotPanels,
     resetLayout,
-  }
+  }), [state, movePanel, togglePanel, togglePanelToSlot, setSlotSize, getSlotPanels, getAllSlotPanels, resetLayout])
 
   return (
     <LayoutContext.Provider value={store}>

@@ -9,15 +9,9 @@ import { PanelContentRenderer } from '@/components/layout/panelRegistry'
 import EditorPage from '@/pages/EditorPage'
 
 function AppInner() {
-  const [activeDocId, setActiveDocId] = useState<string | null>(null)
   const [tocItems, setTocItems] = useState<TocItem[]>([])
-  const { tabs, openTab } = useTabStore()
+  const { activeTabId, openTab, switchTab } = useTabStore()
   const { getSlotPanels } = useLayoutStore()
-
-  // 活跃文档 ID：TabStore 优先，fallback 到 activeDocId
-  const displayDocId = tabs.length > 0
-    ? (tabs.find((t) => t.id === activeDocId) ? activeDocId : tabs[tabs.length - 1]?.id ?? null)
-    : activeDocId
 
   const handleTocHeadingClick = useCallback((blockId: string) => {
     const el = document.querySelector(`[data-block-id="${blockId}"]`)
@@ -27,7 +21,6 @@ function AppInner() {
   const handleBreadcrumbNavigate = useCallback(
     (id: string, title: string, icon: string) => {
       openTab({ id, title, icon })
-      setActiveDocId(id)
     },
     [openTab],
   )
@@ -35,8 +28,10 @@ function AppInner() {
   // 面板内容渲染所需的共享 props
   const contentProps = {
     tocItems,
-    activeDocId: displayDocId,
-    setActiveDocId,
+    activeDocId: activeTabId,
+    setActiveDocId: useCallback((id: string | null) => {
+      if (id) switchTab(id)
+    }, [switchTab]),
     onTocHeadingClick: handleTocHeadingClick,
   }
 
@@ -79,7 +74,7 @@ function AppInner() {
         <TabBar />
 
         {/* Editor */}
-        <EditorPage documentId={displayDocId} onTocItemsChange={setTocItems} onNavigate={handleBreadcrumbNavigate} />
+        <EditorPage documentId={activeTabId} onTocItemsChange={setTocItems} onNavigate={handleBreadcrumbNavigate} />
       </div>
 
       {/* ─── Right Slot ─── */}
