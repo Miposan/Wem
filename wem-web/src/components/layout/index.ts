@@ -1,3 +1,8 @@
 export { Sidebar } from './Sidebar'
 export { TabBar } from './TabBar'
 export { TocPanel, extractTocItems, type TocItem } from './TocPanel'
+export { PanelContainer } from './PanelContainer'
+export { SlotContainer } from './SlotContainer'
+export { ActivityBar } from './ActivityBar'
+export { CopilotPanel } from './CopilotPanel'
+export { PANEL_REGISTRY, PanelContentRenderer, type PanelType, type PanelContentProps, type PanelDefinition } from './panelRegistry'

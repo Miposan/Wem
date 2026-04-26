@@ -114,7 +114,7 @@ export function focusBlock(blockId: string, offset: number = 0): void {
 
   // 2. 元素不存在：通过 MutationObserver 等待其出现
   const targetSelector = `[data-block-id="${blockId}"] [contenteditable="true"]`
-  const observer = new MutationObserver((mutations, obs) => {
+  const observer = new MutationObserver((_mutations, obs) => {
     const target = document.querySelector(targetSelector) as HTMLElement | null
     if (target) {
       obs.disconnect()

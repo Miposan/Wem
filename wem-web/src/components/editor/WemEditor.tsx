@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
-import { getDocument, updateBlock, createBlock, deleteBlock, restoreBlock, mergeBlock, moveBlock, undoDocument, redoDocument } from '@/api/client'
+import { getDocument, updateBlock, createBlock, deleteBlock, undoDocument, redoDocument } from '@/api/client'
 import { BlockTreeRenderer } from './components/BlockTreeRenderer'
 import { updateBlockInTree, removeBlock, flattenTree, findBlockById } from './core/BlockOperations'
 import { OperationQueue } from './core/OperationQueue'
@@ -41,6 +41,7 @@ import {
 import type { CommandContext } from './core/Commands'
 import type { BlockAction, EditorSelection } from './core/types'
 import { useDocumentSSE } from '@/hooks/useDocumentSSE'
+import type { BlockUpdatedEvent } from '@/hooks/useDocumentSSE'
 import { syncBlockContent, focusBlock, findEditable } from './core/SelectionManager'
 import { useSelectionManager } from './core/useSelectionManager'
 import { useBlockDrag } from './core/useBlockDrag'
@@ -77,12 +78,22 @@ export function WemEditor({
   })
   const treeRef = useRef<BlockNode[]>([])
   const pendingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  // ─── 跨块选区刚结束标记 ───
+  //
+  // 跨块拖选结束后 click 事件会在公共祖先触发，handleEditorClick
+  // 需要跳过「聚焦最后块 / 创建空白段落」逻辑，否则焦点会跳到文档末尾。
+  // 用 ref 而非 state 是因为 click 与 mouseup 在同一微任务中，
+  // React state 更新可能尚未提交。
+  const crossBlockSelectionRef = useRef(false)
   const creatingBlankBlockRef = useRef(false)
 
   // ─── 跨块选区 ───
 
   const handleSelectionChange = useCallback(
     (newSelection: EditorSelection | null) => {
+      // 同步标记：有跨块选区 → true，清除 → false
+      crossBlockSelectionRef.current = newSelection !== null
       setSelection(newSelection)
       setSelectedBlockIds(getSelectedBlockIdsSet(treeRef.current, newSelection))
     },
@@ -229,7 +240,7 @@ export function WemEditor({
     // 块内容更新：增量合并到 tree + 同步 contentEditable DOM
     // 注意：后端 serde(flatten) 将 block 字段展平到事件顶层，直接用 event.id 访问
     onBlockUpdated: useCallback(
-      (event) => {
+      (event: BlockUpdatedEvent) => {
         setTreeAsync((prev) =>
           updateBlockInTree(prev, event.id, {
             content: event.content,
@@ -567,6 +578,12 @@ export function WemEditor({
       if (readonly) return
       // 点击在已有块上，忽略
       if ((e.target as HTMLElement).closest('[data-block-id]')) return
+
+      // 跨块选区刚结束时，click 在公共祖先触发，跳过聚焦逻辑
+      if (crossBlockSelectionRef.current) {
+        crossBlockSelectionRef.current = false
+        return
+      }
 
       if (focusLastBlockIfParagraph()) return
       createParagraphFromBlank()

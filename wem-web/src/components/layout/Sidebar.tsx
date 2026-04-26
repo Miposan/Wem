@@ -16,6 +16,8 @@ interface DocTreeNode {
 interface SidebarProps {
   activeId: string | null
   onActiveChange: (id: string | null) => void
+  /** 嵌入模式：隐藏 header/footer，由外部 SlotContainer 管理折叠 */
+  embedded?: boolean
 }
 
 // ─── 辅助函数 ───
@@ -185,7 +187,7 @@ function DocItem({
 
 // ─── 主侧边栏组件 ───
 
-export function Sidebar({ activeId, onActiveChange }: SidebarProps) {
+export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
   const [tree, setTree] = useState<DocTreeNode[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
@@ -267,6 +269,53 @@ export function Sidebar({ activeId, onActiveChange }: SidebarProps) {
     },
     [activeId, onActiveChange, tree],
   )
+
+  // ─── 嵌入模式：只渲染文档树 ───
+  if (embedded) {
+    return (
+      <div className="flex flex-col h-full">
+        {/* 文档树工具栏 */}
+        <div className="flex items-center justify-between px-3 h-8 border-b border-border shrink-0">
+          <span className="text-xs font-medium text-muted-foreground">文档</span>
+          <button
+            onClick={handleCreateRoot}
+            className="w-5 h-5 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer text-sm"
+            title="新建文档"
+          >
+            +
+          </button>
+        </div>
+        {/* Document Tree */}
+        <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
+          {loading && <p className="text-sm text-muted-foreground px-2">加载中…</p>}
+          {!loading && tree.length === 0 && (
+            <div className="px-2 py-4 text-center">
+              <p className="text-sm text-muted-foreground mb-2">暂无文档</p>
+              <button
+                onClick={handleCreateRoot}
+                className="text-sm text-primary hover:underline cursor-pointer"
+              >
+                创建第一个文档
+              </button>
+            </div>
+          )}
+          {tree.map((node) => (
+            <DocItem
+              key={node.doc.id}
+              node={node}
+              depth={0}
+              activeId={activeId}
+              expandedIds={expandedIds}
+              onOpenDoc={handleOpenDoc}
+              onToggle={handleToggle}
+              onCreateChild={handleCreateChild}
+              onDelete={handleDelete}
+            />
+          ))}
+        </nav>
+      </div>
+    )
+  }
 
   // ─── 收起状态 ───
   if (collapsed) {

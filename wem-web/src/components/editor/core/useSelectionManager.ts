@@ -32,7 +32,6 @@ interface UseSelectionManagerOptions {
  * 挂载方式：`<div {...selectionHandlers}>`
  */
 export function useSelectionManager({
-  getTree,
   onSelectionChange,
 }: UseSelectionManagerOptions) {
   // ── 拖拽选区状态 ──

@@ -1,27 +1,31 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { getDocument, updateBlock, type BlockNode } from '@/api/client'
+import { useEffect, useState, useCallback } from 'react'
+import { getDocument, updateBlock } from '@/api/client'
+import type { BlockNode } from '@/types/api'
 import { WemEditor } from '@/components/editor'
 import { EmojiPicker } from '@/components/editor/components/EmojiPicker'
-import { TocPanel, extractTocItems, type TocItem } from '@/components/layout'
+import { extractTocItems, type TocItem } from '@/components/layout'
 import { useTabStore } from '@/stores/tabStore'
 import '@/components/editor/editor.css'
 
 interface Props {
   documentId: string | null
+  onTocItemsChange?: (items: TocItem[]) => void
 }
 
-export default function EditorPage({ documentId }: Props) {
-  const [tree, setTree] = useState<BlockNode[]>([])
-  const [title, setTitle] = useState('')
-  const [icon, setIcon] = useState<string | undefined>(undefined)
-  const [loading, setLoading] = useState(false)
-  const [showToc, setShowToc] = useState(true)
+// ─── 文档加载状态 ───
+type DocData =
+  | { status: 'idle' }
+  | { status: 'loading'; docId: string }
+  | { status: 'loaded'; docId: string; title: string; icon: string | undefined; tree: BlockNode[] }
+  | { status: 'error'; docId: string; error: unknown }
+
+export default function EditorPage({ documentId, onTocItemsChange }: Props) {
+  const [doc, setDoc] = useState<DocData>({ status: 'idle' })
   const { updateTab } = useTabStore()
 
   const handleTitleBlur = useCallback(
     (e: React.FocusEvent<HTMLHeadingElement>) => {
       const newTitle = e.currentTarget.textContent || ''
-      setTitle(newTitle)
       if (documentId) {
         updateBlock(documentId, {
           properties: { title: newTitle },
@@ -36,7 +40,9 @@ export default function EditorPage({ documentId }: Props) {
   /** Emoji 图标变更 */
   const handleIconChange = useCallback(
     (newIcon: string | undefined) => {
-      setIcon(newIcon)
+      setDoc((prev) =>
+        prev.status === 'loaded' ? { ...prev, icon: newIcon } : prev,
+      )
       if (documentId) {
         updateBlock(documentId, {
           properties: { ...(newIcon ? { icon: newIcon } : {}) },
@@ -48,32 +54,27 @@ export default function EditorPage({ documentId }: Props) {
     [documentId, updateTab],
   )
 
-  /** TOC 标题点击 → 滚动到对应块 */
-  const handleHeadingClick = useCallback((blockId: string) => {
-    const el = document.querySelector(`[data-block-id="${blockId}"]`)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  }, [])
-
+  // 加载文档（只包含异步 setState，符合 React 19 规范）
   useEffect(() => {
-    if (!documentId) {
-      setTree([])
-      setTitle('')
-      setIcon(undefined)
-      return
-    }
-    setLoading(true)
+    if (!documentId) return
+    let cancelled = false
+    // 异步加载数据，所有 setState 都在 .then 回调中
     getDocument(documentId)
       .then((res) => {
-        setTitle((res.document.properties?.title as string) || '')
-        setIcon(res.document.properties?.icon as string | undefined)
-        setTree(res.blocks)
+        if (cancelled) return
+        const blocks = res.blocks
+        const title = (res.document.properties?.title as string) || ''
+        const icon = res.document.properties?.icon as string | undefined
+        setDoc({ status: 'loaded', docId: documentId, title, icon, tree: blocks })
+        onTocItemsChange?.(extractTocItems(blocks))
       })
-      .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [documentId])
+      .catch((err) => {
+        if (!cancelled) setDoc({ status: 'error', docId: documentId, error: err })
+      })
+    return () => { cancelled = true }
+  }, [documentId, onTocItemsChange])
 
+  // 无文档时显示空状态
   if (!documentId) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -85,7 +86,8 @@ export default function EditorPage({ documentId }: Props) {
     )
   }
 
-  if (loading) {
+  // 正在加载
+  if (doc.status === 'loading' || (doc.status === 'idle' && documentId)) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
         <p>加载中…</p>
@@ -93,8 +95,25 @@ export default function EditorPage({ documentId }: Props) {
     )
   }
 
-  // 提取 TOC
-  const tocItems = extractTocItems(tree)
+  // 加载出错
+  if (doc.status === 'error') {
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <p>加载失败</p>
+      </div>
+    )
+  }
+
+  // 文档尚未加载完成（docId 不匹配）
+  if (doc.status !== 'loaded' || doc.docId !== documentId) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <p>加载中…</p>
+      </div>
+    )
+  }
+
+  const { title, icon, tree } = doc
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -142,35 +161,6 @@ export default function EditorPage({ documentId }: Props) {
           />
         </div>
       </main>
-
-      {/* 右侧 TOC 面板 */}
-      {showToc && tocItems.length > 0 && (
-        <aside className="w-56 h-full border-l border-border bg-muted/20 overflow-y-auto shrink-0">
-          <div className="px-3 py-2 border-b border-border">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">目录</span>
-              <button
-                onClick={() => setShowToc(false)}
-                className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-              >
-                ×
-              </button>
-            </div>
-          </div>
-          <TocPanel items={tocItems} onHeadingClick={handleHeadingClick} />
-        </aside>
-      )}
-
-      {/* TOC 切换按钮（当 TOC 隐藏时显示） */}
-      {!showToc && tocItems.length > 0 && (
-        <button
-          onClick={() => setShowToc(true)}
-          className="fixed right-4 top-16 w-8 h-8 flex items-center justify-center rounded bg-background border border-border shadow-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer z-10"
-          title="显示目录"
-        >
-          ≡
-        </button>
-      )}
     </div>
   )
 }

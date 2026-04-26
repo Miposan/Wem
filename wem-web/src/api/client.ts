@@ -66,13 +66,18 @@ api.interceptors.response.use(
 // ---- Error ----
 
 export class ApiError extends Error {
+  public status: number
+  public code: number
+
   constructor(
-    public status: number,
-    public code: number,
+    status: number,
+    code: number,
     msg: string,
   ) {
     super(msg)
     this.name = 'ApiError'
+    this.status = status
+    this.code = code
   }
 }
 
