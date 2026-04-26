@@ -30,7 +30,7 @@ export function PanelContainer({ panel, children }: PanelContainerProps) {
   return (
     <div className="flex flex-col flex-1 wem-panel" data-panel-id={panel.id}>
       {/* 面板标题栏 */}
-      <div className="flex items-center gap-2 px-3 h-9 shrink-0 border-b border-border/50 text-muted-foreground select-none">
+      <div className="flex items-center gap-2 px-3 h-8 shrink-0 border-b border-border/30 text-muted-foreground/70 select-none">
         {Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}
         <span className="text-xs font-medium tracking-wide uppercase truncate">{title}</span>
       </div>

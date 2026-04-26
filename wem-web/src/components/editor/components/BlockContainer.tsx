@@ -8,6 +8,8 @@ import { ListItemBlock } from '../blocks/ListItemBlock'
 import { BlockquoteBlock } from '../blocks/BlockquoteBlock'
 import { getHeadingLevel } from '../core/BlockOperations'
 import { UnknownBlock } from '../blocks/UnknownBlock'
+import { ChevronRight, GripVertical, List, ListOrdered } from 'lucide-react'
+import { focusBlock } from '../core/SelectionManager'
 
 // ─── Block Type → Component 路由 ───
 
@@ -22,7 +24,7 @@ function BlockContentRouter({ block, ...props }: ContentRouterProps) {
     case 'heading':
       return <HeadingBlock block={block} {...props} />
     case 'thematicBreak':
-      return <ThematicBreakBlock />
+      return <ThematicBreakBlock blockId={block.id} onAction={props.onAction} />
     case 'codeBlock':
       return <CodeBlock block={block} {...props} />
     case 'list':
@@ -112,6 +114,17 @@ export function BlockContainer({
       onDragLeave={(e) => dragHandlers.onDragLeave(e, block.id)}
       onDrop={(e) => dragHandlers.onDrop(e, block.id)}
       onContextMenu={(e) => onBlockContextMenu?.(e, block)}
+      onClick={(e) => {
+        // 点击块的非 contentEditable 区域（padding、margin 等）→ 聚焦该块
+        if (!(e.target as HTMLElement).closest('[contenteditable]')) {
+          const blockType = block.block_type.type
+          if (blockType === 'thematicBreak') {
+            // 分隔线不可编辑，选中它（由 focusBlock 处理）
+          } else {
+            focusBlock(block.id)
+          }
+        }
+      }}
     >
       {/* 放置指示器 — before 位置 */}
       {isDropTarget && dragState.dropTarget?.position === 'before' && (
@@ -128,7 +141,7 @@ export function BlockContainer({
                 onClick={() => onToggleCollapse(block.id)}
                 title={collapsed ? '展开子块' : '折叠子块'}
               >
-                <span className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''}`}>▶</span>
+                <ChevronRight className={`wem-collapse-arrow ${collapsed ? 'collapsed' : ''} h-3.5 w-3.5`} />
               </button>
             )}
             {/* List 类型切换按钮 */}
@@ -139,7 +152,7 @@ export function BlockContainer({
                 title={block.block_type.ordered ? '切换为无序列表' : '切换为有序列表'}
                 tabIndex={-1}
               >
-                {block.block_type.ordered ? '≡' : '☰'}
+                {block.block_type.ordered ? <ListOrdered className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
               </button>
             )}
             {/* 拖拽手柄 */}
@@ -152,7 +165,7 @@ export function BlockContainer({
                 title="拖拽移动块"
                 tabIndex={-1}
               >
-                ⋮⋮
+                <GripVertical className="h-3.5 w-3.5" />
               </button>
             )}
           </div>

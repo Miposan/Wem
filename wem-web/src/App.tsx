@@ -4,6 +4,7 @@ import { type TocItem } from '@/components/layout'
 import { TabProvider, useTabStore } from '@/stores/tabStore'
 import { LayoutProvider, useLayoutStore } from '@/stores/layoutStore'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { ThemeProvider } from '@/theme'
 import { PanelContentRenderer } from '@/components/layout/panelRegistry'
 import EditorPage from '@/pages/EditorPage'
 
@@ -92,13 +93,15 @@ function AppInner() {
 
 function App() {
   return (
-    <LayoutProvider>
-      <TabProvider>
-        <TooltipProvider>
-          <AppInner />
-        </TooltipProvider>
-      </TabProvider>
-    </LayoutProvider>
+    <ThemeProvider>
+      <LayoutProvider>
+        <TabProvider>
+          <TooltipProvider>
+            <AppInner />
+          </TooltipProvider>
+        </TabProvider>
+      </LayoutProvider>
+    </ThemeProvider>
   )
 }
 

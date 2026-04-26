@@ -3,7 +3,7 @@ import { useTextBlock } from '../core/useTextBlock'
 
 /** 引用块 */
 export function BlockquoteBlock(props: TextBlockProps) {
-  const { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useTextBlock(props)
+  const { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd } = useTextBlock(props)
 
   return (
     <blockquote
@@ -14,6 +14,7 @@ export function BlockquoteBlock(props: TextBlockProps) {
       data-placeholder={props.placeholder || '引用…'}
       onInput={handleInput}
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       onCompositionStart={handleCompositionStart}
       onCompositionEnd={handleCompositionEnd}
     />

@@ -40,7 +40,7 @@ export function TabBar() {
   if (tabs.length === 0) return null
 
   return (
-    <div className="flex items-center border-b border-border bg-background/80 backdrop-blur-sm">
+    <div className="flex items-center border-b border-border/50 bg-background">
       <div
         ref={scrollRef}
         className="flex-1 flex overflow-x-auto scrollbar-none"
@@ -51,12 +51,12 @@ export function TabBar() {
             <ContextMenu key={tab.id}>
               <ContextMenuTrigger
                 className={`
-                  group flex items-center gap-1.5 px-3 h-9 min-w-[120px] max-w-[200px]
-                  border-r border-border cursor-pointer select-none
+                  group flex items-center gap-1.5 px-3 h-8 min-w-[120px] max-w-[200px]
+                  border-r border-border/30 cursor-pointer select-none
                   transition-colors text-sm
                   ${isActive
                     ? 'bg-background text-foreground'
-                    : 'bg-muted/30 text-muted-foreground hover:bg-muted/60'
+                    : 'bg-transparent text-muted-foreground hover:bg-accent/40'
                   }
                 `}
                 data-tab-id={tab.id}

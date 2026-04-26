@@ -1,25 +1,25 @@
 /* ═══════════════════════════════════════════════════
-   Wem Editor
-   发布级块编辑器样式：低干扰、清晰层级、稳定拖拽反馈
+   Wem Editor — Notion-inspired
+   内容优先、极低干扰、清晰的排版层级
    ═══════════════════════════════════════════════════ */
 
 .wem-editor-root {
-  --wem-editor-text: var(--foreground, #171717);
-  --wem-editor-muted: var(--muted-foreground, #737373);
-  --wem-editor-border: var(--border, #e5e5e5);
-  --wem-editor-soft: color-mix(in oklab, var(--muted, #f5f5f5) 70%, transparent);
-  --wem-editor-hover: color-mix(in oklab, var(--muted, #f5f5f5) 88%, transparent);
-  --wem-editor-selected: color-mix(in oklab, var(--primary, #111827) 10%, transparent);
-  --wem-editor-accent: var(--primary, #111827);
-  --wem-editor-radius: 10px;
-  --wem-gutter-width: 52px;
+  --wem-editor-text: var(--foreground);
+  --wem-editor-muted: var(--muted-foreground);
+  --wem-editor-border: var(--border);
+  --wem-editor-soft: color-mix(in oklab, var(--muted) 60%, transparent);
+  --wem-editor-hover: color-mix(in oklab, var(--muted) 80%, transparent);
+  --wem-editor-selected: color-mix(in oklab, var(--primary) 8%, transparent);
+  --wem-editor-accent: var(--primary);
+  --wem-editor-radius: 6px;
+  --wem-gutter-width: 48px;
 
   position: relative;
   min-height: 280px;
   padding-bottom: 40vh;
   color: var(--wem-editor-text);
   font-size: 16px;
-  line-height: 1.72;
+  line-height: 1.6;
   letter-spacing: -0.005em;
 }
 
@@ -27,14 +27,22 @@
 
 .wem-block-container {
   position: relative;
-  margin: 1px 0;
-  border-radius: 6px;
+  margin: 2px 0;
+  border-radius: var(--wem-editor-radius);
 }
+
+/* 标题块更大的块间间距 */
+.wem-block-container[data-heading-level="1"] { margin-top: 16px; }
+.wem-block-container[data-heading-level="2"] { margin-top: 12px; }
+.wem-block-container[data-heading-level="3"] { margin-top: 8px; }
+.wem-block-container[data-heading-level="4"] { margin-top: 5px; }
+.wem-block-container[data-heading-level="5"] { margin-top: 4px; }
+.wem-block-container[data-heading-level="6"] { margin-top: 3px; }
 
 .wem-block-content {
   position: relative;
-  border-radius: 6px;
-  transition: background-color 0.15s ease;
+  border-radius: var(--wem-editor-radius);
+  transition: background-color 0.1s ease;
 }
 
 .wem-block-editable {
@@ -55,12 +63,12 @@
 /* ─── contentEditable 通用 ─── */
 
 .wem-block-content [contenteditable] {
-  min-height: 1.72em;
+  min-height: 1.6em;
   outline: none;
   caret-color: currentColor;
   white-space: pre-wrap;
   word-break: break-word;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 .wem-block-content [contenteditable]:focus {
@@ -69,79 +77,87 @@
 
 .wem-block-content [contenteditable]:empty::before {
   content: attr(data-placeholder);
-  color: color-mix(in oklab, var(--wem-editor-muted) 80%, transparent);
+  color: color-mix(in oklab, var(--wem-editor-muted) 70%, transparent);
   pointer-events: none;
 }
 
+/* 聚焦态 — 极淡底色，Notion 风格 */
 .wem-block-container:focus-within > .wem-block-content {
-  background: color-mix(in oklab, var(--muted, #f5f5f5) 34%, transparent);
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
 }
 
+/* hover — 几乎不可见 */
 .wem-block-container:not(:focus-within):not(.wem-block-selected):hover > .wem-block-content {
-  background: color-mix(in oklab, var(--muted, #f5f5f5) 18%, transparent);
+  background: color-mix(in oklab, var(--muted) 14%, transparent);
 }
 
 /* ─── 段落 ─── */
 
 .wem-paragraph {
   margin: 0;
-  padding: 1px 0;
+  padding: 3px 0;
 }
 
-/* ─── 标题 ─── */
+/* ─── 标题 — Notion 风格：适度分隔，紧凑节奏 ─── */
 
 .wem-heading {
   margin: 0;
-  font-weight: 650;
-  line-height: 1.24;
+  font-weight: 600;
+  line-height: 1.3;
   letter-spacing: -0.025em;
   color: var(--wem-editor-text);
 }
 
-.wem-heading-1 { font-size: 2.05em; padding-top: 0.72em; padding-bottom: 0.18em; }
-.wem-heading-2 { font-size: 1.58em; padding-top: 0.62em; padding-bottom: 0.14em; }
-.wem-heading-3 { font-size: 1.28em; padding-top: 0.52em; padding-bottom: 0.1em; }
-.wem-heading-4 { font-size: 1.12em; padding-top: 0.42em; padding-bottom: 0.06em; }
-.wem-heading-5 { font-size: 1em; padding-top: 0.35em; padding-bottom: 0.04em; }
-.wem-heading-6 { font-size: 0.92em; padding-top: 0.3em; padding-bottom: 0.02em; color: var(--wem-editor-muted); }
+.wem-heading-1 { font-size: 1.875em; padding: 4px 0 3px; }
+.wem-heading-2 { font-size: 1.5em; padding: 3px 0 2px; }
+.wem-heading-3 { font-size: 1.25em; padding: 3px 0 2px; }
+.wem-heading-4 { font-size: 1.1em; padding: 2px 0 1px; }
+.wem-heading-5 { font-size: 1em; padding: 2px 0 1px; }
+.wem-heading-6 { font-size: 0.9em; padding: 2px 0 1px; color: var(--wem-editor-muted); }
 
 /* ─── 分隔线 ─── */
 
 .wem-thematic-break {
   border: none;
-  border-top: 1px solid var(--wem-editor-border);
-  margin: 14px 0;
+  border-top: 1px solid color-mix(in oklab, var(--wem-editor-border) 70%, transparent);
+  margin: 12px 0;
   cursor: default;
+  outline: none;
+}
+
+.wem-thematic-break:focus {
+  border-top-color: var(--wem-editor-accent);
 }
 
 /* ─── 引用块 ─── */
 
 .wem-blockquote {
-  margin: 6px 0;
-  padding: 2px 0 2px 14px;
-  border-left: 3px solid color-mix(in oklab, var(--wem-editor-muted) 55%, transparent);
-  color: color-mix(in oklab, var(--wem-editor-text) 72%, var(--wem-editor-muted));
+  margin: 4px 0;
+  padding: 4px 0 4px 14px;
+  border-left: 3px solid currentColor;
+  border-left-color: color-mix(in oklab, var(--wem-editor-text) 22%, transparent);
+  color: var(--wem-editor-text);
+  font-size: inherit;
 }
 
-/* ─── 代码块 ─── */
+/* ─── 代码块 — Notion 风格更轻 ─── */
 
 .wem-codeblock {
   position: relative;
-  margin: 10px 0;
+  margin: 6px 0;
   overflow: hidden;
-  border: 1px solid var(--wem-editor-border);
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--muted, #f5f5f5) 72%, var(--background, #fff));
-  box-shadow: 0 1px 0 color-mix(in oklab, var(--border, #e5e5e5) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--wem-editor-border) 80%, transparent);
+  border-radius: var(--wem-editor-radius);
+  background: color-mix(in oklab, var(--muted) 50%, var(--background));
 }
 
 .wem-codeblock-header {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  min-height: 30px;
-  padding: 4px 8px;
-  border-bottom: 1px solid color-mix(in oklab, var(--wem-editor-border) 70%, transparent);
+  min-height: 28px;
+  padding: 2px 8px;
+  border-bottom: 1px solid color-mix(in oklab, var(--wem-editor-border) 50%, transparent);
   user-select: none;
 }
 
@@ -149,7 +165,7 @@
   height: 22px;
   padding: 0 22px 0 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 4px;
   outline: none;
   background: transparent;
   color: var(--wem-editor-muted);
@@ -161,7 +177,7 @@
 
 .wem-codeblock-lang-select:hover {
   border-color: var(--wem-editor-border);
-  background: var(--background, #fff);
+  background: var(--background);
 }
 
 .wem-codeblock-lang-select:focus-visible {
@@ -172,7 +188,7 @@
   color: var(--wem-editor-muted);
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
 }
 
 /* 代码块折叠按钮 */
@@ -185,18 +201,18 @@
   padding: 0;
   margin-left: auto;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--wem-editor-muted);
   cursor: pointer;
   font-size: 10px;
   line-height: 1;
-  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease;
 }
 
 .wem-codeblock-collapse-btn:hover {
   border-color: var(--wem-editor-border);
-  background: var(--background, #fff);
+  background: var(--background);
   color: var(--wem-editor-text);
 }
 
@@ -208,7 +224,7 @@
 .wem-codeblock-collapse-hint {
   color: var(--wem-editor-muted);
   font-size: 11px;
-  opacity: 0.7;
+  opacity: 0.6;
   margin-left: 4px;
 }
 
@@ -218,8 +234,8 @@
 }
 
 .wem-codeblock-editor {
-  padding: 10px 0;
-  min-height: 1.72em;
+  padding: 8px 0;
+  min-height: 1.6em;
 }
 
 .wem-codeblock-editor .cm-editor {
@@ -244,10 +260,10 @@
 .wem-list-item {
   position: relative;
   margin: 0;
-  padding: 1px 0 1px 1.75em;
+  padding: 1px 0 1px 1.65em;
 }
 
-/* 列表引导线 — 每个 ListItem 左侧的细竖线 */
+/* 列表引导线 — 极淡 */
 .wem-block-container[data-block-type="listItem"] > .wem-block-children {
   position: relative;
 }
@@ -255,22 +271,22 @@
 .wem-block-container[data-block-type="listItem"] > .wem-block-children::before {
   content: '';
   position: absolute;
-  left: 0.55em;
+  left: 0.5em;
   top: 0;
   bottom: 0;
   width: 1px;
-  background: color-mix(in oklab, var(--wem-editor-border) 80%, transparent);
+  background: color-mix(in oklab, var(--wem-editor-border) 60%, transparent);
   transition: background-color 0.15s ease;
 }
 
 .wem-block-container[data-block-type="listItem"]:hover > .wem-block-children::before {
-  background: color-mix(in oklab, var(--wem-editor-muted) 60%, transparent);
+  background: color-mix(in oklab, var(--wem-editor-muted) 40%, transparent);
 }
 
 .wem-block-container[data-block-type="list"][data-list-ordered="false"] > .wem-block-children > .wem-block-container > .wem-block-content .wem-list-item::before {
   content: '•';
   position: absolute;
-  left: 0.42em;
+  left: 0.4em;
   color: var(--wem-editor-muted);
 }
 
@@ -286,25 +302,25 @@
   content: counter(wem-list-item) '.';
   position: absolute;
   left: 0;
-  min-width: 1.35em;
+  min-width: 1.3em;
   color: var(--wem-editor-muted);
   text-align: right;
 }
 
-/* ─── Gutter ─── */
+/* ─── Gutter — 更紧凑 ─── */
 
 .wem-block-gutter {
   position: absolute;
-  right: calc(100% + 6px);
-  top: 0.2em;
+  right: calc(100% + 5px);
+  top: 1px;
   height: 24px;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   opacity: 0;
   pointer-events: none;
-  transform: translateX(4px);
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transform: translateX(3px);
+  transition: opacity 0.1s ease, transform 0.1s ease;
   z-index: 3;
 }
 
@@ -321,32 +337,30 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 6px;
-  background: color-mix(in oklab, var(--background, #fff) 78%, transparent);
+  border-radius: 4px;
+  background: transparent;
   color: var(--wem-editor-muted);
   cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease;
 }
 
 .wem-gutter-btn:hover {
   border-color: var(--wem-editor-border);
-  background: var(--background, #fff);
+  background: var(--background);
   color: var(--wem-editor-text);
 }
 
-.wem-list-toggle-btn {
-  font-size: 12px;
-  letter-spacing: -1px;
+.wem-list-toggle-btn svg {
+  display: block;
 }
 
 .wem-collapse-arrow {
   display: inline-block;
+  flex-shrink: 0;
   transform: rotate(90deg);
   transition: transform 0.15s ease;
 }
@@ -358,7 +372,6 @@
 .wem-drag-handle {
   cursor: grab;
   user-select: none;
-  letter-spacing: -1px;
 }
 
 .wem-drag-handle:active {
@@ -376,17 +389,17 @@
 }
 
 .wem-block-container[data-block-type="listItem"] > .wem-block-children {
-  padding-left: 1.75em;
+  padding-left: 1.65em;
 }
 
 /* ─── 未知块 ─── */
 
 .wem-unknown-block {
-  margin: 6px 0;
-  padding: 10px 12px;
-  border: 1px dashed var(--wem-editor-border);
-  border-radius: 8px;
-  background: var(--wem-editor-soft);
+  margin: 4px 0;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in oklab, var(--wem-editor-border) 70%, transparent);
+  border-radius: var(--wem-editor-radius);
+  background: transparent;
 }
 
 /* ─── 选区 / 拖拽 ─── */
@@ -400,7 +413,7 @@
 }
 
 .wem-block-dragging {
-  opacity: 0.38;
+  opacity: 0.35;
 }
 
 .wem-drop-indicator {
@@ -438,67 +451,74 @@
 /* ─── 文本选区 ─── */
 
 .wem-editor-root ::selection {
-  background: color-mix(in oklab, var(--wem-editor-accent) 22%, transparent);
+  background: color-mix(in oklab, var(--wem-editor-accent) 16%, transparent);
 }
 
-/* ─── Inline Marks（预留） ─── */
+/* ─── Inline Marks ─── */
 
-.wem-editor-root strong { font-weight: 650; }
+.wem-editor-root strong { font-weight: 600; }
 .wem-editor-root em { font-style: italic; }
 .wem-editor-root u { text-decoration: underline; }
 .wem-editor-root s { text-decoration: line-through; }
 
 .wem-editor-root code {
-  padding: 0.12em 0.35em;
-  border-radius: 5px;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
   background: var(--wem-editor-soft);
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 0.88em;
+  color: var(--wem-editor-text);
 }
 
 .wem-editor-root a {
-  color: color-mix(in oklab, var(--primary, #111827) 88%, #2563eb);
+  color: var(--wem-editor-text);
   text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--wem-editor-text) 30%, transparent);
   text-underline-offset: 2px;
   cursor: pointer;
+  transition: text-decoration-color 0.1s ease;
 }
 
+.wem-editor-root a:hover {
+  text-decoration-color: var(--wem-editor-text);
+}
+
+/* ─── Dark mode overrides ─── */
+
 .dark .wem-editor-root {
-  --wem-editor-soft: color-mix(in oklab, var(--muted, #262626) 80%, transparent);
-  --wem-editor-hover: color-mix(in oklab, var(--muted, #262626) 92%, transparent);
-  --wem-editor-selected: color-mix(in oklab, var(--primary, #fafafa) 14%, transparent);
+  --wem-editor-soft: color-mix(in oklab, var(--muted) 65%, transparent);
+  --wem-editor-hover: color-mix(in oklab, var(--muted) 85%, transparent);
+  --wem-editor-selected: color-mix(in oklab, var(--primary) 10%, transparent);
 }
 
 .dark .wem-codeblock {
-  background: color-mix(in oklab, var(--muted, #262626) 82%, var(--background, #171717));
+  background: color-mix(in oklab, var(--muted) 55%, var(--background));
 }
 
 .dark .wem-gutter-btn,
 .dark .wem-codeblock-lang-select:hover {
-  background: color-mix(in oklab, var(--background, #171717) 78%, transparent);
+  background: color-mix(in oklab, var(--background) 70%, transparent);
 }
 
-/* 暗色模式列表引导线 */
 .dark .wem-block-container[data-block-type="listItem"] > .wem-block-children::before {
-  background: color-mix(in oklab, var(--border, #404040) 70%, transparent);
+  background: color-mix(in oklab, var(--border) 50%, transparent);
 }
 
-/* 暗色模式 CM6 适配 */
 .dark .wem-codeblock-editor .cm-editor {
-  color: var(--foreground, #e5e5e5);
+  color: var(--foreground);
 }
 
 .dark .wem-codeblock-editor .cm-gutters {
-  border-color: color-mix(in oklab, var(--border, #404040) 50%, transparent);
-  color: var(--muted-foreground, #a3a3a3);
+  border-color: color-mix(in oklab, var(--border) 40%, transparent);
+  color: var(--muted-foreground);
 }
 
 .dark .wem-codeblock-editor .cm-activeLineGutter {
-  background: color-mix(in oklab, var(--muted, #262626) 60%, transparent);
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
 }
 
 .dark .wem-codeblock-editor .cm-activeLine {
-  background: color-mix(in oklab, var(--muted, #262626) 30%, transparent);
+  background: color-mix(in oklab, var(--muted) 25%, transparent);
 }
 
 /* ─── 打印样式 ─── */

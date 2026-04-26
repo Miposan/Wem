@@ -394,11 +394,13 @@ fn batch_move_block(
 
     let parent_changed = target_parent != current.parent_id;
     if parent_changed {
-        if target_parent == id || repo::check_is_descendant(conn, id, &target_parent)
+        if target_parent == id {
+            return Err(AppError::BadRequest("不能将 Block 移动到自身下".to_string()));
+        }
+        if repo::check_is_descendant(conn, id, &target_parent)
             .map_err(|e| AppError::Internal(format!("检查后代关系失败: {}", e)))?
         {
-            return repo::get_version(conn, id)
-                .map_err(|e| AppError::Internal(format!("查询版本失败: {}", e)));
+            return Err(AppError::BadRequest("不能将 Block 移动到自身后代下".to_string()));
         }
 
         let parent_exists = repo::exists_normal(conn, &target_parent)
@@ -409,6 +411,13 @@ fn batch_move_block(
                 target_parent
             )));
         }
+
+        let target_parent_block = repo::find_by_id(conn, &target_parent)
+            .map_err(|_| AppError::BadRequest(format!(
+                "目标父块 {} 不存在或已删除", target_parent
+            )))?;
+        super::list::validate_parent_child_constraint(&target_parent_block, &current.block_type)?;
+        super::list::validate_list_child_type(&target_parent_block.block_type, &current.block_type)?;
     }
 
     let new_position = position::calculate_move_position(

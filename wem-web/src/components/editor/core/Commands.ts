@@ -18,6 +18,7 @@ import {
   findBlockById,
   insertAfter,
   insertAsFirstChild,
+  insertBefore,
   removeBlock,
   updateBlockInTree,
   replaceBlockInTree,
@@ -131,6 +132,51 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
       await ctx.refetchDocument()
     } catch (err) {
       console.error('[split] 退出列表失败，回滚:', err)
+      ctx.refetchDocument()
+    }
+    return
+  }
+
+  // ── Heading at offset 0: 在标题前插入空段落（Notion 行为）──
+  // 光标在标题开头按 Enter → 在标题上方创建空段落，标题内容不变
+  if (isHeading && offset === 0 && text.length > 0) {
+    const placeholderId = pendingBlockId()
+    const placeholder: BlockNode = {
+      id: placeholderId,
+      parent_id: block.parent_id,
+      block_type: { type: 'paragraph' },
+      content: '',
+      children: [],
+    }
+
+    ctx.setTreeSync((prev) => insertBefore(prev, targetId, placeholder))
+    requestAnimationFrame(() => focusBlock(placeholderId))
+
+    try {
+      const prevSib = findPrevSibling(tree, targetId)
+      const paragraph = prevSib
+        ? await createBlock({
+            parent_id: block.parent_id,
+            after_id: prevSib.id,
+            block_type: { type: 'paragraph' },
+            content: '',
+            editor_id: ctx.editorId,
+          })
+        : await createBlock({
+            parent_id: block.parent_id,
+            block_type: { type: 'paragraph' },
+            content: '',
+            editor_id: ctx.editorId,
+          }).then(async (p) => {
+            await moveBlock(p.id, { before_id: targetId, editor_id: ctx.editorId ?? '' })
+            return p
+          })
+
+      const realBlock: BlockNode = { ...paragraph, children: [] }
+      ctx.setTreeSync((prev) => replaceBlockInTree(prev, placeholderId, realBlock))
+      focusBlock(paragraph.id)
+    } catch (err) {
+      console.error('[split] 在标题前插入段落失败，回滚:', err)
       ctx.refetchDocument()
     }
     return
@@ -822,4 +868,12 @@ function findParentBlock(tree: BlockNode[], childId: string): BlockNode | null {
 function findParentListItem(tree: BlockNode[], listBlockId: string): BlockNode | null {
   const parent = findParentBlock(tree, listBlockId)
   return parent?.block_type.type === 'listItem' ? parent : null
+}
+
+/** 查找指定块在父级 children 中的前一个兄弟 */
+function findPrevSibling(tree: BlockNode[], blockId: string): BlockNode | null {
+  const parent = findParentBlock(tree, blockId)
+  const siblings = parent ? parent.children : tree
+  const idx = siblings.findIndex((s) => s.id === blockId)
+  return idx > 0 ? siblings[idx - 1] : null
 }

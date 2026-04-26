@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import type { BlockNode, BlockType } from '@/types/api'
 import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType } from '@/types/api'
 
@@ -238,7 +239,7 @@ function MenuItem({
         <span className="text-xs text-muted-foreground ml-4">{shortcut}</span>
       )}
       {hasSubmenu && (
-        <span className="text-xs text-muted-foreground ml-2">▶</span>
+        <ChevronRight className="h-3 w-3 text-muted-foreground ml-2" />
       )}
     </button>
   )

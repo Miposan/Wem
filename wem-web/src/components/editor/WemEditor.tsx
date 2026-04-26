@@ -20,7 +20,7 @@ import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
 import { getDocument, updateBlock, createBlock, deleteBlock, undoDocument, redoDocument } from '@/api/client'
 import { BlockTreeRenderer } from './components/BlockTreeRenderer'
-import { updateBlockInTree, removeBlock, flattenTree, findBlockById } from './core/BlockOperations'
+import { updateBlockInTree, removeBlock, flattenTree, findBlockById, insertAfter } from './core/BlockOperations'
 import { OperationQueue } from './core/OperationQueue'
 import {
   executeSplit,
@@ -585,6 +585,15 @@ export function WemEditor({
         return
       }
 
+      // 只在点击到编辑器底部空白区域（所有块之下）时才聚焦/创建段落
+      // 点击在块之间的空白区域（margin）不触发
+      const editorEl = (e.currentTarget as HTMLElement)
+      const lastChild = editorEl.querySelector(':scope > .wem-block-container:last-of-type')
+      if (lastChild) {
+        const lastRect = lastChild.getBoundingClientRect()
+        if (e.clientY < lastRect.bottom) return
+      }
+
       if (focusLastBlockIfParagraph()) return
       createParagraphFromBlank()
     },
@@ -642,15 +651,9 @@ export function WemEditor({
               editor_id: editorId,
             })
               .then((created) => {
-                const newBlock: BlockNode = { ...created, children: [] }
-                setTreeSync((prev) => {
-                  const flat = flattenTree(prev)
-                  const idx = flat.findIndex((b) => b.id === block.id)
-                  // 在原块同级后面插入副本
-                  const insertAfter = flat[idx]
-                  return insertBlockAfter(prev, insertAfter.id, newBlock)
-                })
-              })
+        const newBlock: BlockNode = { ...created, children: [] }
+        setTreeSync((prev) => insertAfter(prev, block.id, newBlock))
+      })
               .catch((err) => console.error('[context-menu] 复制块失败:', err))
           }
           break

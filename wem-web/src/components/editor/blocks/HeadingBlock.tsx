@@ -6,7 +6,7 @@ const HEADING_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const
 
 /** 标题块 (h1-h6) */
 export function HeadingBlock({ block, readonly, placeholder, ...rest }: TextBlockProps) {
-  const { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useTextBlock({ block, readonly, placeholder, ...rest })
+  const { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd } = useTextBlock({ block, readonly, placeholder, ...rest })
   const level = getHeadingLevel(block.block_type) ?? 2
   const Tag = HEADING_TAGS[level - 1] ?? 'h2'
 
@@ -19,6 +19,7 @@ export function HeadingBlock({ block, readonly, placeholder, ...rest }: TextBloc
       data-placeholder={placeholder || 'Heading'}
       onInput={handleInput}
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       onCompositionStart={handleCompositionStart}
       onCompositionEnd={handleCompositionEnd}
     />

@@ -12,7 +12,7 @@ import { useTextBlock } from '../core/useTextBlock'
  * - Backspace 在空块 → delete（退出列表）
  */
 export function ListItemBlock(props: TextBlockProps) {
-  const { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useTextBlock(props)
+  const { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd } = useTextBlock(props)
 
   return (
     <div
@@ -23,6 +23,7 @@ export function ListItemBlock(props: TextBlockProps) {
       data-placeholder={props.placeholder || '列表项…'}
       onInput={handleInput}
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       onCompositionStart={handleCompositionStart}
       onCompositionEnd={handleCompositionEnd}
     />

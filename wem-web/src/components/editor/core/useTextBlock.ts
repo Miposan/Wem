@@ -3,6 +3,11 @@ import { makeHeadingType, makeListType, makeCodeBlockType } from '@/types/api'
 import type { BlockType } from '@/types/api'
 import type { TextBlockProps } from './types'
 
+/** 空块按 Enter/Backspace 应转为 paragraph 而非删除的类型 */
+function shouldConvertWhenEmpty(blockType: string): boolean {
+  return blockType === 'heading' || blockType === 'blockquote'
+}
+
 /**
  * 文本块共享逻辑 hook
  *
@@ -41,6 +46,14 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.id])
+
+  // ── 粘贴 → 剥离格式，仅保留纯文本 ──
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const text = e.clipboardData.getData('text/plain')
+    if (!text) return
+    e.preventDefault()
+    document.execCommand('insertText', false, text)
+  }, [])
 
   const handleInput = useCallback(() => {
     // IME 组合输入中，跳过（等 compositionend 统一提交）
@@ -206,18 +219,21 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         e.preventDefault()
         if (block.block_type.type === 'listItem' && isEmpty) {
           onAction({ type: 'exit-list', blockId: block.id })
+        } else if (isEmpty && shouldConvertWhenEmpty(block.block_type.type)) {
+          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'paragraph' } as BlockType })
         } else {
           onAction({ type: 'split' })
         }
         return
       }
 
-      // Backspace at start of empty → 删除块
+      // Backspace at start of empty → 转换或删除块
       if (e.key === 'Backspace' && atStart && isEmpty) {
         e.preventDefault()
         if (block.block_type.type === 'listItem') {
-          // ListItem 空 → 先尝试反缩进（嵌套时提升层级），顶层时 exit-list 自动处理
           onAction({ type: 'outdent-list-item', blockId: block.id })
+        } else if (shouldConvertWhenEmpty(block.block_type.type)) {
+          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'paragraph' } as BlockType })
         } else {
           onAction({ type: 'delete', blockId: block.id })
         }
@@ -271,11 +287,13 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         return
       }
 
-      // Delete at end of empty → 删除块
+      // Delete at end of empty → 转换或删除块
       if (e.key === 'Delete' && atEnd && isEmpty) {
         e.preventDefault()
         if (block.block_type.type === 'listItem') {
           onAction({ type: 'exit-list', blockId: block.id })
+        } else if (shouldConvertWhenEmpty(block.block_type.type)) {
+          onAction({ type: 'convert-block', blockId: block.id, content: '', blockType: { type: 'paragraph' } as BlockType })
         } else {
           onAction({ type: 'delete', blockId: block.id })
         }
@@ -285,5 +303,5 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     [block.id, onAction, selectedBlockIds],
   )
 
-  return { ref, handleInput, handleKeyDown, handleCompositionStart, handleCompositionEnd }
+  return { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd }
 }

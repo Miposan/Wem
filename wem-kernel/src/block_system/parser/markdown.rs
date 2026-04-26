@@ -1103,11 +1103,6 @@ mod tests {
         (result.root, result.children)
     }
 
-    /// 辅助：根据 ID 在 children 中查找 Block
-    fn find_by_id<'a>(blocks: &'a [Block], id: &str) -> &'a Block {
-        blocks.iter().find(|b| b.id == id).expect("block not found")
-    }
-
     /// 辅助：根据 block_type 查找第一个匹配的 Block
     fn find_by_type<'a>(blocks: &'a [Block], bt: &BlockType) -> &'a Block {
         blocks.iter().find(|b| b.block_type == *bt).expect("block type not found")

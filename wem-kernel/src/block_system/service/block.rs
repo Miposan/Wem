@@ -662,11 +662,14 @@ pub fn move_block(db: &Db, id: &str, req: MoveBlockReq) -> Result<Block, AppErro
                 .to_string(),
         };
 
-        // 3. 自引用 / 后代引用 → 平铺模型下的合法位置调整（先平铺再建树）
-        if target_parent_id == id || repo::check_is_descendant(&conn, id, &target_parent_id)
+        // 3. 自引用 / 后代引用检测
+        if target_parent_id == id {
+            return Err(AppError::BadRequest("不能将 Block 移动到自身下".to_string()));
+        }
+        if repo::check_is_descendant(&conn, id, &target_parent_id)
             .map_err(|e| AppError::Internal(format!("检查后代关系失败: {}", e)))?
         {
-            return Ok(current);
+            return Err(AppError::BadRequest("不能将 Block 移动到自身后代下".to_string()));
         }
 
         // 4. 父块存在性检测

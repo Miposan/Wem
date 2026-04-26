@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { ChevronRight, Plus, X, Menu, PanelLeftClose } from 'lucide-react'
 import { listDocuments, createDocument, deleteDocument, getDocumentChildren } from '@/api/client'
 import { useTabStore } from '@/stores/tabStore'
 import type { Block } from '@/types/api'
@@ -113,8 +114,8 @@ function DocItem({
       <div
         className={`group flex items-center rounded-md text-sm transition-colors ${
           isActive
-            ? 'bg-accent text-accent-foreground font-medium'
-            : 'hover:bg-accent/50 text-foreground'
+            ? 'bg-accent/60 text-foreground'
+            : 'hover:bg-accent/30 text-foreground'
         }`}
         style={{ paddingLeft: `${depth * 16 + 8}px`, paddingRight: '4px' }}
         onMouseEnter={() => setHovering(true)}
@@ -125,9 +126,7 @@ function DocItem({
           onClick={(e) => { e.stopPropagation(); onToggle(node.doc.id) }}
           className="shrink-0 w-5 h-7 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
         >
-          <span className={`inline-block transition-transform text-xs ${isExpanded ? 'rotate-90' : ''}`}>
-            ▶
-          </span>
+          <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
         </button>
 
         {/* 文档图标 */}
@@ -150,14 +149,14 @@ function DocItem({
               className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-foreground rounded hover:bg-accent/80 transition-colors cursor-pointer"
               title="添加子文档"
             >
-              <span className="text-sm leading-none">+</span>
+              <Plus className="h-3 w-3" />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(node.doc.id) }}
               className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-red-500 rounded hover:bg-accent/80 transition-colors cursor-pointer"
               title="删除文档"
             >
-              <span className="text-xs leading-none">×</span>
+              <X className="h-3 w-3" />
             </button>
           </div>
         )}
@@ -280,10 +279,9 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
           <button
             onClick={handleCreateRoot}
             className="w-5 h-5 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer text-sm"
-            title="新建文档"
-          >
-            +
-          </button>
+            title="新建文档">
+	            <Plus className="h-3.5 w-3.5" />
+	          </button>
         </div>
         <DocTree
           loading={loading}
@@ -303,38 +301,35 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
   // ─── 收起状态 ───
   if (collapsed) {
     return (
-      <aside className="w-12 h-screen border-r border-border bg-muted/30 flex flex-col items-center pt-3 shrink-0">
+      <aside className="w-12 h-screen border-r border-border/40 bg-background flex flex-col items-center pt-3 shrink-0">
         <button
           onClick={() => setCollapsed(false)}
           className="w-8 h-8 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          title="展开侧边栏"
-        >
-          ≡
-        </button>
+          title="展开侧边栏">
+	          <Menu className="h-4 w-4" />
+	        </button>
       </aside>
     )
   }
 
   return (
-    <aside className="w-64 h-screen border-r border-border bg-muted/30 flex flex-col shrink-0">
+    <aside className="w-64 h-screen border-r border-border/40 bg-background flex flex-col shrink-0">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 h-12 border-b border-border">
-        <span className="font-semibold text-base tracking-tight">Wem</span>
+      <div className="flex items-center justify-between px-4 h-10 border-b border-border/30">
+        <span className="font-semibold text-sm tracking-tight text-foreground/70">Wem</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleCreateRoot}
             className="w-7 h-7 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer text-sm"
-            title="新建文档"
-          >
-            +
-          </button>
+            title="新建文档">
+	            <Plus className="h-3.5 w-3.5" />
+	          </button>
           <button
             onClick={() => setCollapsed(true)}
             className="w-7 h-7 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer text-xs"
-            title="收起侧边栏"
-          >
-            ◀
-          </button>
+            title="收起侧边栏">
+	            <PanelLeftClose className="h-4 w-4" />
+	          </button>
         </div>
       </div>
 
@@ -352,7 +347,7 @@ export function Sidebar({ activeId, onActiveChange, embedded }: SidebarProps) {
       />
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">
+      <div className="px-4 py-2 border-t border-border/30 text-[10px] text-muted-foreground/50">
         Wem Editor v0.1
       </div>
     </aside>

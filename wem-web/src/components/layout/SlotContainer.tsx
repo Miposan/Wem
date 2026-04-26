@@ -75,7 +75,7 @@ export function SlotContainer({ slot, children }: SlotContainerProps) {
   return (
     <div
       ref={slotRef}
-      className={`relative flex flex-col shrink-0 bg-muted/10 border-border ${borderClass} border transition-shadow`}
+      className={`relative flex flex-col shrink-0 bg-background border-border/40 ${borderClass} border`}
       style={{
         width: isVertical ? `${slotState.size}px` : '100%',
         height: slot === 'top' ? `${slotState.size}px` : '100%',

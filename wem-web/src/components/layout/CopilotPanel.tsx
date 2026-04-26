@@ -118,7 +118,7 @@ function ToolCallBubble({ toolCall }: { toolCall: ToolCallInfo }) {
         className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left hover:bg-accent/30 rounded transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        <span className={`transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+        <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <span className="font-mono text-muted-foreground">{toolCall.name}</span>
         {toolCall.status === 'running' && (
           <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />

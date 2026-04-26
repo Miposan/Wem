@@ -16,6 +16,7 @@
  * - Enter → 由 CM6 自行处理（自动换行，不触发 block split）
  */
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { EditorState, Compartment } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import { EditorView, keymap, placeholder as cmPlaceholder, lineNumbers } from '@codemirror/view'
@@ -190,7 +191,7 @@ export function CodeBlock({
           title={collapsed ? '展开代码块' : '折叠代码块'}
           tabIndex={-1}
         >
-          <span className={`wem-collapse-arrow${collapsed ? ' collapsed' : ''}`}>▶</span>
+          <ChevronRight className={`wem-collapse-arrow${collapsed ? ' collapsed' : ''} h-3 w-3`} />
         </button>
         {!collapsed && !readonly ? (
           <select

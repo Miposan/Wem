@@ -9,7 +9,9 @@
  */
 
 import { useState, useCallback } from 'react'
+import { Sun, Moon, Monitor } from 'lucide-react'
 import { useLayoutStore, type PanelConfig, type SlotPosition } from '@/stores/layoutStore'
+import { useTheme, type ThemeMode } from '@/theme'
 import { getPanelDefinition } from './panelRegistry'
 
 // ─── Props ───
@@ -64,22 +66,22 @@ function ActivityIcon({
       onDragStart={handleDragStart}
       onDragEnd={onDragEnd}
       className={`
-        group relative flex items-center justify-center h-11 w-11 rounded-lg p-0
+        group relative flex items-center justify-center h-10 w-10 rounded-md p-0
         border-none bg-transparent cursor-pointer outline-none
-        transition-[background-color,color,opacity,transform] duration-150
+        transition-[background-color,color,opacity] duration-100
         ${active
-          ? 'text-foreground bg-accent/50'
-          : 'text-muted-foreground hover:text-foreground hover:bg-accent/30'
+          ? 'text-foreground'
+          : 'text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent/50'
         }
-        ${dragging ? 'opacity-45 scale-95' : 'opacity-100'}
+        ${dragging ? 'opacity-40' : 'opacity-100'}
         focus-visible:ring-2 focus-visible:ring-ring
       `}
     >
       {/* active 指示条 */}
       <span
         className={`
-          absolute ${indicatorSide} top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full
-          bg-foreground transition-opacity
+          absolute ${indicatorSide} top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full
+          bg-foreground/70 transition-opacity
           ${active ? 'opacity-100' : 'opacity-0'}
         `}
       />
@@ -92,6 +94,7 @@ function ActivityIcon({
 
 export function ActivityBar({ side }: ActivityBarProps) {
   const { getAllSlotPanels, togglePanelToSlot, movePanel } = useLayoutStore()
+  const { mode, setMode } = useTheme()
   const [dragOver, setDragOver] = useState(false)
   const [draggingPanelId, setDraggingPanelId] = useState<string | null>(null)
 
@@ -132,6 +135,15 @@ export function ActivityBar({ side }: ActivityBarProps) {
     [movePanel, side],
   )
 
+  // ─── 主题切换（仅左侧活动栏底部显示） ───
+
+  const cycleTheme = useCallback(() => {
+    const next: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' }
+    setMode(next[mode])
+  }, [mode, setMode])
+
+  const ThemeIcon = mode === 'dark' ? Moon : mode === 'light' ? Sun : Monitor
+
   // ─── 渲染 ───
 
   const borderSide = side === 'left' ? 'border-r' : 'border-l'
@@ -140,10 +152,10 @@ export function ActivityBar({ side }: ActivityBarProps) {
     <div
       className={`
         relative h-full w-12 shrink-0 select-none flex flex-col items-center
-        border-border ${borderSide}
-        bg-sidebar/80 backdrop-blur-sm
+        border-border/50 ${borderSide}
+        bg-background
         transition-colors duration-150
-        ${dragOver ? 'bg-primary/10' : ''}
+        ${dragOver ? 'bg-accent' : ''}
       `}
       aria-label={side === 'left' ? '左侧活动栏' : '右侧活动栏'}
       onDragOver={handleDragOver}
@@ -172,6 +184,24 @@ export function ActivityBar({ side }: ActivityBarProps) {
       {/* 空侧占位提示 */}
       {sidePanels.length === 0 && (
         <div className="mt-2 h-10 w-10 rounded-lg border border-dashed border-border/80 opacity-60" aria-hidden="true" />
+      )}
+
+      {/* 底部：主题切换（仅左侧） */}
+      {side === 'left' && (
+        <div className="mt-auto pb-2">
+          <button
+            type="button"
+            title={`主题: ${mode === 'system' ? '跟随系统' : mode === 'dark' ? '暗色' : '亮色'}`}
+            onClick={cycleTheme}
+            className="flex items-center justify-center h-10 w-10 rounded-lg
+              text-muted-foreground/50 hover:text-muted-foreground hover:bg-accent/40
+              border-none bg-transparent cursor-pointer outline-none
+              transition-[background-color,color] duration-150
+              focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ThemeIcon className="h-5 w-5 shrink-0" />
+          </button>
+        </div>
       )}
 
       {/* Drop 指示器 */}
