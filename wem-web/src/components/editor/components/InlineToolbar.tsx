@@ -167,6 +167,9 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
       const editable = anchorEl?.closest('[contenteditable="true"]') as HTMLElement | null
       if (!editable) return
 
+      // 标记跳过 handleInput 的重复 onContentChange
+      editable.dataset.skipInput = '1'
+
       if ('action' in fmt && fmt.action === 'clear') {
         removeAllFormats(editable)
       } else if ('command' in fmt && fmt.command) {

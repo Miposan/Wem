@@ -350,10 +350,13 @@ export function WemEditor({
     // Debounce 保存到后端
     const timer = setTimeout(async () => {
       pendingTimers.current.delete(blockId)
+      // 从 treeRef 读取最新 content，防止 SSE 在 debounce 期间更新了同一块后被闭包旧值覆盖
+      const latest = findBlockById(treeRef.current, blockId)
+      const latestContent = latest?.content ?? content
       const editorId = crypto.randomUUID()
       addPendingOperationId(editorId)
       try {
-        await updateBlock(blockId, { content, editor_id: editorId })
+        await updateBlock(blockId, { content: latestContent, editor_id: editorId })
       } catch (err) {
         console.error('自动保存失败:', err)
       }
@@ -364,12 +367,15 @@ export function WemEditor({
     saves.set(blockId, timer)
   }, [setTreeAsync, addPendingOperationId])
 
-  // 清理定时器
+  // 清理定时器 + SSE 批量 rAF
   useEffect(() => {
     const timers = pendingTimers.current
     return () => {
       timers.forEach((t) => clearTimeout(t))
       timers.clear()
+      if (sseUpdateBatch.current.rafId != null) {
+        cancelAnimationFrame(sseUpdateBatch.current.rafId)
+      }
     }
   }, [])
 

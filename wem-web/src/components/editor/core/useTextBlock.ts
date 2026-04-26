@@ -112,6 +112,12 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     const el = ref.current
     if (!el) return
 
+    // InlineToolbar applyFormat 的 DOM 操作也会触发 input 事件
+    if (el.dataset.skipInput) {
+      delete el.dataset.skipInput
+      return
+    }
+
     onContentChange(block.id, domToMarkdown(el))
 
     // 斜杠命令：首次输入 / 触发菜单

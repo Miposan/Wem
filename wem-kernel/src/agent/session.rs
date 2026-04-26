@@ -84,7 +84,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: String::new(),
             temperature: 0.3,
             max_steps: 50,
             allowed_tools: vec![],

@@ -843,7 +843,8 @@ export async function executeExitCodeBlock(
 /**
  * DeleteRange — 批量删除选区中的多个块
  *
- * 一次性从 UI 树中移除所有目标块，聚焦到被删范围之前的块。
+ * 先乐观更新 UI（立即消失），再并行发 API 删除。
+ * 聚焦到被删范围之前的块。
  */
 export async function executeDeleteRange(
   ctx: CommandContext,
@@ -860,10 +861,8 @@ export async function executeDeleteRange(
   for (const id of blockIds) {
     ctx.cancelPendingSave(id)
   }
-  for (const id of blockIds) {
-    await deleteBlock(id, ctx.editorId)
-  }
 
+  // 乐观更新：立即从 UI 移除
   ctx.setTreeSync((prev) => removeBlocks(prev, new Set(blockIds)))
 
   // 聚焦到被删范围之前的块
@@ -879,6 +878,9 @@ export async function executeDeleteRange(
     const flat = flattenTree(ctx.getTree())
     if (flat.length > 0) focusBlock(flat[0].id, 0)
   }
+
+  // 后台并行删除
+  await Promise.all(blockIds.map((id) => deleteBlock(id, ctx.editorId).catch(() => {})))
 }
 
 /**

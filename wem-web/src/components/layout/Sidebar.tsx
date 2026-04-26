@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, memo } from 'react'
 import { ChevronRight, Plus, X, Menu, PanelLeftClose } from 'lucide-react'
 import { listDocuments, createDocument, deleteDocument, getDocumentChildren } from '@/api/client'
 import { useTabStore } from '@/stores/tabStore'
@@ -94,7 +94,7 @@ function updateDocTitle(tree: DocTreeNode[], id: string, title: string): DocTree
 
 // ─── 文档项组件 ───
 
-function DocItem({
+const DocItem = memo(function DocItem({
   node,
   depth,
   activeId,
@@ -117,7 +117,6 @@ function DocItem({
   const isExpanded = expandedIds.has(node.doc.id)
   const title = node.doc.content || '无标题'
   const icon = (node.doc.properties?.icon as string) || '📄'
-  const [hovering, setHovering] = useState(false)
 
   return (
     <div>
@@ -128,8 +127,6 @@ function DocItem({
             : 'hover:bg-accent/30 text-foreground'
         }`}
         style={{ paddingLeft: `${depth * 16 + 8}px`, paddingRight: '4px' }}
-        onMouseEnter={() => setHovering(true)}
-        onMouseLeave={() => setHovering(false)}
       >
         {/* 展开/折叠箭头 */}
         <button
@@ -151,25 +148,23 @@ function DocItem({
           {title}
         </button>
 
-        {/* 操作按钮（hover 显示） */}
-        {hovering && (
-          <div className="shrink-0 flex items-center gap-0.5">
-            <button
-              onClick={(e) => { e.stopPropagation(); onCreateChild(node.doc.id) }}
-              className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-foreground rounded hover:bg-accent/80 transition-colors cursor-pointer"
-              title="添加子文档"
-            >
-              <Plus className="h-3 w-3" />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onDelete(node.doc.id) }}
-              className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-red-500 rounded hover:bg-accent/80 transition-colors cursor-pointer"
-              title="删除文档"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        )}
+        {/* 操作按钮（CSS group-hover 显示，无需 JS state） */}
+        <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => { e.stopPropagation(); onCreateChild(node.doc.id) }}
+            className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-foreground rounded hover:bg-accent/80 transition-colors cursor-pointer"
+            title="添加子文档"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(node.doc.id) }}
+            className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-red-500 rounded hover:bg-accent/80 transition-colors cursor-pointer"
+            title="删除文档"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
       {/* 子文档 */}
@@ -192,7 +187,7 @@ function DocItem({
       )}
     </div>
   )
-}
+})
 
 // ─── 主侧边栏组件 ───
 

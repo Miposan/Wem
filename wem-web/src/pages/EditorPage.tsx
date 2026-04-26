@@ -153,7 +153,8 @@ export default function EditorPage({ documentId, onTocItemsChange, onNavigate }:
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
-                const firstBlock = document.querySelector('[data-block-id] [contenteditable]') as HTMLElement | null
+                const editor = (e.currentTarget as HTMLElement).closest('.flex-1.flex.flex-col')
+                const firstBlock = editor?.querySelector('[data-block-id] [contenteditable]') as HTMLElement | null
                 firstBlock?.focus()
               }
             }}

@@ -223,6 +223,15 @@ export function useCopilotSession() {
         // 静默
       }
 
+      // 清理缓存（先于 setState，防止 persistCache debounce 覆盖）
+      const cache = loadCache()
+      delete cache.messages[id]
+      cache.sessions = cache.sessions.filter((s) => s.id !== id)
+      saveCache(cache)
+
+      // 取消 pending 的 persist，避免用旧数据写回已删除的会话
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+
       // 更新 state
       setSessions((prev) => {
         const next = prev.filter((s) => s.id !== id)
@@ -236,12 +245,6 @@ export function useCopilotSession() {
         }
         return next
       })
-
-      // 清理缓存
-      const cache = loadCache()
-      delete cache.messages[id]
-      cache.sessions = cache.sessions.filter((s) => s.id !== id)
-      saveCache(cache)
     },
     [activeId, loadMessages],
   )
@@ -314,62 +317,101 @@ export function useCopilotSession() {
 
   const sendMessage = useCallback(
     (text: string) => {
-      if (!text.trim() || !activeId || isLoading) return
+      if (!text.trim() || isLoading) return
 
-      const userMsg: ChatMessage = {
-        id: genId(),
-        role: 'user',
-        content: text.trim(),
-        toolCalls: [],
-        status: 'done',
-      }
+      const doSend = (sessionId: string) => {
+        const userMsg: ChatMessage = {
+          id: genId(),
+          role: 'user',
+          content: text.trim(),
+          toolCalls: [],
+          status: 'done',
+        }
 
-      const asstId = genId()
-      assistantIdRef.current = asstId
-      const assistantMsg: ChatMessage = {
-        id: asstId,
-        role: 'assistant',
-        content: '',
-        toolCalls: [],
-        status: 'pending',
-      }
+        const asstId = genId()
+        assistantIdRef.current = asstId
+        const assistantMsg: ChatMessage = {
+          id: asstId,
+          role: 'assistant',
+          content: '',
+          toolCalls: [],
+          status: 'pending',
+        }
 
-      setMessages((prev) => [...prev, userMsg, assistantMsg])
-      setIsLoading(true)
+        setMessages((prev) => [...prev, userMsg, assistantMsg])
+        setIsLoading(true)
 
-      const controller = chatStream(
-        activeId,
-        text.trim(),
-        (event) => {
-          // 首次收到事件 → streaming
-          if (event.type === 'text_delta') {
+        const controller = chatStream(
+          sessionId,
+          text.trim(),
+          (event) => {
+            if (event.type === 'text_delta') {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === asstId && m.status === 'pending'
+                    ? { ...m, status: 'streaming' }
+                    : m,
+                ),
+              )
+            }
+            handleAgentEvent(event, asstId)
+          },
+          async (error) => {
+            // 会话不存在（后端重启等）→ 自动重建并重试
+            if (error.message.includes('Agent chat failed: 404')) {
+              setMessages((prev) =>
+                prev.filter((m) => m.id !== userMsg.id && m.id !== asstId),
+              )
+              try {
+                const newId = await createSession()
+                const info: SessionInfo = { id: newId, title: '新对话', updatedAt: Date.now() }
+                setSessions((prev) => [info, ...prev])
+                setActiveId(newId)
+                const cache = loadCache()
+                cache.sessions.unshift(info)
+                cache.messages[newId] = []
+                saveCache(cache)
+                doSend(newId)
+              } catch {
+                setIsLoading(false)
+              }
+              return
+            }
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === asstId && m.status === 'pending'
-                  ? { ...m, status: 'streaming' }
-                  : m,
+                m.id === asstId ? { ...m, status: 'error', error: error.message } : m,
               ),
             )
-          }
-          handleAgentEvent(event, asstId)
-        },
-        (error) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === asstId ? { ...m, status: 'error', error: error.message } : m,
-            ),
-          )
-          setIsLoading(false)
-        },
-        () => {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === asstId ? { ...m, status: 'done' } : m)),
-          )
-          setIsLoading(false)
-        },
-      )
+            setIsLoading(false)
+          },
+          () => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === asstId ? { ...m, status: 'done' } : m)),
+            )
+            setIsLoading(false)
+          },
+        )
 
-      abortRef.current = controller
+        abortRef.current = controller
+      }
+
+      if (activeId) {
+        doSend(activeId)
+      } else {
+        // 没有活跃会话 → 先创建再发送
+        createSession().then((id) => {
+          const info: SessionInfo = { id, title: '新对话', updatedAt: Date.now() }
+          setSessions((prev) => [info, ...prev])
+          setActiveId(id)
+          const cache = loadCache()
+          cache.sessions.unshift(info)
+          cache.messages[id] = []
+          saveCache(cache)
+          doSend(id)
+        }).catch((err) => {
+          console.error('[Copilot] 创建会话失败:', err)
+        })
+      }
     },
     [activeId, isLoading, handleAgentEvent],
   )

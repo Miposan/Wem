@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType } from '@/types/api'
 import type { BlockType } from '@/types/api'
 
@@ -62,6 +62,8 @@ export function SlashMenuProvider({ children }: { children: ReactNode }) {
   })
 
   const filteredItems = useMemo(() => filterItems(state.filter), [state.filter])
+  const filteredCountRef = useRef(filteredItems.length)
+  filteredCountRef.current = filteredItems.length
 
   const trigger = useCallback((params: { blockId: string; x: number; y: number; slashOffset: number }) => {
     setState({ visible: true, x: params.x, y: params.y, blockId: params.blockId, slashOffset: params.slashOffset, filter: '', selectedIndex: 0 })
@@ -77,7 +79,7 @@ export function SlashMenuProvider({ children }: { children: ReactNode }) {
 
   const navigate = useCallback((direction: 'up' | 'down') => {
     setState((prev) => {
-      const max = filterItems(prev.filter).length - 1
+      const max = filteredCountRef.current - 1
       return { ...prev, selectedIndex: direction === 'up' ? Math.max(0, prev.selectedIndex - 1) : Math.min(max, prev.selectedIndex + 1) }
     })
   }, [])
