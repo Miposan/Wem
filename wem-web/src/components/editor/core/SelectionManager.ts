@@ -10,7 +10,7 @@
  * 3. 通过 block ID + offset 定位，不依赖 DOM 结构
  */
 
-import { domToMarkdown, inlineMarkdownToHtml } from './InlineParser'
+import { domToMarkdown, inlineMarkdownToHtml, renderMathInElement } from './InlineParser'
 
 /** 查找 block 对应的 contentEditable 元素（排除 contenteditable="false" 的折叠按钮等） */
 export function findEditable(blockId: string): HTMLElement | null {
@@ -38,6 +38,7 @@ export function syncBlockContent(blockId: string, content: string): void {
   const el = findEditable(blockId)
   if (!el) return
   el.innerHTML = inlineMarkdownToHtml(content)
+  renderMathInElement(el)
 }
 
 /**

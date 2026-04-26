@@ -250,27 +250,58 @@ export function WemEditor({
     [refetchDocument],
   )
 
+  // ─── SSE block_updated 批量化 ───
+  //
+  // AI 流式写入时 block_updated 事件可能每秒数十次。
+  // 将同一 animation frame 内的所有更新攒到 pending map，下一帧一次性合并。
+  // 同一块多次更新只保留最新值，只触发一次 React state 更新 + DOM sync。
+
+  const sseUpdateBatch = useRef<{
+    updates: Map<string, BlockUpdatedEvent>
+    rafId: number | null
+  }>({ updates: new Map(), rafId: null })
+
+  const flushSSEUpdates = useCallback(() => {
+    const batch = sseUpdateBatch.current
+    batch.rafId = null
+    const { updates } = batch
+    if (updates.size === 0) return
+
+    batch.updates = new Map()
+
+    setTreeAsync((prev) => {
+      let tree = prev
+      for (const [_, event] of updates) {
+        tree = updateBlockInTree(tree, event.id, {
+          content: event.content,
+          block_type: event.block_type,
+          properties: event.properties,
+          version: event.version,
+          modified: event.modified,
+        })
+      }
+      return tree
+    })
+
+    // DOM sync：正在编辑的块不覆盖，避免 SSE 回声重置光标
+    for (const [_, event] of updates) {
+      const el = findEditable(event.id)
+      if (!el || document.activeElement !== el) {
+        syncBlockContent(event.id, event.content)
+      }
+    }
+  }, [setTreeAsync])
+
   useDocumentSSE(documentId, {
-    // 块内容更新：增量合并到 tree + 同步 contentEditable DOM
-    // 注意：后端 serde(flatten) 将 block 字段展平到事件顶层，直接用 event.id 访问
     onBlockUpdated: useCallback(
       (event: BlockUpdatedEvent) => {
-        setTreeAsync((prev) =>
-          updateBlockInTree(prev, event.id, {
-            content: event.content,
-            block_type: event.block_type,
-            properties: event.properties,
-            version: event.version,
-            modified: event.modified,
-          }),
-        )
-        // 正在编辑的块不覆盖 DOM，避免 SSE 回声重置光标
-        const el = findEditable(event.id)
-        if (!el || document.activeElement !== el) {
-          syncBlockContent(event.id, event.content)
+        const batch = sseUpdateBatch.current
+        batch.updates.set(event.id, event)
+        if (!batch.rafId) {
+          batch.rafId = requestAnimationFrame(flushSSEUpdates)
         }
       },
-      [setTreeAsync],
+      [flushSSEUpdates],
     ),
     // 结构性变更：基于 editor_id 去重
     onBlockCreated: handleStructuralEvent,

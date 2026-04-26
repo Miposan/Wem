@@ -35,6 +35,9 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
   // ── IME 组合输入守卫 ──
   const isComposing = useRef(false)
 
+  // format 快捷键已主动调用 onContentChange，需跳过后续 input 事件触发的重复调用
+  const skipInput = useRef(false)
+
   const handleCompositionStart = useCallback(() => {
     isComposing.current = true
   }, [])
@@ -105,6 +108,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
   const handleInput = useCallback(() => {
     if (isComposing.current) return
+    if (skipInput.current) { skipInput.current = false; return }
     const el = ref.current
     if (!el) return
 
@@ -167,6 +171,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         const execCommands: Record<string, string> = { b: 'bold', i: 'italic', u: 'underline' }
         if (execCommands[e.key]) {
           e.preventDefault()
+          skipInput.current = true
           document.execCommand(execCommands[e.key])
           normalizeInline(el)
           onContentChange(block.id, domToMarkdown(el))
@@ -174,18 +179,21 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         }
         if (e.key === 'e' && !e.shiftKey) {
           e.preventDefault()
+          skipInput.current = true
           toggleInlineWrap(el, 'code')
           onContentChange(block.id, domToMarkdown(el))
           return
         }
         if (e.shiftKey && e.key === 'H') {
           e.preventDefault()
+          skipInput.current = true
           toggleInlineWrap(el, 'mark')
           onContentChange(block.id, domToMarkdown(el))
           return
         }
         if (e.key === 'm') {
           e.preventDefault()
+          skipInput.current = true
           toggleInlineWrap(el, 'span', 'inline-math')
           renderMathInElement(el)
           onContentChange(block.id, domToMarkdown(el))
@@ -194,6 +202,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         // Ctrl+\ → clear all formatting
         if (e.key === '\\') {
           e.preventDefault()
+          skipInput.current = true
           removeAllFormats(el)
           normalizeInline(el)
           onContentChange(block.id, domToMarkdown(el))

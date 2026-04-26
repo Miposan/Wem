@@ -57,6 +57,7 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
   const [visible, setVisible] = useState(false)
   const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set())
   const [flipDown, setFlipDown] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
   const rootRef = useRef<HTMLElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
 
@@ -95,17 +96,8 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
     const left = rect.left + rect.width / 2
 
     setFlipDown(fd)
+    setPos({ top, left })
     setVisible(true)
-
-    // Position directly via DOM (bypass React for immediate paint)
-    requestAnimationFrame(() => {
-      const el = toolbarRef.current
-      if (el) {
-        el.style.top = `${top}px`
-        el.style.left = `${left}px`
-        el.classList.toggle('flip-down', fd)
-      }
-    })
   }, [])
 
   /** Directly update toolbar position from current selection rect (no React render) */
@@ -202,7 +194,7 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
     <div
       ref={toolbarRef}
       className={`wem-inline-toolbar${flipDown ? ' flip-down' : ''}`}
-      style={{ position: 'fixed' }}
+      style={{ position: 'fixed', top: pos.top, left: pos.left }}
       onMouseDown={e => e.preventDefault()}
     >
       {GROUPS.map((group, gi) => (

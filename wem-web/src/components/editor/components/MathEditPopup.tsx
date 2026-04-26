@@ -32,15 +32,11 @@ export function MathEditPopup({ onContentChange }: MathEditPopupProps) {
     const { element: el, originalSource } = data
     if (!el.parentElement || currentSource === originalSource) return
 
+    // Capture before renderMathSpan may remove el from DOM
     const editable = el.closest('[contenteditable="true"]') as HTMLElement | null
-    const blockEl = el.closest('[data-block-id]')
-    const blockId = blockEl?.getAttribute('data-block-id')
+    const blockId = el.closest('[data-block-id]')?.getAttribute('data-block-id')
 
-    if (currentSource) {
-      renderMathSpan(el, currentSource)
-    } else {
-      renderMathSpan(el, '')
-    }
+    renderMathSpan(el, currentSource || '')
 
     if (blockId && editable) {
       onContentChange(blockId, domToMarkdown(editable))

@@ -326,11 +326,17 @@ export function toggleInlineWrap(el: HTMLElement, tagName: string, className?: s
 export function removeAllFormats(el: HTMLElement): void {
   document.execCommand('removeFormat')
 
-  const unwrapTags = 'mark,code,span.inline-math,span[data-type="inline-math"]'
-  el.querySelectorAll(unwrapTags).forEach((inner) => {
+  el.querySelectorAll('mark,code,span.inline-math,span[data-type="inline-math"]').forEach((inner) => {
     const parent = inner.parentNode!
-    while (inner.firstChild) parent.insertBefore(inner.firstChild, inner)
-    parent.removeChild(inner)
+    // Restore LaTeX source text for rendered math spans
+    const latex = (inner as HTMLElement).getAttribute('data-content')
+    if (latex) {
+      const textNode = document.createTextNode(latex)
+      parent.replaceChild(textNode, inner)
+    } else {
+      while (inner.firstChild) parent.insertBefore(inner.firstChild, inner)
+      parent.removeChild(inner)
+    }
   })
 }
 
@@ -338,6 +344,7 @@ export function removeAllFormats(el: HTMLElement): void {
 
 /** Re-render a single inline-math element with updated LaTeX source */
 export function renderMathSpan(el: HTMLElement, latex: string): void {
+  if (!el.parentElement) return
   if (latex) {
     el.setAttribute('data-content', latex)
     try {
@@ -347,7 +354,7 @@ export function renderMathSpan(el: HTMLElement, latex: string): void {
       el.textContent = latex
     }
   } else {
-    el.parentNode!.replaceChild(document.createTextNode(''), el)
+    el.parentElement.replaceChild(document.createTextNode(''), el)
   }
 }
 
