@@ -1129,3 +1129,212 @@
     display: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════
+   TableBlock
+   ═══════════════════════════════════════════════════ */
+
+/*
+ * TableBlock — 飞书风格骑跨线悬浮插入指示器
+ *
+ *  .wem-tableblock             ← flex column layout
+ *    .wem-tableblock-outer     ← 悬浮检测区域 (position: relative)
+ *      .wem-tableblock-wrapper ← table 容器
+ *        <table>
+ *      .wem-tableblock-hline   ← 行插入水平辅助线
+ *      .wem-tableblock-vline   ← 列插入垂直辅助线
+ *      .wem-tableblock-plus    ← "+" 插入按钮
+ */
+
+.wem-tableblock {
+  position: relative;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.wem-tableblock-outer {
+  position: relative;
+  padding: 24px; /* 为外围悬浮检测和 "+" 按钮留空间 */
+}
+
+.wem-tableblock-wrapper {
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 6px;
+  overflow: auto;
+}
+
+/* ─── 表格 ─── */
+
+.wem-tableblock-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+  table-layout: fixed;
+}
+
+.wem-tableblock-table th,
+.wem-tableblock-table td {
+  border-right: 1px solid var(--border, #e5e5e5);
+  border-bottom: 1px solid var(--border, #e5e5e5);
+  padding: 0;
+  min-width: 50px;
+}
+
+.wem-tableblock-table th:last-of-type,
+.wem-tableblock-table td:last-of-type { border-right: none; }
+.wem-tableblock-table tbody tr:last-of-type td { border-bottom: none; }
+
+.wem-tableblock-resizing,
+.wem-tableblock-resizing .wem-tableblock-cell-input {
+  cursor: col-resize !important;
+}
+
+.wem-tableblock-header {
+  background: color-mix(in oklab, var(--muted, #f5f5f5) 60%, var(--background, #fff));
+  font-weight: 500;
+}
+
+.wem-tableblock-selected {
+  background: color-mix(in oklab, var(--accent-strong, #3370ff) 12%, transparent) !important;
+}
+
+.wem-tableblock-selected .wem-tableblock-cell-input {
+  background: transparent !important;
+}
+
+/* ─── 单元格输入 ─── */
+
+.wem-tableblock-cell-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 5px 10px;
+  font: inherit;
+  color: inherit;
+  line-height: inherit;
+  box-sizing: border-box;
+  resize: none;
+  overflow: hidden;
+  display: block;
+}
+
+.wem-tableblock-cell-input:focus {
+  background: color-mix(in oklab, var(--accent, rgba(0,0,0,0.04)) 50%, transparent);
+}
+
+.wem-tableblock-cell-input::placeholder { color: transparent; }
+.wem-tableblock-cell-input:focus::placeholder { color: var(--color-text-4, #ccc); }
+.wem-tableblock-header .wem-tableblock-cell-input { font-weight: 500; }
+.wem-tableblock-cell-input[readonly] { cursor: default; }
+
+/* ─── 骑跨线辅助线 ─── */
+
+.wem-tableblock-hline {
+  position: absolute;
+  height: 2px;
+  background: var(--accent-strong, #3370ff);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 10;
+  animation: wem-tableblock-line-in 0.12s ease-out;
+}
+
+.wem-tableblock-vline {
+  position: absolute;
+  width: 2px;
+  background: var(--accent-strong, #3370ff);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 10;
+  animation: wem-tableblock-line-in 0.12s ease-out;
+}
+
+@keyframes wem-tableblock-line-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ─── "+" 插入按钮 ─── */
+
+.wem-tableblock-plus {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-strong, #3370ff);
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+  z-index: 11;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  transition: transform 0.12s, box-shadow 0.12s;
+  animation: wem-tableblock-plus-in 0.15s ease-out;
+}
+
+.wem-tableblock-plus:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(51, 112, 255, 0.35);
+}
+
+@keyframes wem-tableblock-plus-in {
+  from { opacity: 0; transform: scale(0.6); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* ─── 右键菜单 ─── */
+
+.wem-tableblock-ctx {
+  z-index: 9999;
+  background: var(--popover, #fff);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px 0;
+  min-width: 170px;
+}
+
+.wem-tableblock-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--popover-foreground, #333);
+  font-size: 0.85em;
+  cursor: pointer;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.wem-tableblock-ctx-item:hover { background: var(--accent, rgba(0,0,0,0.06)); }
+.wem-tableblock-ctx-item.destructive { color: var(--destructive, #dc3545); }
+.wem-tableblock-ctx-item.destructive:hover { background: color-mix(in oklab, var(--destructive, #dc3545) 10%, transparent); }
+.wem-tableblock-ctx-sep { height: 1px; background: var(--border, #e5e5e5); margin: 4px 0; }
+
+.wem-tableblock-delete {
+  display: block;
+  margin-top: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-3, #999);
+  font-size: 0.8em;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.wem-tableblock-delete:hover {
+  background: var(--accent, rgba(0,0,0,0.06));
+  color: var(--color-text-1, #333);
+}

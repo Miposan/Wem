@@ -115,6 +115,11 @@ impl<'a> LineScanner<'a> {
         self.lines.get(self.pos).copied()
     }
 
+    /// 前方第 n 行的内容（不消费）
+    fn peek_at(&self, offset: usize) -> Option<&'a str> {
+        self.lines.get(self.pos + offset).copied()
+    }
+
     /// 消费并返回当前行
     fn advance(&mut self) -> Option<&'a str> {
         let line = self.lines.get(self.pos).copied();
@@ -275,6 +280,31 @@ fn is_thematic_break(line: &str) -> bool {
 
 fn is_blockquote(line: &str) -> bool {
     line.trim_start().starts_with('>')
+}
+
+/// 判断一行是否为 markdown 表格的分隔行（如 `|---|---|`）
+fn is_table_delimiter(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return false;
+    }
+    let inner = trimmed[1..trimmed.len() - 1].trim();
+    if inner.is_empty() {
+        return false;
+    }
+    // 每个单元格段必须是 --- 或 :--: 等形式
+    inner.split('|').all(|cell| {
+        let c = cell.trim();
+        c.len() >= 3
+            && c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
+            && c.chars().filter(|ch| *ch == '-').count() >= 3
+    })
+}
+
+/// 判断是否为 markdown 表格行（以 | 开头和结尾）
+fn is_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.len() >= 3
 }
 
 fn strip_blockquote(line: &str) -> String {
@@ -547,12 +577,34 @@ fn parse_paragraph(scanner: &mut LineScanner, state: &mut ParserState) {
         return;
     }
 
-    let text = lines.join("\n");
     let parent_id = state.current_parent();
     state.add_block(
         BlockType::Paragraph,
         parent_id,
-        text.into_bytes(),
+        lines.join("\n").into_bytes(),
+        HashMap::new(),
+    );
+}
+
+fn parse_table(scanner: &mut LineScanner, state: &mut ParserState) {
+    let mut lines = Vec::new();
+
+    while let Some(line) = scanner.peek() {
+        if !is_table_row(line) {
+            break;
+        }
+        lines.push(scanner.advance().unwrap().to_string());
+    }
+
+    if lines.is_empty() {
+        return;
+    }
+
+    let parent_id = state.current_parent();
+    state.add_block(
+        BlockType::Table,
+        parent_id,
+        lines.join("\n").into_bytes(),
         HashMap::new(),
     );
 }
@@ -726,6 +778,8 @@ fn parse_content(scanner: &mut LineScanner, state: &mut ParserState) {
             parse_blockquote(scanner, state);
         } else if is_list_item(line) {
             parse_list(scanner, state);
+        } else if is_table_row(line) && scanner.peek_at(1).is_some_and(|l| is_table_delimiter(l)) {
+            parse_table(scanner, state);
         } else {
             parse_paragraph(scanner, state);
         }
@@ -956,6 +1010,10 @@ fn serialize_block_recursive(
 
         BlockType::ThematicBreak => {
             ctx.out.push_str("---\n\n");
+        }
+
+        BlockType::Table => {
+            ctx.out.push_str(&format!("{}\n\n", String::from_utf8_lossy(&block.content)));
         }
 
         BlockType::Image { url } => {

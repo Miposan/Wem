@@ -8,6 +8,7 @@ import { CodeBlock } from '../blocks/CodeBlock'
 import { ListItemBlock } from '../blocks/ListItemBlock'
 import { BlockquoteBlock } from '../blocks/BlockquoteBlock'
 import { MathBlock } from '../blocks/MathBlock'
+import { TableBlock } from '../blocks/TableBlock'
 import { ImageBlock } from '../blocks/ImageBlock'
 import { VideoBlock } from '../blocks/VideoBlock'
 import { EmbedBlock } from '../blocks/EmbedBlock'
@@ -43,6 +44,8 @@ function BlockContentRouter({ block, ...props }: ContentRouterProps) {
       return <BlockquoteBlock block={block} {...props} />
     case 'mathBlock':
       return <MathBlock block={block} readonly={props.readonly} onContentChange={props.onContentChange} />
+    case 'table':
+      return <TableBlock block={block} readonly={props.readonly} onContentChange={props.onContentChange} onAction={props.onAction} />
     case 'image':
       return <ImageBlock block={block} readonly={props.readonly} onContentChange={props.onContentChange} onAction={props.onAction} />
     case 'video':

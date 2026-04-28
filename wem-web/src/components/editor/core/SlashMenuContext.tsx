@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType } from '@/types/api'
+import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType, makeTableType } from '@/types/api'
 import type { BlockType } from '@/types/api'
 
 export interface SlashMenuItem {
@@ -19,6 +19,7 @@ export const SLASH_ITEMS: SlashMenuItem[] = [
   { label: '引用', description: '引用块', blockType: makeBlockquoteType(), icon: '❝' },
   { label: '代码块', description: '代码片段', blockType: makeCodeBlockType(''), icon: '</>' },
   { label: '公式', description: '数学公式', blockType: makeMathBlockType(), icon: 'fx' },
+  { label: '表格', description: 'Markdown 表格', blockType: makeTableType(), icon: '⊞' },
   { label: '分割线', description: '水平分割线', blockType: makeThematicBreakType(), icon: '—' },
 ]
 
@@ -49,7 +50,7 @@ interface SlashMenuDispatch {
 const SlashMenuDispatchContext = createContext<SlashMenuDispatch | null>(null)
 const SlashMenuStateContext = createContext<SlashMenuState | null>(null)
 
-function filterItems(filter: string): SlashMenuItem[] {
+export function filterItems(filter: string): SlashMenuItem[] {
   if (!filter) return SLASH_ITEMS
   const lower = filter.toLowerCase()
   return SLASH_ITEMS.filter(

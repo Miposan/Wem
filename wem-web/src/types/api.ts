@@ -23,6 +23,7 @@ export interface ParagraphBlockType { type: 'paragraph' }
 export interface CodeBlockBlockType { type: 'codeBlock'; language: string }
 export interface MathBlockBlockType { type: 'mathBlock' }
 export interface ThematicBreakBlockType { type: 'thematicBreak' }
+export interface TableBlockType { type: 'table' }
 export interface ImageBlockType { type: 'image'; url: string }
 export interface AudioBlockType { type: 'audio'; url: string }
 export interface VideoBlockType { type: 'video'; url: string }
@@ -42,6 +43,7 @@ export type BlockType =
   | CodeBlockBlockType
   | MathBlockBlockType
   | ThematicBreakBlockType
+  | TableBlockType
   | ImageBlockType
   | AudioBlockType
   | VideoBlockType
@@ -83,6 +85,10 @@ export function makeParagraphType(): ParagraphBlockType {
 
 export function makeMathBlockType(): MathBlockBlockType {
   return { type: 'mathBlock' }
+}
+
+export function makeTableType(): TableBlockType {
+  return { type: 'table' }
 }
 
 export function makeImageBlockType(url: string): ImageBlockType {

@@ -166,6 +166,8 @@ pub enum BlockType {
     MathBlock,
     /// 分割线
     ThematicBreak,
+    /// 表格，content 存 markdown 表格原文
+    Table,
 
     // ─── 资源块（有 URL，无文本内容）─────────────────────────
     /// 图片

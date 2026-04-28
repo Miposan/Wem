@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeBlockquoteType, makeThematicBreakType, makeParagraphType } from '@/types/api'
 import type { TextBlockProps } from './types'
-import { useSlashMenuDispatch, type SlashMenuItem } from './SlashMenuContext'
+import { useSlashMenuDispatch, filterItems, type SlashMenuItem } from './SlashMenuContext'
 import { focusBlock } from './SelectionManager'
 import { inlineMarkdownToHtml, domToMarkdown, toggleInlineWrap, removeAllFormats, normalizeInline, removeTextRange, renderMathInElement } from './InlineParser'
 
@@ -213,19 +213,20 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
         }
       }
 
-      const sm = slashMenuRef.current
+      const smState = slashMenu.getState()
+      const filteredItems = filterItems(smState.filter)
 
       // ── 斜杠菜单键盘交互 ──
-      if (sm?.state.visible && sm.state.blockId === block.id) {
-        if (e.key === 'ArrowDown') { e.preventDefault(); sm.navigate('down'); return }
-        if (e.key === 'ArrowUp') { e.preventDefault(); sm.navigate('up'); return }
+      if (smState.visible && smState.blockId === block.id) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); slashMenu.navigate('down'); return }
+        if (e.key === 'ArrowUp') { e.preventDefault(); slashMenu.navigate('up'); return }
         if (e.key === 'Enter') {
           e.preventDefault()
-          const item = sm.filteredItems[sm.state.selectedIndex]
+          const item = filteredItems[smState.selectedIndex]
           if (item) handleSlashSelect(item)
           return
         }
-        if (e.key === 'Escape') { e.preventDefault(); sm.close(); return }
+        if (e.key === 'Escape') { e.preventDefault(); slashMenu.close(); return }
         // 其他键继续传递给正常处理（用于更新过滤文字）
       }
 

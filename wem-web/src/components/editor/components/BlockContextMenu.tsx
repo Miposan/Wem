@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import type { BlockNode, BlockType } from '@/types/api'
-import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType } from '@/types/api'
+import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeTableType } from '@/types/api'
 
 // ─── Types ───
 
@@ -47,6 +47,7 @@ const BLOCK_TYPE_LABELS: Record<string, string> = {
   codeBlock: '代码块',
   thematicBreak: '分隔线',
   mathBlock: '数学公式',
+  table: '表格',
   image: '图片',
   audio: '音频',
   video: '视频',
@@ -74,6 +75,7 @@ function getConvertibleTypes(currentType: BlockType): { label: string; type: Blo
     types.push({ label: '引用块', type: { type: 'blockquote' } })
     types.push({ label: '代码块', type: makeCodeBlockType('') })
     types.push({ label: '公式块', type: makeMathBlockType() })
+    types.push({ label: '表格', type: makeTableType() })
   } else {
     types.push({ label: '段落', type: makeParagraphType() })
   }
