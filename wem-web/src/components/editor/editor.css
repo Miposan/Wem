@@ -1148,14 +1148,13 @@
   margin: 8px 0;
   display: flex;
   flex-direction: column;
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
 }
 
 .wem-tableblock-outer {
   position: relative;
   overflow: hidden;
-  padding: 28px 18px 18px 30px; /* 四边留空间给抓手和插入三角形 */
+  padding: 28px 18px 18px 0;
 }
 
 .wem-tableblock-wrapper {

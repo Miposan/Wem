@@ -123,6 +123,7 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const clipboardRef = useRef<{ data: string[][]; mode: 'copy' | 'cut'; cutRange?: { r1: number; c1: number; r2: number; c2: number } } | null>(null)
   const selectDragRef = useRef<{ anchor: { r: number; c: number } } | null>(null)
   const outerRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const ctxRef = useRef<HTMLDivElement>(null)
   const lastSyncedMdRef = useRef<string | null>(null)
   const cellsRef = useRef(cells)
@@ -578,19 +579,21 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const syncHandleDOM = useCallback(() => {
     const wrapper = tableRef.current?.parentElement
     const outer = outerRef.current
+    const root = rootRef.current
     const cp = contentPosRef.current
-    if (!wrapper || !outer || !cp) return
+    if (!wrapper || !outer || !root || !cp) return
     const sl = wrapper.scrollLeft
     const st = wrapper.scrollTop
     const wLeft = wrapper.offsetLeft
     const wTop = wrapper.offsetTop
     const tLeft = tableRef.current?.offsetLeft ?? 0
     const tTop = tableRef.current?.offsetTop ?? 0
+    const outerOff = outer.offsetTop
 
-    outer.querySelectorAll<HTMLElement>('[data-handle-row]').forEach(el => {
+    root.querySelectorAll<HTMLElement>('[data-handle-row]').forEach(el => {
       const idx = parseInt(el.dataset.handleRow!)
       const pos = cp.rows[idx]
-      if (pos) el.style.top = `${wTop + tTop + pos.top - st}px`
+      if (pos) el.style.top = `${outerOff + wTop + tTop + pos.top - st}px`
     })
     outer.querySelectorAll<HTMLElement>('[data-handle-col]').forEach(el => {
       const idx = parseInt(el.dataset.handleCol!)
@@ -906,7 +909,22 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     : ctxMenu ? [ctxMenu.c] : []
 
   return (
-    <div className="wem-tableblock">
+    <div ref={rootRef} className="wem-tableblock">
+      {/* ── 行拖拽抓手（左侧编辑器边距区域） ── */}
+      {handlePos && !readonly && handlePos.rows.map((pos, i) => (
+        <button
+          key={`rh${i}`}
+          type="button"
+          className="wem-tableblock-row-handle"
+          style={{ top: pos.top, height: pos.height, left: -26 }}
+          data-handle-row={i}
+          onMouseDown={(e) => handleReorderMouseDown('row', i, e)}
+          title={i === 0 ? '选中/拖拽标题行' : `选中/拖拽第 ${i} 行`}
+        >
+          <GripVertical size={12} />
+        </button>
+      ))}
+
       {/* ── 悬浮检测区域 ── */}
       <div
         ref={outerRef}
@@ -943,21 +961,6 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
             </tbody>
           </table>
         </div>
-
-        {/* ── 行拖拽抓手（左侧） ── */}
-        {handlePos && !readonly && handlePos.rows.map((pos, i) => (
-          <button
-            key={`rh${i}`}
-            type="button"
-            className="wem-tableblock-row-handle"
-            style={{ top: pos.top, height: pos.height, left: handlePos.wrapperLeft - 26 }}
-            data-handle-row={i}
-            onMouseDown={(e) => handleReorderMouseDown('row', i, e)}
-            title={i === 0 ? '选中/拖拽标题行' : `选中/拖拽第 ${i} 行`}
-          >
-            <GripVertical size={12} />
-          </button>
-        ))}
 
         {/* ── 列拖拽抓手（上方） ── */}
         {handlePos && !readonly && handlePos.cols.map((pos, i) => (
