@@ -1138,12 +1138,9 @@
  * TableBlock — 飞书风格骑跨线悬浮插入指示器
  *
  *  .wem-tableblock             ← flex column layout
- *    .wem-tableblock-outer     ← 悬浮检测区域 (position: relative)
+ *    .wem-tableblock-outer     ← position: relative (T区域三角形 / 抓手定位)
  *      .wem-tableblock-wrapper ← table 容器
  *        <table>
- *      .wem-tableblock-hline   ← 行插入水平辅助线
- *      .wem-tableblock-vline   ← 列插入垂直辅助线
- *      .wem-tableblock-plus    ← "+" 插入按钮
  */
 
 .wem-tableblock {
@@ -1157,12 +1154,13 @@
 
 .wem-tableblock-outer {
   position: relative;
-  padding: 24px; /* 为外围悬浮检测和 "+" 按钮留空间 */
+  overflow: hidden;
+  padding: 28px 18px 18px 30px; /* 四边留空间给抓手和插入三角形 */
 }
 
 .wem-tableblock-wrapper {
-  border: 1px solid var(--border, #e5e5e5);
-  border-radius: 6px;
+  position: relative;
+  z-index: 1;
   overflow: auto;
 }
 
@@ -1171,6 +1169,8 @@
 .wem-tableblock-table {
   border-collapse: separate;
   border-spacing: 0;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 6px;
   font-size: 0.9em;
   line-height: 1.5;
   table-layout: fixed;
@@ -1232,64 +1232,6 @@
 .wem-tableblock-header .wem-tableblock-cell-input { font-weight: 500; }
 .wem-tableblock-cell-input[readonly] { cursor: default; }
 
-/* ─── 骑跨线辅助线 ─── */
-
-.wem-tableblock-hline {
-  position: absolute;
-  height: 2px;
-  background: var(--accent-strong, #3370ff);
-  border-radius: 1px;
-  pointer-events: none;
-  z-index: 10;
-  animation: wem-tableblock-line-in 0.12s ease-out;
-}
-
-.wem-tableblock-vline {
-  position: absolute;
-  width: 2px;
-  background: var(--accent-strong, #3370ff);
-  border-radius: 1px;
-  pointer-events: none;
-  z-index: 10;
-  animation: wem-tableblock-line-in 0.12s ease-out;
-}
-
-@keyframes wem-tableblock-line-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-/* ─── "+" 插入按钮 ─── */
-
-.wem-tableblock-plus {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: none;
-  background: var(--accent-strong, #3370ff);
-  color: #fff;
-  cursor: pointer;
-  padding: 0;
-  z-index: 11;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-  transition: transform 0.12s, box-shadow 0.12s;
-  animation: wem-tableblock-plus-in 0.15s ease-out;
-}
-
-.wem-tableblock-plus:hover {
-  transform: scale(1.15);
-  box-shadow: 0 2px 8px rgba(51, 112, 255, 0.35);
-}
-
-@keyframes wem-tableblock-plus-in {
-  from { opacity: 0; transform: scale(0.6); }
-  to   { opacity: 1; transform: scale(1); }
-}
-
 /* ─── 右键菜单 ─── */
 
 .wem-tableblock-ctx {
@@ -1300,6 +1242,8 @@
   box-shadow: 0 4px 16px rgba(0,0,0,0.12);
   padding: 4px 0;
   min-width: 170px;
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
 }
 
 .wem-tableblock-ctx-item {
@@ -1337,4 +1281,124 @@
 .wem-tableblock-delete:hover {
   background: var(--accent, rgba(0,0,0,0.06));
   color: var(--color-text-1, #333);
+}
+
+/* ─── 行列拖拽抓手 ─── */
+
+.wem-tableblock-row-handle,
+.wem-tableblock-col-handle {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-4, #ccc);
+  cursor: grab;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.12s;
+  z-index: 5;
+  border-radius: 4px;
+}
+
+.wem-tableblock-row-handle {
+  width: 22px;
+}
+
+.wem-tableblock-col-handle {
+  height: 18px;
+}
+
+.wem-tableblock-row-handle:hover,
+.wem-tableblock-col-handle:hover {
+  opacity: 1;
+  background: var(--accent, rgba(0,0,0,0.06));
+  color: var(--color-text-2, #666);
+}
+
+.wem-tableblock-row-handle:active,
+.wem-tableblock-col-handle:active {
+  cursor: grabbing;
+}
+
+/* ─── 拖拽放置指示线 ─── */
+
+.wem-tableblock-drop-row {
+  position: absolute;
+  height: 2px;
+  background: var(--accent-strong, #3370ff);
+  border-radius: 1px;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.wem-tableblock-drop-col {
+  position: absolute;
+  width: 2px;
+  background: var(--accent-strong, #3370ff);
+  border-radius: 1px;
+  z-index: 15;
+  pointer-events: none;
+}
+
+/* ─── 插入三角形（T 区域四边） ─── */
+
+.wem-tableblock-insert {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  z-index: 11;
+  transition: filter 0.12s;
+}
+.wem-tableblock-insert:hover {
+  filter: brightness(1.15);
+}
+
+.wem-tableblock-insert-left {
+  border-left: 7px solid var(--accent-strong, #3370ff);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.wem-tableblock-insert-right {
+  border-right: 7px solid var(--accent-strong, #3370ff);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.wem-tableblock-insert-top {
+  border-top: 7px solid var(--accent-strong, #3370ff);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+}
+
+.wem-tableblock-insert-bottom {
+  border-bottom: 7px solid var(--accent-strong, #3370ff);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+}
+
+/* ─── 插入辅助线 ─── */
+
+.wem-tableblock-guide-row {
+  position: absolute;
+  height: 2px;
+  background: var(--accent-strong, #3370ff);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.wem-tableblock-guide-col {
+  position: absolute;
+  width: 2px;
+  background: var(--accent-strong, #3370ff);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 20;
 }

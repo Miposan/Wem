@@ -1,12 +1,11 @@
 /**
- * TableBlock — 飞书风格 markdown 表格
+ * TableBlock — markdown 表格
  *
  * 交互：
- * - 外围区域悬浮 → 出现 "+" 按钮和辅助插入线
- *   行插入：鼠标在表格外左/右区域 → 横线 + 左侧 "+" 按钮
- *   列插入：鼠标在表格外上/下区域 → 竖线 + 上方 "+" 按钮
+ * - T 区域三角形点击 → 插入行/列（四边均有）
+ * - 右键单元格 → 完整上下文菜单（插入/删除/移动/对齐）
  * - 列宽拖拽：鼠标靠近表格内部垂直分隔线 → col-resize → 拖拽调整
- * - 右键菜单：指定位置插入行/列、删除行/列/表格、行列移动、列对齐
+ * - 行/列抓手：点击选中行/列，拖拽移动行/列
  * - Tab / Enter 键盘导航
  * - Shift+Enter 单元格内软换行（markdown <br>）
  * - 多单元格拖选 + 内部 Ctrl+C/X/V
@@ -17,7 +16,7 @@ import { useRef, useCallback, useEffect, useState } from 'react'
 import type { BlockNode } from '@/types/api'
 import type { BlockAction } from '../core/types'
 import { updateBlock } from '@/api/client'
-import { Plus, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, GripVertical, GripHorizontal } from 'lucide-react'
 
 // ─── Props ───
 
@@ -26,20 +25,6 @@ interface TableBlockProps {
   readonly: boolean
   onContentChange: (blockId: string, content: string) => void
   onAction: (action: BlockAction) => void
-}
-
-// ─── 悬浮指示器状态 ───
-
-interface HoverIndicator {
-  type: 'row' | 'col'
-  /** 在第 insertAfter 行/列之后插入；-1 表示插入到第一行/列之前 */
-  insertAfter: number
-  /** 辅助线的像素位置（行→Y，列→X），相对于 outer 容器 */
-  pos: number
-  /** 辅助线起点像素 */
-  lineStart: number
-  /** 辅助线长度像素 */
-  lineLength: number
 }
 
 // ─── 列对齐类型 ───
@@ -117,6 +102,8 @@ function serializeCells(cells: string[][], aligns: ColumnAlign[]): string {
 const DEFAULT_TABLE = '| 列 1 | 列 2 |\n|------|-------|\n|      |      |'
 const RESIZE_THRESHOLD = 6
 const MIN_COL_WIDTH = 50
+const MAX_COL_WIDTH = 600
+const BORDER_CTX_THRESHOLD = 20
 
 // ─── 组件 ───
 
@@ -124,7 +111,7 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const [cells, setCells] = useState<string[][]>(() => parseCells(block.content?.trim() || DEFAULT_TABLE))
   const [aligns, setAligns] = useState<ColumnAlign[]>(() => parseAlignment(block.content?.trim() || DEFAULT_TABLE))
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null)
-  const [hoverIndicator, setHoverIndicator] = useState<HoverIndicator | null>(null)
+  const [hoverPlus, setHoverPlus] = useState<{ type: 'row' | 'col'; afterIdx: number; side: 'left' | 'right' | 'top' | 'bottom' } | null>(null)
   const [colWidths, setColWidths] = useState<number[]>(() => {
     try { return JSON.parse(block.properties?.colWidths || '[]') } catch { return [] }
   })
@@ -137,18 +124,32 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const selectDragRef = useRef<{ anchor: { r: number; c: number } } | null>(null)
   const outerRef = useRef<HTMLDivElement>(null)
   const ctxRef = useRef<HTMLDivElement>(null)
-  const skipParseRef = useRef(false)
-  const prevIndicatorRef = useRef<HoverIndicator | null>(null)
+  const lastSyncedMdRef = useRef<string | null>(null)
   const cellsRef = useRef(cells)
   cellsRef.current = cells
   const alignsRef = useRef(aligns)
   alignsRef.current = aligns
+  const colWidthsRef = useRef(colWidths)
+  colWidthsRef.current = colWidths
   const bordersCacheRef = useRef<{
     hBorders: number[]; vBorders: number[]
     tableTop: number; tableLeft: number; tableWidth: number; tableHeight: number
   } | null>(null)
   const dragRef = useRef<{ col: number; startX: number; widths: number[] } | null>(null)
   const resizeColRef = useRef<number | null>(null)
+  const reorderRef = useRef<{ type: 'row' | 'col'; from: number; startYorX: number } | null>(null)
+  const [dropLine, setDropLine] = useState<{ type: 'row' | 'col'; pos: number; start: number; length: number } | null>(null)
+  // 内容空间的抓手位置（不受滚动影响，offsetTop/offsetLeft）
+  const contentPosRef = useRef<{
+    rows: { top: number; height: number }[]
+    cols: { left: number; width: number }[]
+  } | null>(null)
+  const [handlePos, setHandlePos] = useState<{
+    rows: { top: number; height: number }[]
+    cols: { left: number; width: number }[]
+    wrapperLeft: number; wrapperTop: number
+    tableLeft: number; tableTop: number; tableWidth: number; tableHeight: number
+  } | null>(null)
   const onContentChangeRef = useRef(onContentChange)
   onContentChangeRef.current = onContentChange
   const blockIdRef = useRef(block.id)
@@ -157,14 +158,15 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   // ─── 外部 content 同步 ───
 
   useEffect(() => {
-    if (skipParseRef.current) { skipParseRef.current = false; return }
-    const md = block.content?.trim() || DEFAULT_TABLE
+    const md = (block.content?.trim() || DEFAULT_TABLE)
+    if (md === lastSyncedMdRef.current) return
+    lastSyncedMdRef.current = null
     setCells(parseCells(md))
     setAligns(parseAlignment(md))
   }, [block.content])
 
   useEffect(() => {
-    if (!block.content?.trim()) { skipParseRef.current = true; onContentChange(block.id, DEFAULT_TABLE) }
+    if (!block.content?.trim()) onContentChange(block.id, DEFAULT_TABLE)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -181,32 +183,50 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   // ─── 内部同步 ───
 
   const sync = useCallback((next: string[][], nextAligns?: ColumnAlign[]) => {
-    skipParseRef.current = true
-    onContentChangeRef.current(blockIdRef.current, serializeCells(next, nextAligns ?? alignsRef.current))
+    const md = serializeCells(next, nextAligns ?? alignsRef.current)
+    lastSyncedMdRef.current = md
+    onContentChangeRef.current(blockIdRef.current, md)
   }, [])
+
+  /** Atomically update cells (+ optional aligns/widths) and sync to parent */
+  const commit = useCallback((nextCells: string[][], nextAligns?: ColumnAlign[], nextWidths?: number[]) => {
+    cellsRef.current = nextCells
+    if (nextAligns !== undefined) {
+      alignsRef.current = nextAligns
+      setAligns(nextAligns)
+    }
+    if (nextWidths !== undefined) {
+      colWidthsRef.current = nextWidths
+      setColWidths(nextWidths)
+    }
+    setCells(nextCells)
+    sync(nextCells, nextAligns)
+    if (nextWidths !== undefined) {
+      updateBlock(blockIdRef.current, {
+        properties: { colWidths: JSON.stringify(nextWidths) },
+        properties_mode: 'merge',
+      }).catch(() => {})
+    }
+  }, [sync])
 
   const handleChange = useCallback((r: number, c: number, value: string, el: HTMLTextAreaElement) => {
     setSelection(null)
-    setCells((prev) => {
-      const next = [...prev]
-      next[r] = [...prev[r]]
-      while (next[r].length <= c) next[r].push('')
-      next[r][c] = value
-      sync(next)
-      return next
-    })
-    // textarea auto-resize
+    const next = [...cellsRef.current]
+    next[r] = [...next[r]]
+    while (next[r].length <= c) next[r].push('')
+    next[r][c] = value
+    commit(next)
     el.style.height = 'auto'
     el.style.height = el.scrollHeight + 'px'
-  }, [sync])
+  }, [commit])
 
-  // 初始化时 auto-resize 所有 textarea
+  // auto-resize 所有 textarea（内容或列宽变化时）
   useEffect(() => {
     tableRef.current?.querySelectorAll('textarea.wem-tableblock-cell-input').forEach((ta) => {
       ta.style.height = 'auto'
       ta.style.height = ta.scrollHeight + 'px'
     })
-  }, [cells])
+  }, [cells, colWidths])
 
   const handleCellMouseDown = useCallback((e: React.MouseEvent, r: number, c: number) => {
     if (readonly) return
@@ -247,90 +267,84 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const addRow = useCallback((afterIndex: number) => {
     if (readonly) return
     setSelection(null)
-    setCells((prev) => { const next = prev.map((r) => [...r]); const cols = next[0]?.length ?? 2; next.splice(afterIndex + 1, 0, Array(cols).fill('')); sync(next); return next })
-  }, [readonly, sync])
+    const next = cellsRef.current.map(r => [...r])
+    const cols = next[0]?.length ?? 2
+    next.splice(afterIndex + 1, 0, Array(cols).fill(''))
+    commit(next)
+  }, [readonly, commit])
 
   const deleteRow = useCallback((index: number) => {
     if (readonly) return
     setSelection(null)
-    setCells((prev) => { if (prev.length <= 1) return prev; const next = prev.map((r) => [...r]); next.splice(index, 1); sync(next); return next })
-  }, [readonly, sync])
+    const prev = cellsRef.current
+    if (prev.length <= 1) return
+    const next = prev.map(r => [...r])
+    next.splice(index, 1)
+    commit(next)
+  }, [readonly, commit])
 
   const addCol = useCallback((afterIndex: number) => {
     if (readonly) return
     setSelection(null)
-    setCells((prev) => {
-      const next = prev.map((r) => { const row = [...r]; row.splice(afterIndex + 1, 0, ''); return row })
-      setAligns((pa) => { const a = [...pa]; a.splice(afterIndex + 1, 0, ''); return a })
-      sync(next)
-      return next
-    })
-  }, [readonly, sync])
+    const nextCells = cellsRef.current.map(r => { const row = [...r]; row.splice(afterIndex + 1, 0, ''); return row })
+    const nextAligns = [...alignsRef.current]
+    nextAligns.splice(afterIndex + 1, 0, '')
+    commit(nextCells, nextAligns)
+  }, [readonly, commit])
 
   const deleteCol = useCallback((index: number) => {
     if (readonly) return
     setSelection(null)
-    setCells((prev) => {
-      if ((prev[0]?.length ?? 0) <= 1) return prev
-      const next = prev.map((r) => { const row = [...r]; row.splice(index, 1); return row })
-      setAligns((pa) => { const a = [...pa]; a.splice(index, 1); return a })
-      sync(next)
-      return next
-    })
-  }, [readonly, sync])
+    const prev = cellsRef.current
+    if ((prev[0]?.length ?? 0) <= 1) return
+    const nextCells = prev.map(r => { const row = [...r]; row.splice(index, 1); return row })
+    const nextAligns = [...alignsRef.current]
+    nextAligns.splice(index, 1)
+    commit(nextCells, nextAligns)
+  }, [readonly, commit])
 
   const moveRowUp = useCallback((index: number) => {
     if (readonly || index <= 0) return
-    setCells((prev) => {
-      const next = prev.map((r) => [...r])
-      ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
-      sync(next)
-      return next
-    })
-  }, [readonly, sync])
+    const next = cellsRef.current.map(r => [...r])
+    ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
+    commit(next)
+  }, [readonly, commit])
 
   const moveRowDown = useCallback((index: number) => {
     if (readonly) return
-    setCells((prev) => {
-      if (index >= prev.length - 1) return prev
-      const next = prev.map((r) => [...r])
-      ;[next[index], next[index + 1]] = [next[index + 1], next[index]]
-      sync(next)
-      return next
-    })
-  }, [readonly, sync])
+    const prev = cellsRef.current
+    if (index >= prev.length - 1) return
+    const next = prev.map(r => [...r])
+    ;[next[index], next[index + 1]] = [next[index + 1], next[index]]
+    commit(next)
+  }, [readonly, commit])
 
   const moveColLeft = useCallback((index: number) => {
     if (readonly || index <= 0) return
-    setCells((prev) => {
-      const next = prev.map((r) => { const row = [...r]; [row[index - 1], row[index]] = [row[index], row[index - 1]]; return row })
-      setAligns((pa) => { const a = [...pa]; [a[index - 1], a[index]] = [a[index], a[index - 1]]; return a })
-      sync(next)
-      return next
-    })
-  }, [readonly, sync])
+    const nextCells = cellsRef.current.map(r => { const row = [...r]; [row[index - 1], row[index]] = [row[index], row[index - 1]]; return row })
+    const nextAligns = [...alignsRef.current]
+    ;[nextAligns[index - 1], nextAligns[index]] = [nextAligns[index], nextAligns[index - 1]]
+    commit(nextCells, nextAligns)
+  }, [readonly, commit])
 
   const moveColRight = useCallback((index: number) => {
     if (readonly) return
-    setCells((prev) => {
-      const cols = prev[0]?.length ?? 0
-      if (index >= cols - 1) return prev
-      const next = prev.map((r) => { const row = [...r]; [row[index], row[index + 1]] = [row[index + 1], row[index]]; return row })
-      setAligns((pa) => { const a = [...pa]; [a[index], a[index + 1]] = [a[index + 1], a[index]]; return a })
-      sync(next)
-      return next
-    })
-  }, [readonly, sync])
+    const prevCells = cellsRef.current
+    if (index >= (prevCells[0]?.length ?? 0) - 1) return
+    const nextCells = prevCells.map(r => { const row = [...r]; [row[index], row[index + 1]] = [row[index + 1], row[index]]; return row })
+    const nextAligns = [...alignsRef.current]
+    ;[nextAligns[index], nextAligns[index + 1]] = [nextAligns[index + 1], nextAligns[index]]
+    commit(nextCells, nextAligns)
+  }, [readonly, commit])
 
-  const setColumnAlign = useCallback((col: number, align: ColumnAlign) => {
-    setAligns((prev) => {
-      const next = [...prev]
-      while (next.length <= col) next.push('')
-      next[col] = align
-      sync(cellsRef.current, next)
-      return next
-    })
-  }, [sync])
+  const applyAlign = useCallback((cols: number[], align: ColumnAlign) => {
+    const nextAligns = [...alignsRef.current]
+    for (const col of cols) {
+      while (nextAligns.length <= col) nextAligns.push('')
+      nextAligns[col] = align
+    }
+    commit(cellsRef.current, nextAligns)
+  }, [commit])
 
   const autoFitColumns = useCallback(() => {
     setColWidths([])
@@ -339,6 +353,39 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       properties_mode: 'merge',
     }).catch(() => {})
   }, [])
+
+  // ─── 行列拖拽移动（Obsidian 风格抓手） ───
+
+  const moveRowTo = useCallback((from: number, to: number) => {
+    if (readonly || from === to) return
+    const idx = from < to ? to - 1 : to
+    const next = cellsRef.current.map(r => [...r])
+    const [moved] = next.splice(from, 1)
+    next.splice(idx, 0, moved)
+    commit(next)
+  }, [readonly, commit])
+
+  const moveColTo = useCallback((from: number, to: number) => {
+    if (readonly || from === to) return
+    const idx = from < to ? to - 1 : to
+    const nextCells = cellsRef.current.map(r => {
+      const row = [...r]
+      const [moved] = row.splice(from, 1)
+      row.splice(idx, 0, moved)
+      return row
+    })
+    const nextAligns = [...alignsRef.current]
+    const [a] = nextAligns.splice(from, 1)
+    nextAligns.splice(idx, 0, a)
+    const widths = colWidthsRef.current
+    const nextWidths = widths.length > 0 ? (() => {
+      const w = [...widths]
+      const [moved] = w.splice(from, 1)
+      w.splice(idx, 0, moved)
+      return w
+    })() : undefined
+    commit(nextCells, nextAligns, nextWidths)
+  }, [readonly, commit])
 
   // ─── 键盘导航 ───
 
@@ -371,12 +418,9 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       e.preventDefault()
       const data = cells.slice(sel.r1, sel.r2 + 1).map(row => row.slice(sel.c1, sel.c2 + 1))
       clipboardRef.current = { data, mode: 'cut', cutRange: { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 } }
-      setCells((prev) => {
-        const next = prev.map(row => [...row])
-        for (let ri = sel.r1; ri <= sel.r2; ri++) for (let ci = sel.c1; ci <= sel.c2; ci++) next[ri][ci] = ''
-        sync(next)
-        return next
-      })
+      const next = cells.map(row => [...row])
+      for (let ri = sel.r1; ri <= sel.r2; ri++) for (let ci = sel.c1; ci <= sel.c2; ci++) next[ri][ci] = ''
+      commit(next)
       return
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboardRef.current) {
@@ -384,40 +428,34 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       const clip = clipboardRef.current
       const { data } = clip
       const target = sel ?? { r1: r, c1: c, r2: r, c2: c }
-      setCells((prev) => {
-        const next = prev.map(row => [...row])
-        for (let dr = 0; dr < data.length; dr++) {
-          for (let dc = 0; dc < data[dr].length; dc++) {
-            const tr = target.r1 + dr, tc = target.c1 + dc
-            if (tr < next.length && tc < (next[0]?.length ?? 0)) next[tr][tc] = data[dr][dc]
-          }
+      const next = cells.map(row => [...row])
+      for (let dr = 0; dr < data.length; dr++) {
+        for (let dc = 0; dc < data[dr].length; dc++) {
+          const tr = target.r1 + dr, tc = target.c1 + dc
+          if (tr < next.length && tc < (next[0]?.length ?? 0)) next[tr][tc] = data[dr][dc]
         }
-        if (clip.mode === 'cut' && clip.cutRange) {
-          const cr = clip.cutRange
-          for (let ri = cr.r1; ri <= cr.r2; ri++) {
-            for (let ci = cr.c1; ci <= cr.c2; ci++) {
-              if (ri < next.length && ci < (next[0]?.length ?? 0)) {
-                const inTarget = ri >= target.r1 && ri <= target.r2 && ci >= target.c1 && ci <= target.c2
-                if (!inTarget) next[ri][ci] = ''
-              }
+      }
+      if (clip.mode === 'cut' && clip.cutRange) {
+        const cr = clip.cutRange
+        for (let ri = cr.r1; ri <= cr.r2; ri++) {
+          for (let ci = cr.c1; ci <= cr.c2; ci++) {
+            if (ri < next.length && ci < (next[0]?.length ?? 0)) {
+              const inTarget = ri >= target.r1 && ri <= target.r2 && ci >= target.c1 && ci <= target.c2
+              if (!inTarget) next[ri][ci] = ''
             }
           }
         }
-        sync(next)
-        return next
-      })
+      }
+      commit(next)
       clipboardRef.current = { ...clip, mode: 'copy' }
       setSelection(null)
       return
     }
     if (e.key === 'Delete' && sel) {
       e.preventDefault()
-      setCells((prev) => {
-        const next = prev.map(row => [...row])
-        for (let ri = sel.r1; ri <= sel.r2; ri++) for (let ci = sel.c1; ci <= sel.c2; ci++) next[ri][ci] = ''
-        sync(next)
-        return next
-      })
+      const next = cells.map(row => [...row])
+      for (let ri = sel.r1; ri <= sel.r2; ri++) for (let ci = sel.c1; ci <= sel.c2; ci++) next[ri][ci] = ''
+      commit(next)
       return
     }
     if (e.key === 'Escape') {
@@ -432,14 +470,13 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       let nr = r, nc = c + (e.shiftKey ? -1 : 1)
       if (nc >= colCount) { nc = 0; nr++ }
       if (nc < 0) { nc = colCount - 1; nr-- }
-      if (nr >= rowCount) { setCells((prev) => { const cols = prev[0]?.length ?? 2; const next = [...prev, Array(cols).fill('')]; sync(next); return next }); moveCell(nr, 0); return }
+      if (nr >= rowCount) { commit([...cells, Array(colCount || 2).fill('')]) }
       if (nr < 0) return
       moveCell(nr, nc)
     } else if (e.key === 'Enter' && !e.shiftKey) {
-      // Enter → 跳到下一行（Shift+Enter 由 textarea 默认处理，插入软换行）
       e.preventDefault()
       const nr = r + 1
-      if (nr >= rowCount) { setCells((prev) => { const cols = prev[0]?.length ?? 2; const next = [...prev, Array(cols).fill('')]; sync(next); return next }) }
+      if (nr >= rowCount) { commit([...cells, Array(colCount || 2).fill('')]) }
       moveCell(nr, c)
     } else if (e.key === 'ArrowDown') {
       const ta = e.currentTarget as HTMLTextAreaElement
@@ -452,21 +489,22 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     } else if (e.key === 'Backspace') {
       if (sel) {
         e.preventDefault()
-        setCells((prev) => {
-          const next = prev.map(row => [...row])
-          for (let ri = sel.r1; ri <= sel.r2; ri++) for (let ci = sel.c1; ci <= sel.c2; ci++) next[ri][ci] = ''
-          sync(next)
-          return next
-        })
+        const next = cells.map(row => [...row])
+        for (let ri = sel.r1; ri <= sel.r2; ri++) for (let ci = sel.c1; ci <= sel.c2; ci++) next[ri][ci] = ''
+        commit(next)
         return
       }
       const ta = e.currentTarget as HTMLTextAreaElement
       if (ta.value === '' && c === 0 && rowCount > 1 && ta.selectionStart === 0) {
         e.preventDefault()
-        setCells((prev) => { if (prev.length <= 1) return prev; const next = prev.map((row) => [...row]); next.splice(r, 1); sync(next); moveCell(Math.min(r, next.length - 1), 0); return next })
+        const next = cells.map(row => [...row])
+        if (next.length <= 1) return
+        next.splice(r, 1)
+        commit(next)
+        moveCell(Math.min(r, next.length - 1), 0)
       }
     }
-  }, [sync, moveCell, moveRowUp, moveRowDown, moveColLeft, moveColRight])
+  }, [commit, moveCell, moveRowUp, moveRowDown, moveColLeft, moveColRight])
 
   // ─── 悬浮骑跨线插入指示器 ───
 
@@ -519,8 +557,162 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     return () => ro.disconnect()
   }, [])
 
+  // 滚动同步：直接更新抓手 DOM 样式，跳过 React
+  useEffect(() => {
+    const wrapper = tableRef.current?.parentElement
+    if (!wrapper) return
+    const onScroll = () => {
+      bordersCacheRef.current = null
+      syncHandleDOM()
+    }
+    wrapper.addEventListener('scroll', onScroll, { passive: true })
+    return () => wrapper.removeEventListener('scroll', onScroll)
+  }, [])
+
   // 缓存失效：cells 变化时行列数可能改变
   useEffect(() => { bordersCacheRef.current = null }, [cells])
+
+  // ─── 行列拖拽移动（Obsidian 风格抓手） ───
+
+  // 根据 contentPosRef + 当前 scroll 直接更新抓手 DOM
+  const syncHandleDOM = useCallback(() => {
+    const wrapper = tableRef.current?.parentElement
+    const outer = outerRef.current
+    const cp = contentPosRef.current
+    if (!wrapper || !outer || !cp) return
+    const sl = wrapper.scrollLeft
+    const st = wrapper.scrollTop
+    const wLeft = wrapper.offsetLeft
+    const wTop = wrapper.offsetTop
+    const tLeft = tableRef.current?.offsetLeft ?? 0
+    const tTop = tableRef.current?.offsetTop ?? 0
+
+    outer.querySelectorAll<HTMLElement>('[data-handle-row]').forEach(el => {
+      const idx = parseInt(el.dataset.handleRow!)
+      const pos = cp.rows[idx]
+      if (pos) el.style.top = `${wTop + tTop + pos.top - st}px`
+    })
+    outer.querySelectorAll<HTMLElement>('[data-handle-col]').forEach(el => {
+      const idx = parseInt(el.dataset.handleCol!)
+      const pos = cp.cols[idx]
+      if (pos) el.style.left = `${wLeft + tLeft + pos.left - sl}px`
+    })
+  }, [])
+
+  // 计算抓手位置（仅在数据变化时，不在滚动时）
+  useEffect(() => {
+    const table = tableRef.current
+    const wrapper = table?.parentElement
+    if (!table || !wrapper) return
+
+    const rows = table.querySelectorAll('tr')
+    const contentRows = Array.from(rows).map(row => ({
+      top: (row as HTMLElement).offsetTop,
+      height: (row as HTMLElement).offsetHeight,
+    }))
+    const firstRowCells = rows[0]?.querySelectorAll('td, th')
+    const contentCols = firstRowCells
+      ? Array.from(firstRowCells).map(cell => ({
+          left: (cell as HTMLElement).offsetLeft,
+          width: (cell as HTMLElement).offsetWidth,
+        }))
+      : []
+
+    contentPosRef.current = { rows: contentRows, cols: contentCols }
+
+    const wLeft = wrapper.offsetLeft
+    const wTop = wrapper.offsetTop
+    const sl = wrapper.scrollLeft
+    const st = wrapper.scrollTop
+    const tLeft = table.offsetLeft
+    const tTop = table.offsetTop
+
+    setHandlePos({
+      rows: contentRows.map(p => ({ top: wTop + tTop + p.top - st, height: p.height })),
+      cols: contentCols.map(p => ({ left: wLeft + tLeft + p.left - sl, width: p.width })),
+      wrapperLeft: wLeft,
+      wrapperTop: wTop,
+      tableLeft: wLeft + tLeft - sl,
+      tableTop: wTop + tTop - st,
+      tableWidth: table.offsetWidth,
+      tableHeight: table.offsetHeight,
+    })
+  }, [cells, colWidths])
+
+  const handleReorderMouseDown = useCallback((type: 'row' | 'col', index: number, e: React.MouseEvent) => {
+    if (readonly || e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const startCoord = type === 'row' ? e.clientY : e.clientX
+    reorderRef.current = { type, from: index, startYorX: startCoord }
+    let moved = false
+    let lastTargetIdx: number | null = null
+    document.body.style.userSelect = 'none'
+
+    const calcTarget = (ev: MouseEvent) => {
+      const outer = outerRef.current
+      if (!outer) return
+      const borders = bordersCacheRef.current ?? getBorderPositions()
+      if (!borders) return
+      const outerRect = outer.getBoundingClientRect()
+      const coord = type === 'row' ? ev.clientY - outerRect.top : ev.clientX - outerRect.left
+      const bs = type === 'row' ? borders.hBorders : borders.vBorders
+      for (let i = 0; i < bs.length - 1; i++) {
+        if (coord < bs[i + 1]) {
+          const mid = (bs[i] + bs[i + 1]) / 2
+          const targetIdx = coord < mid ? i : i + 1
+          if (targetIdx !== index && targetIdx !== index + 1) {
+            lastTargetIdx = targetIdx
+            setDropLine({
+              type,
+              pos: coord < mid ? bs[i] : bs[i + 1],
+              start: type === 'row' ? borders.tableLeft : borders.tableTop,
+              length: type === 'row' ? borders.tableWidth : borders.tableHeight,
+            })
+          } else {
+            lastTargetIdx = null
+            setDropLine(null)
+          }
+          return
+        }
+      }
+      // 超出最后一个边界
+      lastTargetIdx = null
+      setDropLine(null)
+    }
+
+    const onMove = (ev: MouseEvent) => {
+      const ref = reorderRef.current
+      if (!ref) return
+      if (!moved && Math.abs((type === 'row' ? ev.clientY : ev.clientX) - startCoord) < 4) return
+      moved = true
+      calcTarget(ev)
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      reorderRef.current = null
+      if (!moved) {
+        const count = type === 'row'
+          ? (cellsRef.current[0]?.length ?? 0)
+          : cellsRef.current.length
+        if (type === 'row') {
+          setSelection({ r1: index, c1: 0, r2: index, c2: count - 1 })
+        } else {
+          setSelection({ r1: 0, c1: index, r2: count - 1, c2: index })
+        }
+      } else if (lastTargetIdx !== null) {
+        if (type === 'row') moveRowTo(index, lastTargetIdx)
+        else moveColTo(index, lastTargetIdx)
+      }
+      setDropLine(null)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [readonly, getBorderPositions, moveRowTo, moveColTo])
 
   // 列宽数组与列数同步（列数变化时重置，内容编辑不影响）
   useEffect(() => {
@@ -543,13 +735,9 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   }, [cells])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (readonly) {
-      if (prevIndicatorRef.current) { prevIndicatorRef.current = null; setHoverIndicator(null) }
-      return
-    }
-
-    // 鼠标在 "+" 按钮上时保持 indicator 不变
-    if ((e.target as HTMLElement).closest('.wem-tableblock-plus')) return
+    if (readonly) return
+    if ((e.target as HTMLElement).closest('.wem-tableblock-row-handle, .wem-tableblock-col-handle')) return
+    if (reorderRef.current) return
 
     const borders = bordersCacheRef.current ?? getBorderPositions()
     if (!borders) return
@@ -560,23 +748,56 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     const mouseX = e.clientX - outerRect.left
     const mouseY = e.clientY - outerRect.top
 
-    const { tableTop, tableLeft, tableWidth, tableHeight, hBorders, vBorders } = borders
+    const { tableTop, tableLeft, tableWidth, tableHeight, vBorders, hBorders } = borders
     const tableRight = tableLeft + tableWidth
     const tableBottom = tableTop + tableHeight
 
-    // 鼠标在表格内部 → 检测列宽 resize handle
+    // T 区域检测：左/右 margin → 行插入三角形
+    if (mouseY >= tableTop && mouseY <= tableBottom) {
+      if (mouseX < tableLeft && mouseX >= tableLeft - 28) {
+        for (let i = 0; i < hBorders.length; i++) {
+          if (Math.abs(mouseY - hBorders[i]) < BORDER_CTX_THRESHOLD) {
+            setHoverPlus({ type: 'row', afterIdx: i - 1, side: 'left' })
+            return
+          }
+        }
+      } else if (mouseX > tableRight && mouseX <= tableRight + 14) {
+        for (let i = 0; i < hBorders.length; i++) {
+          if (Math.abs(mouseY - hBorders[i]) < BORDER_CTX_THRESHOLD) {
+            setHoverPlus({ type: 'row', afterIdx: i - 1, side: 'right' })
+            return
+          }
+        }
+      }
+    }
+    // T 区域检测：上/下 margin → 列插入三角形
+    if (mouseX >= tableLeft && mouseX <= tableRight) {
+      if (mouseY < tableTop && mouseY >= tableTop - 26) {
+        for (let j = 0; j < vBorders.length; j++) {
+          if (Math.abs(mouseX - vBorders[j]) < BORDER_CTX_THRESHOLD) {
+            setHoverPlus({ type: 'col', afterIdx: j - 1, side: 'top' })
+            return
+          }
+        }
+      } else if (mouseY > tableBottom && mouseY <= tableBottom + 14) {
+        for (let j = 0; j < vBorders.length; j++) {
+          if (Math.abs(mouseX - vBorders[j]) < BORDER_CTX_THRESHOLD) {
+            setHoverPlus({ type: 'col', afterIdx: j - 1, side: 'bottom' })
+            return
+          }
+        }
+      }
+    }
+    setHoverPlus(null)
+
     const insideTable = mouseX >= tableLeft && mouseX <= tableRight && mouseY >= tableTop && mouseY <= tableBottom
     if (insideTable) {
-      if (prevIndicatorRef.current) { prevIndicatorRef.current = null; setHoverIndicator(null) }
       if (dragRef.current) return
-
-      // 检测是否靠近垂直分隔线 → 显示 col-resize 光标
       let resizeCol = -1
       for (let i = 1; i < vBorders.length; i++) {
         if (Math.abs(mouseX - vBorders[i]) < RESIZE_THRESHOLD) { resizeCol = i - 1; break }
       }
       resizeColRef.current = resizeCol >= 0 ? resizeCol : null
-
       const table = tableRef.current
       if (table) {
         if (resizeCol >= 0) table.classList.add('wem-tableblock-resizing')
@@ -585,66 +806,17 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       return
     }
 
-    // 鼠标离开表格区域 → 重置 resize 光标
     if (resizeColRef.current !== null) {
       resizeColRef.current = null
       tableRef.current?.classList.remove('wem-tableblock-resizing')
     }
-
-    let newIndicator: HoverIndicator | null = null
-
-    // 左/右外围区域 → 行插入（根据 mouseY 找最近的行边界）
-    if ((mouseX < tableLeft || mouseX > tableRight) && mouseY >= tableTop && mouseY <= tableBottom) {
-      let nearestIdx = -1
-      let nearestDist = Infinity
-      hBorders.forEach((pos, i) => {
-        const d = Math.abs(mouseY - pos)
-        if (d < nearestDist) { nearestIdx = i; nearestDist = d }
-      })
-      if (nearestIdx >= 0) {
-        newIndicator = { type: 'row', insertAfter: nearestIdx - 1, pos: hBorders[nearestIdx], lineStart: tableLeft, lineLength: tableWidth }
-      }
-    }
-    // 上/下外围区域 → 列插入（根据 mouseX 找最近的列边界）
-    else if ((mouseY < tableTop || mouseY > tableBottom) && mouseX >= tableLeft && mouseX <= tableRight) {
-      let nearestIdx = -1
-      let nearestDist = Infinity
-      vBorders.forEach((pos, i) => {
-        const d = Math.abs(mouseX - pos)
-        if (d < nearestDist) { nearestIdx = i; nearestDist = d }
-      })
-      if (nearestIdx >= 0) {
-        newIndicator = { type: 'col', insertAfter: nearestIdx - 1, pos: vBorders[nearestIdx], lineStart: tableTop, lineLength: tableHeight }
-      }
-    }
-
-    // indicator 没变时跳过 setState
-    const prev = prevIndicatorRef.current
-    const same = newIndicator && prev
-      ? newIndicator.type === prev.type && newIndicator.insertAfter === prev.insertAfter
-      : newIndicator === prev
-    if (same) return
-
-    prevIndicatorRef.current = newIndicator
-    setHoverIndicator(newIndicator)
   }, [readonly, getBorderPositions])
 
   const handleMouseLeave = useCallback(() => {
-    prevIndicatorRef.current = null
-    setHoverIndicator(null)
     resizeColRef.current = null
+    setHoverPlus(null)
     tableRef.current?.classList.remove('wem-tableblock-resizing')
   }, [])
-
-  /** 点击 "+" 按钮执行插入 */
-  const handleIndicatorClick = useCallback(() => {
-    const indicator = prevIndicatorRef.current
-    if (!indicator) return
-    if (indicator.type === 'row') addRow(indicator.insertAfter)
-    else addCol(indicator.insertAfter)
-    prevIndicatorRef.current = null
-    setHoverIndicator(null)
-  }, [addRow, addCol])
 
   // ─── 列宽拖拽 ───
 
@@ -672,7 +844,7 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       const d = dragRef.current
       if (!d) return
       const next = [...d.widths]
-      next[d.col] = Math.max(MIN_COL_WIDTH, d.widths[d.col] + ev.clientX - d.startX)
+      next[d.col] = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, d.widths[d.col] + ev.clientX - d.startX))
       finalWidths = next
       setColWidths(next)
     }
@@ -702,9 +874,14 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const handleTableContextMenu = useCallback((e: React.MouseEvent) => {
     if (readonly) return
     e.stopPropagation(); e.preventDefault()
+
     const cell = (e.target as HTMLElement).closest('[data-r][data-c]') as HTMLElement | null
     if (!cell) return
-    setCtxMenu({ x: Math.min(e.clientX, window.innerWidth - 200), y: Math.min(e.clientY, window.innerHeight - 520), r: parseInt(cell.dataset.r!), c: parseInt(cell.dataset.c!) })
+    setCtxMenu({
+      x: Math.min(e.clientX, window.innerWidth - 200),
+      y: Math.min(e.clientY, window.innerHeight - 520),
+      r: parseInt(cell.dataset.r!), c: parseInt(cell.dataset.c!),
+    })
   }, [readonly])
 
   const ctxAction = useCallback((fn: () => void) => { fn(); setCtxMenu(null) }, [])
@@ -722,6 +899,12 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
 
   const cellAlignStyle = (c: number) => aligns[c] ? { textAlign: aligns[c] } : undefined
 
+  const sel = selectionRef.current
+  const hasMultiSel = !!sel && !(sel.r1 === sel.r2 && sel.c1 === sel.c2)
+  const alignTargetCols: number[] = hasMultiSel && sel
+    ? Array.from({ length: sel.c2 - sel.c1 + 1 }, (_, i) => sel.c1 + i)
+    : ctxMenu ? [ctxMenu.c] : []
+
   return (
     <div className="wem-tableblock">
       {/* ── 悬浮检测区域 ── */}
@@ -732,7 +915,7 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
         onMouseLeave={handleMouseLeave}
       >
         <div className="wem-tableblock-wrapper">
-          <table ref={tableRef} className="wem-tableblock-table" onContextMenu={handleTableContextMenu} onMouseDown={handleTableMouseDown}>
+          <table ref={tableRef} className="wem-tableblock-table" style={colWidths.some(w => w > 0) ? { width: 'max-content' } : undefined} onContextMenu={handleTableContextMenu} onMouseDown={handleTableMouseDown}>
             <colgroup>
               {(cells[0] ?? []).map((_, c) => (
                 <col key={c} style={colWidths[c] > 0 ? { width: colWidths[c] } : undefined} />
@@ -761,84 +944,127 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
           </table>
         </div>
 
-        {/* ── 行插入指示器（水平辅助线 + 左侧 "+"） ── */}
-        {hoverIndicator?.type === 'row' && !readonly && (
-          <>
-            <div
-              className="wem-tableblock-hline"
-              style={{
-                left: hoverIndicator.lineStart,
-                top: hoverIndicator.pos - 0.5,
-                width: hoverIndicator.lineLength,
-              }}
-            />
-            <button
-              type="button"
-              className="wem-tableblock-plus"
-              style={{
-                left: hoverIndicator.lineStart - 22,
-                top: hoverIndicator.pos - 9,
-              }}
-              onClick={handleIndicatorClick}
-              title={hoverIndicator.insertAfter < 0 ? '在上方插入行' : '在下方插入行'}
-            >
-              <Plus className="h-3 w-3" />
-            </button>
-          </>
+        {/* ── 行拖拽抓手（左侧） ── */}
+        {handlePos && !readonly && handlePos.rows.map((pos, i) => (
+          <button
+            key={`rh${i}`}
+            type="button"
+            className="wem-tableblock-row-handle"
+            style={{ top: pos.top, height: pos.height, left: handlePos.wrapperLeft - 26 }}
+            data-handle-row={i}
+            onMouseDown={(e) => handleReorderMouseDown('row', i, e)}
+            title={i === 0 ? '选中/拖拽标题行' : `选中/拖拽第 ${i} 行`}
+          >
+            <GripVertical size={12} />
+          </button>
+        ))}
+
+        {/* ── 列拖拽抓手（上方） ── */}
+        {handlePos && !readonly && handlePos.cols.map((pos, i) => (
+          <button
+            key={`ch${i}`}
+            type="button"
+            className="wem-tableblock-col-handle"
+            style={{ left: pos.left, width: pos.width, top: handlePos.wrapperTop - 22 }}
+            data-handle-col={i}
+            onMouseDown={(e) => handleReorderMouseDown('col', i, e)}
+            title={`选中/拖拽第 ${i + 1} 列`}
+          >
+            <GripHorizontal size={12} />
+          </button>
+        ))}
+
+        {/* ── 拖拽放置指示线 ── */}
+        {dropLine && (
+          <div
+            className={`wem-tableblock-drop-${dropLine.type}`}
+            style={dropLine.type === 'row'
+              ? { top: dropLine.pos - 1, left: dropLine.start, width: dropLine.length }
+              : { left: dropLine.pos - 1, top: dropLine.start, height: dropLine.length }
+            }
+          />
         )}
 
-        {/* ── 列插入指示器（垂直辅助线 + 上方 "+"） ── */}
-        {hoverIndicator?.type === 'col' && !readonly && (
-          <>
+        {/* ── 插入三角形 + 辅助线（T 区域四边） ── */}
+        {hoverPlus && !readonly && (() => {
+          const borders = bordersCacheRef.current ?? getBorderPositions()
+          if (!borders) return null
+          const borderPos = hoverPlus.type === 'row'
+            ? borders.hBorders[hoverPlus.afterIdx + 1]
+            : borders.vBorders[hoverPlus.afterIdx + 1]
+          if (borderPos == null) return null
+
+          let triStyle: React.CSSProperties
+          let triCls: string
+          if (hoverPlus.type === 'row') {
+            const top = borderPos - 5
+            if (hoverPlus.side === 'left') {
+              triStyle = { top, left: borders.tableLeft }
+              triCls = 'wem-tableblock-insert-left'
+            } else {
+              triStyle = { top, left: borders.tableLeft + borders.tableWidth - 7 }
+              triCls = 'wem-tableblock-insert-right'
+            }
+          } else {
+            const left = borderPos - 5
+            if (hoverPlus.side === 'top') {
+              triStyle = { left, top: borders.tableTop }
+              triCls = 'wem-tableblock-insert-top'
+            } else {
+              triStyle = { left, top: borders.tableTop + borders.tableHeight - 7 }
+              triCls = 'wem-tableblock-insert-bottom'
+            }
+          }
+
+          return <>
+            {/* 辅助线 */}
             <div
-              className="wem-tableblock-vline"
-              style={{
-                left: hoverIndicator.pos - 0.5,
-                top: hoverIndicator.lineStart,
-                height: hoverIndicator.lineLength,
-              }}
+              className={`wem-tableblock-guide-${hoverPlus.type}`}
+              style={hoverPlus.type === 'row'
+                ? { top: borderPos - 1, left: borders.tableLeft, width: borders.tableWidth }
+                : { left: borderPos - 1, top: borders.tableTop, height: borders.tableHeight }
+              }
             />
+            {/* 三角形按钮 */}
             <button
               type="button"
-              className="wem-tableblock-plus"
-              style={{
-                left: hoverIndicator.pos - 9,
-                top: hoverIndicator.lineStart - 22,
+              className={`wem-tableblock-insert ${triCls}`}
+              style={triStyle}
+              onClick={() => {
+                if (hoverPlus.type === 'row') addRow(hoverPlus.afterIdx)
+                else addCol(hoverPlus.afterIdx)
+                setHoverPlus(null)
               }}
-              onClick={handleIndicatorClick}
-              title={hoverIndicator.insertAfter < 0 ? '在左侧插入列' : '在右侧插入列'}
-            >
-              <Plus className="h-3 w-3" />
-            </button>
+            />
           </>
-        )}
+        })()}
       </div>
 
       {/* ── 右键菜单 ── */}
       {ctxMenu && !readonly && (
         <div ref={ctxRef} className="wem-tableblock-ctx" style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y }}>
-          {ctxMenu.r > 0 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addRow(ctxMenu.r - 1))}><ChevronUp className="h-3.5 w-3.5" /> 在上方插入行</button>}
-          <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addRow(ctxMenu.r))}><ChevronDown className="h-3.5 w-3.5" /> 在下方插入行</button>
-          <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addCol(ctxMenu.c - 1))}><ChevronLeft className="h-3.5 w-3.5" /> 在左侧插入列</button>
-          <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addCol(ctxMenu.c))}><ChevronRight className="h-3.5 w-3.5" /> 在右侧插入列</button>
-          <div className="wem-tableblock-ctx-sep" />
-          {ctxMenu.r > 0 && <>
-            <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveRowUp(ctxMenu.r))}><ChevronUp className="h-3.5 w-3.5" /> 上移一行</button>
-            {ctxMenu.r < cells.length - 1 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveRowDown(ctxMenu.r))}><ChevronDown className="h-3.5 w-3.5" /> 下移一行</button>}
-          </>}
-          {ctxMenu.c > 0 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveColLeft(ctxMenu.c))}><ChevronLeft className="h-3.5 w-3.5" /> 左移一列</button>}
-          {ctxMenu.c < colCount - 1 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveColRight(ctxMenu.c))}><ChevronRight className="h-3.5 w-3.5" /> 右移一列</button>}
-          <div className="wem-tableblock-ctx-sep" />
-          <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => setColumnAlign(ctxMenu.c, 'left'))}>左对齐</button>
-          <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => setColumnAlign(ctxMenu.c, 'center'))}>居中对齐</button>
-          <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => setColumnAlign(ctxMenu.c, 'right'))}>右对齐</button>
-          {aligns[ctxMenu.c] && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => setColumnAlign(ctxMenu.c, ''))}>默认对齐</button>}
-          <div className="wem-tableblock-ctx-sep" />
-          {colWidths.some(w => w > 0) && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => autoFitColumns())}>自动调整列宽</button>}
-          {ctxMenu.r > 0 && <button className="wem-tableblock-ctx-item destructive" onClick={() => ctxAction(() => deleteRow(ctxMenu.r))}>删除当前行</button>}
-          {colCount > 1 && <button className="wem-tableblock-ctx-item destructive" onClick={() => ctxAction(() => deleteCol(ctxMenu.c))}>删除当前列</button>}
-          <div className="wem-tableblock-ctx-sep" />
-          <button className="wem-tableblock-ctx-item destructive" onClick={() => ctxAction(() => onAction({ type: 'delete', blockId: block.id }))}>删除表格</button>
+              {ctxMenu.r > 0 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addRow(ctxMenu.r - 1))}><ChevronUp className="h-3.5 w-3.5" /> 在上方插入行</button>}
+              <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addRow(ctxMenu.r))}><ChevronDown className="h-3.5 w-3.5" /> 在下方插入行</button>
+              <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addCol(ctxMenu.c - 1))}><ChevronLeft className="h-3.5 w-3.5" /> 在左侧插入列</button>
+              <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => addCol(ctxMenu.c))}><ChevronRight className="h-3.5 w-3.5" /> 在右侧插入列</button>
+              <div className="wem-tableblock-ctx-sep" />
+              {ctxMenu.r > 0 && <>
+                <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveRowUp(ctxMenu.r))}><ChevronUp className="h-3.5 w-3.5" /> 上移一行</button>
+                {ctxMenu.r < cells.length - 1 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveRowDown(ctxMenu.r))}><ChevronDown className="h-3.5 w-3.5" /> 下移一行</button>}
+              </>}
+              {ctxMenu.c > 0 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveColLeft(ctxMenu.c))}><ChevronLeft className="h-3.5 w-3.5" /> 左移一列</button>}
+              {ctxMenu.c < colCount - 1 && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => moveColRight(ctxMenu.c))}><ChevronRight className="h-3.5 w-3.5" /> 右移一列</button>}
+              <div className="wem-tableblock-ctx-sep" />
+              <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => applyAlign(alignTargetCols, 'left'))}>左对齐</button>
+              <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => applyAlign(alignTargetCols, 'center'))}>居中对齐</button>
+              <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => applyAlign(alignTargetCols, 'right'))}>右对齐</button>
+              {alignTargetCols.some(c => aligns[c]) && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => applyAlign(alignTargetCols, ''))}>默认对齐</button>}
+              <div className="wem-tableblock-ctx-sep" />
+              {colWidths.some(w => w > 0) && <button className="wem-tableblock-ctx-item" onClick={() => ctxAction(() => autoFitColumns())}>自动调整列宽</button>}
+              {ctxMenu.r > 0 && <button className="wem-tableblock-ctx-item destructive" onClick={() => ctxAction(() => deleteRow(ctxMenu.r))}>删除当前行</button>}
+              {colCount > 1 && <button className="wem-tableblock-ctx-item destructive" onClick={() => ctxAction(() => deleteCol(ctxMenu.c))}>删除当前列</button>}
+              <div className="wem-tableblock-ctx-sep" />
+              <button className="wem-tableblock-ctx-item destructive" onClick={() => ctxAction(() => onAction({ type: 'delete', blockId: block.id }))}>删除表格</button>
         </div>
       )}
 
