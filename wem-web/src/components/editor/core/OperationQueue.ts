@@ -63,29 +63,26 @@ export class OperationQueue {
   }
 
   private async runNext(): Promise<void> {
-    if (this.queue.length === 0) {
-      this.running = false
-      return
-    }
-
     this.running = true
-    const entry = this.queue.shift()!
 
-    try {
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`操作 "${entry.label}" 超时`)), OP_TIMEOUT_MS)
-      })
+    while (this.queue.length > 0) {
+      const entry = this.queue.shift()!
+
       try {
-        await Promise.race([entry.execute(), timeout])
-      } finally {
-        if (timer !== undefined) clearTimeout(timer)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`操作 "${entry.label}" 超时`)), OP_TIMEOUT_MS)
+        })
+        try {
+          await Promise.race([entry.execute(), timeout])
+        } finally {
+          if (timer !== undefined) clearTimeout(timer)
+        }
+      } catch (err) {
+        this.onError?.(err, entry.label)
       }
-    } catch (err) {
-      this.onError?.(err, entry.label)
     }
 
-    // 继续下一个（即使当前失败）
-    await this.runNext()
+    this.running = false
   }
 }

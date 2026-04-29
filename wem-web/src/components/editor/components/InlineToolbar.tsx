@@ -37,6 +37,16 @@ function MathIcon({ size = 15 }: { size?: number }) {
 
 const ICON_MAP: Record<string, React.FC<{ size?: number }>> = { math: MathIcon }
 
+const TOOLBAR_GAP = 6
+const TOOLBAR_HEIGHT = 36
+
+function computeToolbarPos(rect: DOMRect): { top: number; left: number; flipDown: boolean } {
+  const flipDown = rect.top < TOOLBAR_HEIGHT + TOOLBAR_GAP + 8
+  const top = flipDown ? rect.bottom + TOOLBAR_GAP : rect.top - TOOLBAR_HEIGHT - TOOLBAR_GAP
+  const left = rect.left + rect.width / 2
+  return { top, left, flipDown }
+}
+
 function isFormatActive(
   sel: Selection,
   opts: { tag: string; altTag?: string; className?: string },
@@ -95,13 +105,8 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
     }
     setActiveFormats(formats)
 
-    const gap = 6
-    const barH = 36
-    const fd = rect.top < barH + gap + 8
-    const top = fd ? rect.bottom + gap : rect.top - barH - gap
-    const left = rect.left + rect.width / 2
-
-    setFlipDown(fd)
+    const { top, left, flipDown } = computeToolbarPos(rect)
+    setFlipDown(flipDown)
     setPos({ top, left })
     setVisible(true)
   }, [])
@@ -119,13 +124,11 @@ export function InlineToolbar({ onContentChange }: InlineToolbarProps) {
 
     const range = sel.getRangeAt(0)
     const rect = range.getBoundingClientRect()
-    const gap = 6
-    const barH = 36
-    const fd = rect.top < barH + gap + 8
+    const { top, left, flipDown } = computeToolbarPos(rect)
     el.style.display = ''
-    el.style.top = `${fd ? rect.bottom + gap : rect.top - barH - gap}px`
-    el.style.left = `${rect.left + rect.width / 2}px`
-    el.classList.toggle('flip-down', fd)
+    el.style.top = `${top}px`
+    el.style.left = `${left}px`
+    el.classList.toggle('flip-down', flipDown)
     return true
   }, [])
 

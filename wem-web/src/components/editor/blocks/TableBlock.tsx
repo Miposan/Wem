@@ -148,8 +148,7 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
   const [handlePos, setHandlePos] = useState<{
     rows: { top: number; height: number }[]
     cols: { left: number; width: number }[]
-    wrapperLeft: number; wrapperTop: number
-    tableLeft: number; tableTop: number; tableWidth: number; tableHeight: number
+    wrapperTop: number
   } | null>(null)
   const onContentChangeRef = useRef(onContentChange)
   onContentChangeRef.current = onContentChange
@@ -304,59 +303,6 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     commit(nextCells, nextAligns)
   }, [readonly, commit])
 
-  const moveRowUp = useCallback((index: number) => {
-    if (readonly || index <= 0) return
-    const next = cellsRef.current.map(r => [...r])
-    ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
-    commit(next)
-  }, [readonly, commit])
-
-  const moveRowDown = useCallback((index: number) => {
-    if (readonly) return
-    const prev = cellsRef.current
-    if (index >= prev.length - 1) return
-    const next = prev.map(r => [...r])
-    ;[next[index], next[index + 1]] = [next[index + 1], next[index]]
-    commit(next)
-  }, [readonly, commit])
-
-  const moveColLeft = useCallback((index: number) => {
-    if (readonly || index <= 0) return
-    const nextCells = cellsRef.current.map(r => { const row = [...r]; [row[index - 1], row[index]] = [row[index], row[index - 1]]; return row })
-    const nextAligns = [...alignsRef.current]
-    ;[nextAligns[index - 1], nextAligns[index]] = [nextAligns[index], nextAligns[index - 1]]
-    commit(nextCells, nextAligns)
-  }, [readonly, commit])
-
-  const moveColRight = useCallback((index: number) => {
-    if (readonly) return
-    const prevCells = cellsRef.current
-    if (index >= (prevCells[0]?.length ?? 0) - 1) return
-    const nextCells = prevCells.map(r => { const row = [...r]; [row[index], row[index + 1]] = [row[index + 1], row[index]]; return row })
-    const nextAligns = [...alignsRef.current]
-    ;[nextAligns[index], nextAligns[index + 1]] = [nextAligns[index + 1], nextAligns[index]]
-    commit(nextCells, nextAligns)
-  }, [readonly, commit])
-
-  const applyAlign = useCallback((cols: number[], align: ColumnAlign) => {
-    const nextAligns = [...alignsRef.current]
-    for (const col of cols) {
-      while (nextAligns.length <= col) nextAligns.push('')
-      nextAligns[col] = align
-    }
-    commit(cellsRef.current, nextAligns)
-  }, [commit])
-
-  const autoFitColumns = useCallback(() => {
-    setColWidths([])
-    updateBlock(blockIdRef.current, {
-      properties: { colWidths: '[]' },
-      properties_mode: 'merge',
-    }).catch(() => {})
-  }, [])
-
-  // ─── 行列拖拽移动（Obsidian 风格抓手） ───
-
   const moveRowTo = useCallback((from: number, to: number) => {
     if (readonly || from === to) return
     const idx = from < to ? to - 1 : to
@@ -379,14 +325,53 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     const [a] = nextAligns.splice(from, 1)
     nextAligns.splice(idx, 0, a)
     const widths = colWidthsRef.current
-    const nextWidths = widths.length > 0 ? (() => {
+    let nextWidths: number[] | undefined
+    if (widths.length > 0) {
       const w = [...widths]
       const [moved] = w.splice(from, 1)
       w.splice(idx, 0, moved)
-      return w
-    })() : undefined
+      nextWidths = w
+    }
     commit(nextCells, nextAligns, nextWidths)
   }, [readonly, commit])
+
+  const moveRowUp = useCallback((index: number) => {
+    if (readonly || index <= 0) return
+    moveRowTo(index, index - 1)
+  }, [readonly, moveRowTo])
+
+  const moveRowDown = useCallback((index: number) => {
+    if (readonly) return
+    moveRowTo(index, index + 2)
+  }, [readonly, moveRowTo])
+
+  const moveColLeft = useCallback((index: number) => {
+    if (readonly || index <= 0) return
+    moveColTo(index, index - 1)
+  }, [readonly, moveColTo])
+
+  const moveColRight = useCallback((index: number) => {
+    if (readonly) return
+    moveColTo(index, index + 2)
+  }, [readonly, moveColTo])
+
+  const applyAlign = useCallback((cols: number[], align: ColumnAlign) => {
+    const nextAligns = [...alignsRef.current]
+    for (const col of cols) {
+      while (nextAligns.length <= col) nextAligns.push('')
+      nextAligns[col] = align
+    }
+    commit(cellsRef.current, nextAligns)
+  }, [commit])
+
+  const autoFitColumns = useCallback(() => {
+    colWidthsRef.current = []
+    setColWidths([])
+    updateBlock(blockIdRef.current, {
+      properties: { colWidths: '[]' },
+      properties_mode: 'merge',
+    }).catch(() => {})
+  }, [])
 
   // ─── 键盘导航 ───
 
@@ -558,18 +543,6 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     return () => ro.disconnect()
   }, [])
 
-  // 滚动同步：直接更新抓手 DOM 样式，跳过 React
-  useEffect(() => {
-    const wrapper = tableRef.current?.parentElement
-    if (!wrapper) return
-    const onScroll = () => {
-      bordersCacheRef.current = null
-      syncHandleDOM()
-    }
-    wrapper.addEventListener('scroll', onScroll, { passive: true })
-    return () => wrapper.removeEventListener('scroll', onScroll)
-  }, [])
-
   // 缓存失效：cells 变化时行列数可能改变
   useEffect(() => { bordersCacheRef.current = null }, [cells])
 
@@ -623,6 +596,8 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
 
     contentPosRef.current = { rows: contentRows, cols: contentCols }
 
+    const outer = outerRef.current
+    const outerOff = outer?.offsetTop ?? 0
     const wLeft = wrapper.offsetLeft
     const wTop = wrapper.offsetTop
     const sl = wrapper.scrollLeft
@@ -631,16 +606,23 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
     const tTop = table.offsetTop
 
     setHandlePos({
-      rows: contentRows.map(p => ({ top: wTop + tTop + p.top - st, height: p.height })),
+      rows: contentRows.map(p => ({ top: outerOff + wTop + tTop + p.top - st, height: p.height })),
       cols: contentCols.map(p => ({ left: wLeft + tLeft + p.left - sl, width: p.width })),
-      wrapperLeft: wLeft,
-      wrapperTop: wTop,
-      tableLeft: wLeft + tLeft - sl,
-      tableTop: wTop + tTop - st,
-      tableWidth: table.offsetWidth,
-      tableHeight: table.offsetHeight,
+      wrapperTop: outerOff + wTop,
     })
   }, [cells, colWidths])
+
+  // 滚动同步：直接更新抓手 DOM 样式，跳过 React
+  useEffect(() => {
+    const wrapper = tableRef.current?.parentElement
+    if (!wrapper) return
+    const onScroll = () => {
+      bordersCacheRef.current = null
+      syncHandleDOM()
+    }
+    wrapper.addEventListener('scroll', onScroll, { passive: true })
+    return () => wrapper.removeEventListener('scroll', onScroll)
+  }, [])
 
   const handleReorderMouseDown = useCallback((type: 'row' | 'col', index: number, e: React.MouseEvent) => {
     if (readonly || e.button !== 0) return
@@ -849,6 +831,7 @@ export function TableBlock({ block, readonly, onContentChange, onAction }: Table
       const next = [...d.widths]
       next[d.col] = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, d.widths[d.col] + ev.clientX - d.startX))
       finalWidths = next
+      colWidthsRef.current = next
       setColWidths(next)
     }
     const onUp = () => {

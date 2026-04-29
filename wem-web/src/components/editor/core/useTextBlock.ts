@@ -63,8 +63,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
   // 只订阅 dispatch（stable，不随 state 变化而 re-render）
   const slashMenu = useSlashMenuDispatch()
 
-  const slashPending = useRef(false)
-  const slashPendingOffset = useRef(0)
+  const slashPending = useRef<{ offset: number } | null>(null)
 
   // 稳定的 onAction ref
   const onActionRef = useRef(onAction)
@@ -109,7 +108,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
     const el = ref.current
     if (!el) return
 
-    // InlineToolbar applyFormat 的 DOM 操作也会触发 input 事件
+    // InlineToolbar 通过 DOM 属性标记跳过（跨组件，无法访问 ref）
     if (el.dataset.skipInput) {
       delete el.dataset.skipInput
       return
@@ -119,7 +118,8 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
     // 斜杠命令：首次输入 / 触发菜单
     if (slashPending.current) {
-      slashPending.current = false
+      const pending = slashPending.current
+      slashPending.current = null
       const sel = window.getSelection()
       if (sel && sel.rangeCount > 0) {
         const range = sel.getRangeAt(0)
@@ -132,7 +132,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
           blockId: block.id,
           x: rect.left,
           y: rect.bottom,
-          slashOffset: slashPendingOffset.current,
+          slashOffset: pending.offset,
         })
       }
       return
@@ -240,13 +240,9 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
       const sel = window.getSelection()
       if (!sel || !sel.rangeCount) return
 
-      const range = sel.getRangeAt(0)
       const text = el.textContent || ''
 
-      const preRange = range.cloneRange()
-      preRange.selectNodeContents(el)
-      preRange.setEnd(range.startContainer, range.startOffset)
-      const offset = preRange.toString().length
+      const offset = getCursorOffset(el)
 
       const atStart = offset === 0
       const atEnd = offset === text.length
@@ -265,8 +261,7 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
       // ── / 触发斜杠菜单 ──
       if (e.key === '/') {
-        slashPending.current = true
-        slashPendingOffset.current = offset
+        slashPending.current = { offset }
         // 不阻止默认行为，让 / 插入到文本中，在 handleInput 中触发菜单
       }
 

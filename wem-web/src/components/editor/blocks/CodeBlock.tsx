@@ -187,12 +187,12 @@ export function CodeBlock({
       const newLang = e.target.value
       onActionRef.current({
         type: 'convert-block',
-        blockId: block.id,
-        content: block.content ?? '',
+        blockId: blockIdRef.current,
+        content: viewRef.current?.state.doc.toString() ?? '',
         blockType: makeCodeBlockType(newLang),
       })
     },
-    [block.id, block.content],
+    [],
   )
 
   const displayName = getLanguageDisplayName(language)

@@ -23,6 +23,12 @@ export function ImageBlock({ block, readonly, onContentChange }: ImageBlockProps
   const [error, setError] = useState(false)
   const captionRef = useRef<HTMLParagraphElement>(null)
 
+  // URL 变化时重置加载状态
+  useEffect(() => {
+    setLoaded(false)
+    setError(false)
+  }, [url])
+
   useEffect(() => {
     if (captionRef.current && captionRef.current.textContent !== caption) {
       captionRef.current.textContent = caption

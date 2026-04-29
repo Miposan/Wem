@@ -324,15 +324,13 @@ export function toggleInlineWrap(el: HTMLElement, tagName: string, className?: s
 
 /** Remove all inline formatting from the selection, leaving plain text */
 export function removeAllFormats(el: HTMLElement): void {
-  document.execCommand('removeFormat')
-
-  el.querySelectorAll('mark,code,span.inline-math,span[data-type="inline-math"]').forEach((inner) => {
+  // Unwrap all known inline format elements
+  const selectors = 'strong,b,em,i,u,mark,code,span.inline-math,span[data-type="inline-math"]'
+  el.querySelectorAll(selectors).forEach((inner) => {
     const parent = inner.parentNode!
-    // Restore LaTeX source text for rendered math spans
     const latex = (inner as HTMLElement).getAttribute('data-content')
     if (latex) {
-      const textNode = document.createTextNode(latex)
-      parent.replaceChild(textNode, inner)
+      parent.replaceChild(document.createTextNode(latex), inner)
     } else {
       while (inner.firstChild) parent.insertBefore(inner.firstChild, inner)
       parent.removeChild(inner)

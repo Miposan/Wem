@@ -109,8 +109,6 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
     ? splitContentAtCursor(editEl)
     : { before: block.content ?? '', after: '' }
 
-  const text = block.content ?? ''
-
   ctx.cancelPendingSave(targetId)
 
   const isHeading = block.block_type.type === 'heading'
@@ -125,7 +123,7 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
 
   // 空的 ListItem split → 退出列表（不创建新 ListItem）
   // 在空 ListItem 里按 Enter 的语义是"结束列表"
-  if (isListItem && text.length === 0) {
+  if (isListItem && contentBefore.length === 0 && contentAfter.length === 0) {
     // 删除当前空 ListItem，在 List 后面创建一个 Paragraph
     const prev = findPrevBlock(tree, targetId)
     ctx.setTreeSync((prevTree) => removeBlock(prevTree, targetId))
@@ -144,7 +142,7 @@ export async function executeSplit(ctx: CommandContext): Promise<void> {
 
   // ── Heading at offset 0: 在标题前插入空段落（Notion 行为）──
   // 光标在标题开头按 Enter → 在标题上方创建空段落，标题内容不变
-  if (isHeading && offset === 0 && text.length > 0) {
+  if (isHeading && offset === 0 && contentBefore.length === 0 && contentAfter.length > 0) {
     const placeholderId = pendingBlockId()
     const placeholder: BlockNode = {
       id: placeholderId,
@@ -902,16 +900,16 @@ export async function executeAddBlockAfter(
   requestAnimationFrame(() => focusBlock(created.id))
 }
 
-/** 查找 ListItem 所属的 List 父容器 */
+/** 查找 ListItem 所属的 List 父容器（在 children 中搜索 targetId，返回其 list 类型父节点） */
 function findParentList(tree: BlockNode[], listItemBlockId: string): BlockNode | null {
   for (const node of tree) {
-    const found = findParentListInSubtree(node, listItemBlockId)
+    const found = findListParentOfChild(node, listItemBlockId)
     if (found) return found
   }
   return null
 }
 
-function findParentListInSubtree(parent: BlockNode, targetId: string): BlockNode | null {
+function findListParentOfChild(parent: BlockNode, targetId: string): BlockNode | null {
   for (const child of parent.children) {
     if (child.id === targetId && parent.block_type.type === 'list') {
       return parent

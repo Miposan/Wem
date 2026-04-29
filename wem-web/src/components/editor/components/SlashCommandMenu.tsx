@@ -19,11 +19,16 @@ export function SlashCommandMenu({ onSelect }: SlashCommandMenuProps) {
 
   if (!state.visible || filteredItems.length === 0) return null
 
+  const menuHeight = filteredItems.length * 36 + 30
+  const menuTop = state.y + 6 + menuHeight > window.innerHeight
+    ? state.y - 6 - menuHeight
+    : state.y + 6
+
   return (
     <div
       ref={menuRef}
       className="wem-slash-menu"
-      style={{ position: 'fixed', left: state.x, top: state.y + 6 }}
+      style={{ position: 'fixed', left: Math.min(state.x, window.innerWidth - 300), top: menuTop }}
     >
       <div className="wem-slash-menu-section">基础块</div>
       {filteredItems.map((item, i) => (

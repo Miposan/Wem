@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import type { BlockNode, BlockType } from '@/types/api'
-import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeTableType } from '@/types/api'
+import { makeParagraphType, makeHeadingType, makeListType, makeCodeBlockType, makeMathBlockType, makeTableType, makeBlockquoteType } from '@/types/api'
 
 // ─── Types ───
 
@@ -72,7 +72,7 @@ function getConvertibleTypes(currentType: BlockType): { label: string; type: Blo
     }
     types.push({ label: '无序列表', type: makeListType(false) })
     types.push({ label: '有序列表', type: makeListType(true) })
-    types.push({ label: '引用块', type: { type: 'blockquote' } })
+    types.push({ label: '引用块', type: makeBlockquoteType() })
     types.push({ label: '代码块', type: makeCodeBlockType('') })
     types.push({ label: '公式块', type: makeMathBlockType() })
     types.push({ label: '表格', type: makeTableType() })

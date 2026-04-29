@@ -58,6 +58,9 @@ import { MathEditPopup } from './components/MathEditPopup'
 import { HeadingNumberingProvider, computeHeadingNumbers } from './core/HeadingNumbering'
 import { EditorSettingsProvider, type EditorSettings } from './core/EditorSettings'
 
+const SSE_ECHO_TTL_MS = 5000
+const CONTENT_DEBOUNCE_MS = 300
+
 // ─── Props ───
 
 export interface WemEditorProps {
@@ -165,7 +168,7 @@ export function WemEditor({
     pendingEditorIds.current.add(id)
     setTimeout(() => {
       pendingEditorIds.current.delete(id)
-    }, 5000)
+    }, SSE_ECHO_TTL_MS)
   }, [])
 
   /** 取消指定块的 debounce 保存定时器（split/merge/delete 前调用，防止覆盖新数据） */
@@ -391,7 +394,7 @@ export function WemEditor({
       } catch (err) {
         console.error('自动保存失败:', err)
       }
-    }, 300)
+    }, CONTENT_DEBOUNCE_MS)
 
     const saves = pendingTimers.current
     if (saves.has(blockId)) clearTimeout(saves.get(blockId)!)
@@ -531,7 +534,9 @@ export function WemEditor({
   )
 
   // 同步 ref → useBlockDrag 的回调现在能调用最新的 handleAction
-  handleActionRef.current = handleAction
+  useEffect(() => {
+    handleActionRef.current = handleAction
+  })
 
   // ─── Undo / Redo ───
   //
