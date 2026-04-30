@@ -54,7 +54,13 @@
       "Bash(mv src/agent/provider/mod.rs src/agent/provider.rs)",
       "Bash(mv src/agent/tools/mod.rs src/agent/tools.rs)",
       "Bash(mv src/api/mod.rs src/api.rs)",
-      "Bash(mv src/block_system/handler/mod.rs src/block_system/handler.rs)"
+      "Bash(mv src/block_system/handler/mod.rs src/block_system/handler.rs)",
+      "Bash(npx --package=typescript tsc --noEmit)",
+      "Bash(grep -r \"Markdown.*image\\\\|!\\\\\\\\[.*\\\\\\\\]\" L:/CCSpace/Wem/temp/siyuan/app/src --include=\"*.ts\")",
+      "Bash(sed -i 's|use crate::error::{AppError, ApiResponse, blocking}|use crate::dto::{ApiResponse, blocking};\\\\nuse crate::error::AppError|' block_system/handler/block.rs block_system/handler/document.rs block_system/handler/oplog.rs)",
+      "Bash(sed -i 's|use crate::error::{ApiResponse, AppError}|use crate::dto::ApiResponse;\\\\nuse crate::error::AppError|' block_system/handler/asset.rs)",
+      "Bash(sed -i 's|use crate::error::ApiResponse;|use crate::dto::ApiResponse;|' block_system/handler/event.rs)",
+      "Bash(cargo add *)"
     ]
   }
 }

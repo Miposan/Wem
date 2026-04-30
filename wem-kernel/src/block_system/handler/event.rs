@@ -9,7 +9,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
 
-use crate::error::ApiResponse;
+use crate::dto::ApiResponse;
 
 // ─── Health 健康检查 ────────────────────────────────────────────
 

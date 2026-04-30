@@ -5,31 +5,14 @@
 //! for use alongside built-in tools in the Agent loop.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use rmcp::ServiceExt;
-use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+use crate::config::McpServerConfig;
 use super::tools::{Tool, ToolContext, ToolResult};
-
-// ─── MCP Server Config ─────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerConfig {
-    /// Logical name for this MCP server (used in tool name prefix)
-    pub name: String,
-    /// Command to launch the MCP server process
-    pub command: String,
-    /// Arguments to pass to the command
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Environment variables to set for the child process
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-}
 
 // ─── Discovered Tool Info ──────────────────────────────────────────
 

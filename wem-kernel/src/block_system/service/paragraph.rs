@@ -3,8 +3,8 @@
 //! - BlockTypeOps trait 的 Paragraph 变体（目前使用默认实现）
 //! - Paragraph 特有操作：split（拆分）、merge（合并）
 
-use crate::api::request::{MergeReq, SplitReq};
-use crate::api::response::{MergeResult, SplitResult};
+use crate::dto::request::{MergeReq, SplitReq};
+use crate::dto::response::{MergeResult, SplitResult};
 use crate::error::AppError;
 use crate::block_system::model::event::BlockEvent;
 use crate::block_system::model::oplog::{Action, BlockSnapshot, ChangeType};

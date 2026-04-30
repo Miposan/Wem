@@ -2,7 +2,7 @@
 //!
 //! 定义统一的 Provider trait 和跨 Provider 共享的类型。
 
-pub mod anthropic;
+pub mod anthropic_compatible;
 pub mod openai_compatible;
 
 use std::pin::Pin;

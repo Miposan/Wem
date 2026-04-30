@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::request::MoveHeadingTreeReq;
+use crate::dto::request::MoveHeadingTreeReq;
 use crate::error::AppError;
 use crate::block_system::model::event::BlockEvent;
 use crate::block_system::model::oplog::{BlockSnapshot, ChangeType};

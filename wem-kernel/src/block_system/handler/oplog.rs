@@ -5,9 +5,10 @@
 
 use axum::{extract::State, Json};
 
-use crate::api::request::{GetHistoryReq, RedoReq, UndoReq};
-use crate::api::response::{HistoryResponse, UndoRedoResponse};
-use crate::error::{AppError, ApiResponse, blocking};
+use crate::dto::request::{GetHistoryReq, RedoReq, UndoReq};
+use crate::dto::response::{HistoryResponse, UndoRedoResponse};
+use crate::dto::{ApiResponse, blocking};
+use crate::error::AppError;
 use crate::repo::Db;
 use crate::block_system::service::oplog;
 

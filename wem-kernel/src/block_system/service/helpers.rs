@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::request::PropertiesMode;
+use crate::dto::request::PropertiesMode;
 use crate::error::AppError;
 use crate::block_system::model::{Block, BlockType};
 use crate::repo::block_repo as repo;

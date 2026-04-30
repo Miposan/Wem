@@ -21,8 +21,8 @@ use crate::util::now_iso;
 use super::traits::{BlockTypeOps, MoveContext, TreeMoveOps, ExportDepth};
 use super::helpers::{self, run_in_transaction, resolve_target_parent};
 use super::{event, oplog};
-use crate::api::request::MoveDocumentTreeReq;
-use crate::api::response::{BlockNode, BreadcrumbItem, BreadcrumbResult, DocumentChildrenResult, DocumentContentResult};
+use crate::dto::request::MoveDocumentTreeReq;
+use crate::dto::response::{BlockNode, BreadcrumbItem, BreadcrumbResult, DocumentChildrenResult, DocumentContentResult};
 
 /// Document 类型行为实现
 pub struct DocumentOps;
@@ -295,7 +295,7 @@ pub fn move_document_tree(db: &Db, req: MoveDocumentTreeReq) -> Result<Block, Ap
 
 // ─── 导入/导出 ──────────────────────────────────────────────────
 
-pub fn import_text(db: &Db, req: crate::api::request::ImportTextReq) -> Result<crate::api::response::ImportResult, AppError> {
+pub fn import_text(db: &Db, req: crate::dto::request::ImportTextReq) -> Result<crate::dto::response::ImportResult, AppError> {
     let p = crate::block_system::parser::get_parser(&req.format)?;
     let parse_result = p.parse(&req.content, &crate::block_system::parser::types::ParseOptions::default())?;
 
@@ -347,7 +347,7 @@ pub fn import_text(db: &Db, req: crate::api::request::ImportTextReq) -> Result<c
         Ok(())
     })?;
 
-    let result = crate::api::response::ImportResult {
+    let result = crate::dto::response::ImportResult {
         root: root.clone(),
         blocks_imported: parse_result.blocks_created,
         warnings: parse_result.warnings,
@@ -386,7 +386,7 @@ fn insert_block_from_model(conn: &rusqlite::Connection, block: &Block) -> Result
     .map_err(|e| AppError::Internal(format!("插入 Block 失败: {}", e)))
 }
 
-pub fn export_text(db: &Db, doc_id: &str, format: &str) -> Result<crate::api::response::ExportResult, AppError> {
+pub fn export_text(db: &Db, doc_id: &str, format: &str) -> Result<crate::dto::response::ExportResult, AppError> {
     super::block::export_block(db, doc_id, format, ExportDepth::Descendants)
 }
 

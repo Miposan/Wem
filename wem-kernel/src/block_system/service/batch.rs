@@ -5,8 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::api::request::{BatchOp, BatchReq, PropertiesMode};
-use crate::api::response::{BatchOpResult, BatchResult};
+use crate::dto::request::{BatchOp, BatchReq, PropertiesMode};
+use crate::dto::response::{BatchOpResult, BatchResult};
 use crate::error::AppError;
 use crate::block_system::model::event::BlockEvent;
 use crate::block_system::model::oplog::{Action, BlockSnapshot, ChangeType};

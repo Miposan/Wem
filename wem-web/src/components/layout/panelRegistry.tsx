@@ -103,8 +103,6 @@ export interface PanelDefinition {
   defaultSlot: 'left' | 'right' | 'top'
   /** 默认可见 */
   defaultVisible: boolean
-  /** 面板最小宽度（px） */
-  minWidth?: number
 }
 
 // ─── 面板内容组件 ───
@@ -138,7 +136,6 @@ const registryMap = {
     render: FileTreeContent,
     defaultSlot: 'left' as const,
     defaultVisible: true,
-    minWidth: 180,
   },
   toc: {
     type: 'toc' as const,
@@ -147,7 +144,6 @@ const registryMap = {
     render: TocContent,
     defaultSlot: 'right' as const,
     defaultVisible: true,
-    minWidth: 160,
   },
   copilot: {
     type: 'copilot' as const,
@@ -156,7 +152,6 @@ const registryMap = {
     render: CopilotContent,
     defaultSlot: 'right' as const,
     defaultVisible: false,
-    minWidth: 280,
   },
 } satisfies Record<PanelType, PanelDefinition>
 

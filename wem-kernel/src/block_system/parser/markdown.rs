@@ -1016,13 +1016,10 @@ fn serialize_block_recursive(
             ctx.out.push_str(&format!("{}\n\n", String::from_utf8_lossy(&block.content)));
         }
 
-        BlockType::Image { url } => {
-            let alt = block
-                .properties
-                .get("alt")
-                .cloned()
-                .unwrap_or_default();
-            ctx.out.push_str(&format!("![{}]({})\n\n", alt, url));
+        BlockType::Image => {
+            // content 已经是 ![caption](url) 格式
+            ctx.out.push_str(&String::from_utf8_lossy(&block.content));
+            ctx.out.push_str("\n\n");
         }
 
         BlockType::List { ordered } => {
@@ -1704,8 +1701,8 @@ Final paragraph.
             parent_id: "root".to_string(),
             document_id: "root".to_string(),
             position: "a0".to_string(),
-            block_type: BlockType::Image { url: "https://example.com/img.png".to_string() },
-            content: Vec::new(),
+            block_type: BlockType::Image,
+            content: "![img](https://example.com/img.png)".as_bytes().to_vec(),
             properties: {
                 let mut m = HashMap::new();
                 m.insert("alt".to_string(), "photo".to_string());

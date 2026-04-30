@@ -12,6 +12,7 @@ pub mod parser;
 pub mod service;
 pub mod handler;
 
+
 // ─── 便捷 re-export（向后兼容） ─────────────────────────────────
 pub use model::{Block, BlockStatus, BlockType, ParseWarning, ROOT_ID, generate_block_id};
 pub use service::block;

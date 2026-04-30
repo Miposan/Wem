@@ -5,12 +5,13 @@
 
 use axum::{extract::State, Json};
 
-use crate::api::request::{
+use crate::dto::request::{
     BatchReq, CreateBlockReq, DeleteBlockReq, ExportBlockReq, GetBlockReq, MergeReq, MoveBlockReq,
     MoveHeadingTreeReq, RestoreReq, SplitReq, UpdateBlockReq,
 };
-use crate::api::response::{BatchResult, DeleteResult, ExportResult, MergeResult, RestoreResult, SplitResult};
-use crate::error::{AppError, ApiResponse, blocking};
+use crate::dto::response::{BatchResult, DeleteResult, ExportResult, MergeResult, RestoreResult, SplitResult};
+use crate::dto::{ApiResponse, blocking};
+use crate::error::AppError;
 use crate::block_system::model::Block;
 use crate::repo::Db;
 use crate::block_system::service::block;

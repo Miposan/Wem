@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { BlockNode } from '@/types/api'
-import { getDocument, updateBlock, createBlock, undoDocument, redoDocument } from '@/api/client'
+import { getDocument, updateBlock, createBlock, undoDocument, redoDocument, uploadAsset } from '@/api/client'
 import { BlockTreeRenderer } from './components/BlockTreeRenderer'
 import { updateBlockInTree, flattenTree, findBlockById, insertAfter } from './core/BlockOperations'
 import { OperationQueue } from './core/OperationQueue'
@@ -679,6 +679,69 @@ export function WemEditor({
     [readonly, focusLastBlockIfParagraph, createParagraphFromBlank],
   )
 
+  // ─── 粘贴/拖入图片 → 创建图片块 ───
+
+  const insertImageBlock = useCallback(async (file: File, afterBlockId?: string) => {
+    if (readonly) return
+    try {
+      const path = await uploadAsset(file)
+      const content = `![](${path})`
+      const afterId = afterBlockId ?? treeRef.current.at(-1)?.id
+      const editorId = crypto.randomUUID()
+      addPendingOperationId(editorId)
+      const created = await createBlock({
+        parent_id: documentId,
+        block_type: { type: 'image' },
+        content,
+        after_id: afterId,
+        editor_id: editorId,
+      })
+      const newBlock: BlockNode = { ...created, children: [] }
+      setTreeSync((prev) => insertAfter(prev, afterId, newBlock))
+    } catch (err) {
+      console.error('[editor] 图片上传插入失败:', err)
+    }
+  }, [readonly, documentId, setTreeSync, addPendingOperationId])
+
+  const handleEditorPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (readonly) return
+      const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
+      if (files.length === 0) return
+
+      e.preventDefault()
+
+      // 确定插入位置：当前聚焦块之后
+      const active = document.activeElement as HTMLElement | null
+      const blockEl = active?.closest('[data-block-id]')
+      const afterBlockId = blockEl?.getAttribute('data-block-id')
+
+      for (const file of files) {
+        insertImageBlock(file, afterBlockId ?? undefined)
+      }
+    },
+    [readonly, insertImageBlock],
+  )
+
+  const handleEditorDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (readonly) return
+      const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'))
+      if (files.length === 0) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const blockEl = (e.target as HTMLElement).closest('[data-block-id]')
+      const afterBlockId = blockEl?.getAttribute('data-block-id')
+
+      for (const file of files) {
+        insertImageBlock(file, afterBlockId ?? undefined)
+      }
+    },
+    [readonly, insertImageBlock],
+  )
+
   // ─── 右键菜单 ───
 
   const handleBlockContextMenu = useCallback(
@@ -783,6 +846,8 @@ export function WemEditor({
           className="wem-editor-root"
           onClick={handleEditorClick}
           onKeyDown={handleEditorKeyDown}
+          onPaste={handleEditorPaste}
+          onDrop={handleEditorDrop}
           {...selectionHandlers}
         >
           <BlockTreeRenderer

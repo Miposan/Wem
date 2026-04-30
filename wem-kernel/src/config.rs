@@ -16,7 +16,8 @@
 //!
 //! ```
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 // ─── 全局配置单例 ──────────────────────────────────────────────
@@ -55,6 +56,17 @@ pub struct DatabaseConfig {
     pub path: String,
 }
 
+/// MCP 外部工具服务器配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
 /// Agent 子系统配置
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -79,7 +91,7 @@ pub struct AgentConfig {
     pub custom_headers: std::collections::HashMap<String, String>,
     /// MCP 服务器配置列表
     #[serde(default)]
-    pub mcp_servers: Vec<wem_kernel::agent::mcp::McpServerConfig>,
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 

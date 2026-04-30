@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use crate::api::request::{CreateBlockReq, MoveBlockReq, MoveDocumentTreeReq, UpdateBlockReq};
-use crate::api::response::{
+use crate::dto::request::{CreateBlockReq, MoveBlockReq, MoveDocumentTreeReq, UpdateBlockReq};
+use crate::dto::response::{
     DeleteResult, RestoreResult,
 };
 use crate::repo::block_repo as repo;
@@ -757,7 +757,7 @@ pub fn export_block(
     block_id: &str,
     format: &str,
     depth: ExportDepth,
-) -> Result<crate::api::response::ExportResult, AppError> {
+) -> Result<crate::dto::response::ExportResult, AppError> {
     let conn = crate::repo::lock_db(db);
 
     let root = repo::find_by_id(&conn, block_id)
@@ -784,7 +784,7 @@ pub fn export_block(
     let serializer = crate::block_system::parser::get_serializer(format)?;
     let result = serializer.serialize(&root, &children_map)?;
 
-    Ok(crate::api::response::ExportResult {
+    Ok(crate::dto::response::ExportResult {
         content: result.content,
         filename: result.filename,
         blocks_exported: result.blocks_exported,
@@ -877,7 +877,7 @@ mod tests {
     use super::*;
     use crate::repo::tests::init_test_db;
     use crate::block_system::model::BlockType;
-    use crate::api::request::PropertiesMode;
+    use crate::dto::request::PropertiesMode;
     use super::super::document;
 
     // ── get_root ─────────────────────────────────────────
@@ -1423,8 +1423,8 @@ mod tests {
 
     // ── import_text ─────────────────────────────────────
 
-    fn import_md(db: &Db, content: &str) -> Result<crate::api::response::ImportResult, AppError> {
-        document::import_text(db, crate::api::request::ImportTextReq {
+    fn import_md(db: &Db, content: &str) -> Result<crate::dto::response::ImportResult, AppError> {
+        document::import_text(db, crate::dto::request::ImportTextReq {
             editor_id: None,
             format: "markdown".to_string(),
             content: content.to_string(),
@@ -1462,7 +1462,7 @@ mod tests {
     #[test]
     fn import_with_title_override() {
         let db = init_test_db();
-        let req = crate::api::request::ImportTextReq {
+        let req = crate::dto::request::ImportTextReq {
             editor_id: None,
             format: "markdown".to_string(),
             content: "# Original\n\nContent".to_string(),
@@ -1478,7 +1478,7 @@ mod tests {
     fn import_to_specific_parent() {
         let db = init_test_db();
         let parent = document::create_document(&db, "Parent Doc".to_string(), Some(crate::block_system::model::ROOT_ID.to_string()), None, None).unwrap();
-        let req = crate::api::request::ImportTextReq {
+        let req = crate::dto::request::ImportTextReq {
             editor_id: None,
             format: "markdown".to_string(),
             content: "# Child\n\nChild content".to_string(),
@@ -1493,7 +1493,7 @@ mod tests {
     #[test]
     fn import_invalid_format() {
         let db = init_test_db();
-        let req = crate::api::request::ImportTextReq {
+        let req = crate::dto::request::ImportTextReq {
             editor_id: None,
             format: "pdf".to_string(),
             content: "some text".to_string(),
@@ -1507,7 +1507,7 @@ mod tests {
     #[test]
     fn import_nonexistent_parent() {
         let db = init_test_db();
-        let req = crate::api::request::ImportTextReq {
+        let req = crate::dto::request::ImportTextReq {
             editor_id: None,
             format: "markdown".to_string(),
             content: "Hello".to_string(),
@@ -1554,7 +1554,7 @@ mod tests {
     #[test]
     fn import_md_alias() {
         let db = init_test_db();
-        let req = crate::api::request::ImportTextReq {
+        let req = crate::dto::request::ImportTextReq {
             editor_id: None,
             format: "md".to_string(),
             content: "# Alias Test".to_string(),

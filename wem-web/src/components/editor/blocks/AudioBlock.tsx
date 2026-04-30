@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { BlockNode } from '@/types/api'
 import { Music } from 'lucide-react'
 
@@ -10,6 +10,10 @@ interface AudioBlockProps {
 export function AudioBlock({ block }: AudioBlockProps) {
   const url = block.block_type.type === 'audio' ? block.block_type.url : ''
   const [error, setError] = useState(false)
+
+  useEffect(() => {
+    setError(false)
+  }, [url])
 
   if (!url) {
     return (

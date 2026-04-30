@@ -24,7 +24,7 @@ export interface CodeBlockBlockType { type: 'codeBlock'; language: string }
 export interface MathBlockBlockType { type: 'mathBlock' }
 export interface ThematicBreakBlockType { type: 'thematicBreak' }
 export interface TableBlockType { type: 'table' }
-export interface ImageBlockType { type: 'image'; url: string }
+export interface ImageBlockType { type: 'image' }
 export interface AudioBlockType { type: 'audio'; url: string }
 export interface VideoBlockType { type: 'video'; url: string }
 export interface IframeBlockType { type: 'iframe'; url: string }
@@ -91,8 +91,8 @@ export function makeTableType(): TableBlockType {
   return { type: 'table' }
 }
 
-export function makeImageBlockType(url: string): ImageBlockType {
-  return { type: 'image', url }
+export function makeImageBlockType(): ImageBlockType {
+  return { type: 'image' }
 }
 
 export interface Block {

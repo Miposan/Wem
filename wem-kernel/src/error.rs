@@ -1,48 +1,10 @@
-//! 统一错误处理与 API 响应格式
+//! 统一错误处理
 //!
-//! 所有 API 返回统一的 JSON 格式：{ code, msg, data }
-//! - 成功：code=0, data=业务数据
-//! - 失败：code=错误码, msg=错误描述, data=null（冲突类错误 data 含详情）
+//! 提供应用级错误枚举 `AppError`，以及错误码常量。
+//! 响应格式 `ApiResponse` 和 handler 辅助函数 `blocking` 见 `crate::dto`。
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
-
-// ─── 统一响应格式 ───────────────────────────────────────────────
-
-/// API 统一响应结构体
-///
-/// ```json
-/// {"code": 0, "msg": "ok", "data": {"id": "xxx", ...}}
-/// ```
-///
-/// - `code`: 0 表示成功，非零表示错误（见错误码常量）
-/// - `msg`:  人类可读的描述
-/// - `data`: 业务数据，失败时为 null
-#[derive(Serialize)]
-pub struct ApiResponse<T: Serialize> {
-    pub code: i32,
-    pub msg: String,
-    /// 序列化时如果为 None 则省略 data 字段（让 JSON 更干净）
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<T>,
-}
-
-impl<T: Serialize> ApiResponse<T> {
-    /// 构造成功响应
-    ///
-    /// ```ignore
-    /// ApiResponse::ok(Some(block))  // → {"code":0, "msg":"ok", "data":{...}}
-    /// ApiResponse::ok(None::<()>)   // → {"code":0, "msg":"ok"}
-    /// ```
-    pub fn ok(data: Option<T>) -> Self {
-        Self {
-            code: 0,
-            msg: "ok".to_string(),
-            data,
-        }
-    }
-}
 
 // ─── 错误码常量 ─────────────────────────────────────────────────
 // 参考 03-api-rest.md §1 错误码表
@@ -155,30 +117,4 @@ impl From<rusqlite::Error> for AppError {
     fn from(e: rusqlite::Error) -> Self {
         AppError::Internal(e.to_string())
     }
-}
-
-// ─── Handler 辅助函数 ──────────────────────────────────────────────
-
-/// 在阻塞线程池中执行同步闭包，返回统一 API 响应
-///
-/// 所有 handler 的公共模式：spawn_blocking → map_err → ApiResponse::ok。
-/// 使用此函数后 handler 只需提供业务闭包。
-///
-/// ```ignore
-/// pub async fn get_document(
-///     State(db): State<Db>,
-///     Json(req): Json<GetDocumentReq>,
-/// ) -> Result<Json<ApiResponse<DocumentContentResult>>, AppError> {
-///     blocking(move || document::get_document_content(&db, &req.id)).await
-/// }
-/// ```
-pub async fn blocking<F, T>(f: F) -> Result<axum::Json<ApiResponse<T>>, AppError>
-where
-    F: FnOnce() -> Result<T, AppError> + Send + 'static,
-    T: Send + serde::Serialize + 'static,
-{
-    let result = tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| AppError::Internal(format!("任务执行失败: {}", e)))??;
-    Ok(axum::Json(ApiResponse::ok(Some(result))))
 }

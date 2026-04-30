@@ -5,7 +5,7 @@
  * 支持原生 <video> 和 YouTube/Bilibili 等外链嵌入。
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { BlockNode } from '@/types/api'
 import { VideoIcon } from 'lucide-react'
 
@@ -34,6 +34,10 @@ function getEmbedUrl(url: string): string | null {
 export function VideoBlock({ block }: VideoBlockProps) {
   const url = block.block_type.type === 'video' ? block.block_type.url : ''
   const [error, setError] = useState(false)
+
+  useEffect(() => {
+    setError(false)
+  }, [url])
 
   if (!url) {
     return (

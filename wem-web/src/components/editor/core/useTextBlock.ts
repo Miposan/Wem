@@ -379,3 +379,21 @@ export function useTextBlock({ block, onContentChange, onAction, selectedBlockId
 
   return { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd }
 }
+
+/** 从 useTextBlock 返回值构建 contentEditable 元素的共享 props */
+export function textBlockEditableProps(
+  result: ReturnType<typeof useTextBlock>,
+  readonly: boolean,
+  placeholder: string,
+) {
+  return {
+    contentEditable: !readonly as false,
+    suppressContentEditableWarning: true as true,
+    'data-placeholder': placeholder,
+    onInput: result.handleInput,
+    onKeyDown: result.handleKeyDown,
+    onPaste: result.handlePaste,
+    onCompositionStart: result.handleCompositionStart,
+    onCompositionEnd: result.handleCompositionEnd,
+  }
+}

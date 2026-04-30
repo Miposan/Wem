@@ -5,15 +5,16 @@
 
 use axum::{extract::State, Json};
 
-use crate::api::request::{
+use crate::dto::request::{
     CreateDocumentReq, DeleteDocumentReq, ExportReq, GetChildrenReq, GetDocumentReq,
     ImportTextReq, MoveDocumentTreeReq,
 };
-use crate::api::response::{
+use crate::dto::response::{
     BreadcrumbResult, DeleteResult, DocumentChildrenResult, DocumentContentResult, ExportResult,
     ImportResult,
 };
-use crate::error::{AppError, ApiResponse, blocking};
+use crate::dto::{ApiResponse, blocking};
+use crate::error::AppError;
 use crate::block_system::model::Block;
 use crate::repo::Db;
 use crate::block_system::service::{block, document};

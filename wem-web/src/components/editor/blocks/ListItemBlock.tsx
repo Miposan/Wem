@@ -1,5 +1,5 @@
 import type { TextBlockProps } from '../core/types'
-import { useTextBlock } from '../core/useTextBlock'
+import { useTextBlock, textBlockEditableProps } from '../core/useTextBlock'
 
 /**
  * 列表项块
@@ -12,20 +12,13 @@ import { useTextBlock } from '../core/useTextBlock'
  * - Backspace 在空块 → delete（退出列表）
  */
 export function ListItemBlock(props: TextBlockProps) {
-  const { ref, handleInput, handleKeyDown, handlePaste, handleCompositionStart, handleCompositionEnd } = useTextBlock(props)
+  const tb = useTextBlock(props)
 
   return (
     <div
-      ref={ref as React.RefObject<HTMLDivElement>}
+      ref={tb.ref as React.RefObject<HTMLDivElement>}
       className="wem-list-item"
-      contentEditable={!props.readonly}
-      suppressContentEditableWarning
-      data-placeholder={props.placeholder || '列表项…'}
-      onInput={handleInput}
-      onKeyDown={handleKeyDown}
-      onPaste={handlePaste}
-      onCompositionStart={handleCompositionStart}
-      onCompositionEnd={handleCompositionEnd}
+      {...textBlockEditableProps(tb, props.readonly, props.placeholder || '列表项…')}
     />
   )
 }

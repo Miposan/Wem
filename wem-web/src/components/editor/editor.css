@@ -169,8 +169,14 @@
   background: color-mix(in oklab, var(--muted) 30%, transparent);
 }
 
-/* hover — 几乎不可见 */
-.wem-block-container:not(:focus-within):not(.wem-block-selected):hover > .wem-block-content {
+/* hover — 仅文本块（paragraph / heading / blockquote / listItem / codeBlock） */
+.wem-block-container:not(:focus-within):not(.wem-block-selected):is(
+  [data-block-type="paragraph"],
+  [data-block-type="heading"],
+  [data-block-type="blockquote"],
+  [data-block-type="listItem"],
+  [data-block-type="codeBlock"]
+):hover > .wem-block-content {
   background: color-mix(in oklab, var(--muted) 14%, transparent);
 }
 
@@ -543,24 +549,43 @@
 
 .wem-imageblock {
   margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .wem-imageblock-wrapper {
   position: relative;
   border-radius: var(--wem-editor-radius);
   overflow: hidden;
-  background: color-mix(in oklab, var(--muted) 30%, transparent);
   min-height: 80px;
+  width: 100%;
+}
+
+.wem-imageblock-wrapper:hover > .wem-imageblock-resize-handle {
+  opacity: 1;
 }
 
 .wem-imageblock-img {
   display: block;
-  max-width: 100%;
+  width: 100%;
   height: auto;
   border-radius: var(--wem-editor-radius);
 }
 
-.wem-imageblock-loading,
+.wem-imageblock-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+  border-radius: var(--wem-editor-radius);
+  z-index: 1;
+}
+
 .wem-imageblock-error,
 .wem-imageblock-empty {
   display: flex;
@@ -571,6 +596,7 @@
   padding: 32px 16px;
   border: 1px dashed color-mix(in oklab, var(--wem-editor-border) 60%, transparent);
   border-radius: var(--wem-editor-radius);
+  cursor: default;
 }
 
 .wem-imageblock-spinner {
@@ -586,17 +612,51 @@
   to { transform: rotate(360deg); }
 }
 
+/* 宽度调整把手 */
+.wem-imageblock-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+.wem-imageblock-resize-handle.left { left: -3px; }
+.wem-imageblock-resize-handle.right { right: -3px; }
+.wem-imageblock-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--wem-editor-accent);
+}
+
 .wem-imageblock-caption {
   text-align: center;
   padding: 4px 0;
   color: var(--wem-editor-muted);
   font-size: 0.875em;
   outline: none;
+  min-height: 0;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.15s ease, min-height 0.15s ease;
+}
+
+.wem-imageblock-caption.visible,
+.wem-imageblock-caption:focus {
+  max-height: 6em;
   min-height: 1.4em;
 }
 
 .wem-imageblock-caption:empty::before {
-  content: '添加图片说明…';
+  content: attr(data-placeholder);
   color: color-mix(in oklab, var(--wem-editor-muted) 50%, transparent);
 }
 

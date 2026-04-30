@@ -169,9 +169,9 @@ pub enum BlockType {
     /// 表格，content 存 markdown 表格原文
     Table,
 
-    // ─── 资源块（有 URL，无文本内容）─────────────────────────
-    /// 图片
-    Image { url: String },
+    // ─── 资源块 ──────────────────────────────────────────────
+    /// 图片，content 存 markdown 语法 ![caption](url)
+    Image,
     /// 音频
     Audio { url: String },
     /// 视频

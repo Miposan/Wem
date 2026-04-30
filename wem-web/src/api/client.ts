@@ -218,3 +218,23 @@ export function mergeBlock(id: string, req: Omit<MergeReq, 'id'>) {
 export function getBreadcrumb(id: string) {
   return post<BreadcrumbResult>('/documents/breadcrumb', { id })
 }
+
+// ---------- Asset Upload ----------
+
+export async function uploadAsset(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await api.post<{ succ_map: Record<string, string> }>('/assets/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30_000,
+  })
+  const succMap = res.data.succ_map
+  const path = Object.values(succMap)[0]
+  if (!path) throw new Error('上传失败：未返回资源路径')
+  return path
+}
+
+/** 获取资源的完整 URL（用于 <img src>） */
+export function getAssetUrl(relativePath: string): string {
+  return `${API_BASE_URL}/assets/${relativePath.replace(/^assets\//, '')}`
+}

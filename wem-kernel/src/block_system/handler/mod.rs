@@ -8,6 +8,7 @@
 //! - `oplog`    — `/api/v1/documents/*`  操作日志查询/Undo/Redo（per-document）
 //! - `event`    — `/api/v1/health`       健康检查 + SSE 实时事件
 
+pub mod asset;
 pub mod block;
 pub mod document;
 pub mod event;

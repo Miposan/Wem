@@ -4,17 +4,9 @@ version = "0.1.0"
 edition = "2024"
 default-run = "wem-kernel"
 
-[[bin]]
-name = "wem-cli"
-path = "src/bin/wem_cli.rs"
-
-[[bin]]
-name = "wem-agent"
-path = "src/bin/wem_agent.rs"
-
 [dependencies]
 # Web框架，处理 HTTP 请求/路由
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 
 # 异步运行时，Axum 的底层引擎
 tokio = { version = "1", features = ["full"] }
@@ -30,6 +22,10 @@ chrono = "0.4"
 
 # 随机数
 rand = "0.8"
+
+# 哈希计算（资源文件去重）
+sha2 = "0.10"
+hex = "0.4"
 
 # HTTP 中间件
 tower-http = { version = "0.6", features = ["cors"] }
@@ -52,11 +48,11 @@ tracing = "0.1"
 
 # ─── Agent 子系统依赖 ──────────────────────────────────────
 
-# HTTP 客户端（Anthropic Provider）
-reqwest = { version = "0.12", features = ["stream", "json"] }
+# Anthropic Claude API 客户端
+anthropic-ai-sdk = "0.2"
 
-# SSE 流解析（Anthropic 流式响应）
-eventsource-stream = "0.2"
+# HTTP 客户端（OpenAI Provider 等）
+reqwest = { version = "0.12", features = ["stream", "json"] }
 
 # async trait 支持
 async-trait = "0.1"
@@ -78,3 +74,10 @@ uuid = { version = "1", features = ["v4"] }
 
 # MCP 协议客户端（Model Context Protocol）
 rmcp = { version = "0.8", features = ["client", "transport-child-process"] }
+
+# ─── CLI TUI ──────────────────────────────────────────
+
+ratatui = "0.29"
+crossterm = "0.28"
+pulldown-cmark = "0.11"
+eventsource-stream = "0.2.3"

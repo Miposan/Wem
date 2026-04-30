@@ -7,6 +7,7 @@ interface Props {
 
 interface State {
   hasError: boolean
+  prevBlockId?: string
 }
 
 export class EditorErrorBoundary extends Component<Props, State> {
@@ -14,6 +15,16 @@ export class EditorErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(): State {
     return { hasError: true }
+  }
+
+  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+    if (state.hasError && state.prevBlockId !== props.blockId) {
+      return { hasError: false, prevBlockId: props.blockId }
+    }
+    if (!state.hasError && state.prevBlockId !== props.blockId) {
+      return { prevBlockId: props.blockId }
+    }
+    return null
   }
 
   componentDidCatch(error: unknown, info: React.ErrorInfo) {

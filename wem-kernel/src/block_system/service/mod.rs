@@ -12,6 +12,7 @@
 //! - `event`     — 块变更事件通知
 //! - `batch`     — 批量操作
 
+pub mod asset;
 pub mod batch;
 pub mod block;
 pub mod document;

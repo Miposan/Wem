@@ -40,21 +40,20 @@ export function SlotContainer({ slot, children }: SlotContainerProps) {
       const handleMove = (ev: MouseEvent) => {
         const dx = ev.clientX - startX
         const newSize = slot === 'left'
-          ? Math.max(180, Math.min(500, startSize + dx))
-          : Math.max(180, Math.min(500, startSize - dx))
+          ? Math.max(0, startSize + dx)
+          : Math.max(0, startSize - dx)
         if (el) el.style.width = `${newSize}px`
       }
 
       const handleUp = (ev: MouseEvent) => {
         document.removeEventListener('mousemove', handleMove)
         document.removeEventListener('mouseup', handleUp)
-        // 恢复全局样式
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
         const dx = ev.clientX - startX
         const newSize = slot === 'left'
-          ? Math.max(180, Math.min(500, startSize + dx))
-          : Math.max(180, Math.min(500, startSize - dx))
+          ? Math.max(0, startSize + dx)
+          : Math.max(0, startSize - dx)
         setSlotSize(slot, newSize)
       }
 
